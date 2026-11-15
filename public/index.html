@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TS3-TS6 Notifier</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="css/overlay.css" />
+</head>
+<body data-theme="glass" data-corner="tr">
+  <!-- ======================= OVERLAY ======================= -->
+  <div id="stage">
+    <section id="panel" aria-label="TeamSpeak overlay">
+      <header id="panelHeader">
+        <span class="conn-dot" id="connDot" title=""></span>
+        <div class="title-block">
+          <div class="channel-name"><span class="wave-ico"></span><span id="channelNameText">…</span></div>
+          <div class="server-name" id="serverName"></div>
+        </div>
+        <div class="header-right">
+          <span class="user-count" id="userCount" hidden></span>
+          <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings"></button>
+        </div>
+      </header>
+
+      <div id="banner" class="banner" hidden>
+        <span class="banner-icon"></span>
+        <div class="banner-text">
+          <div class="banner-title" id="bannerTitle"></div>
+          <div class="banner-detail" id="bannerDetail"></div>
+        </div>
+      </div>
+
+      <main id="userList" class="user-list"></main>
+
+      <div id="emptyState" class="empty-state" hidden>
+        <div class="empty-icon"></div>
+        <div class="empty-title" data-i18n="emptyChannel"></div>
+        <div class="empty-sub" data-i18n="emptyChannelSub"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ======================= SETTINGS ======================= -->
+  <div id="drawerBackdrop" hidden></div>
+  <aside id="settingsDrawer" hidden aria-label="Settings">
+    <header class="drawer-head">
+      <div class="drawer-title">
+        <span class="drawer-logo"></span>
+        <div>
+          <div class="drawer-name">TS3-TS6 Notifier</div>
+          <div class="drawer-sub" data-i18n="settingsSubtitle"></div>
+        </div>
+      </div>
+      <button id="closeDrawer" class="icon-btn" aria-label="Close"></button>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="appearance" data-i18n="tabAppearance"></button>
+      <button class="tab" data-tab="elements" data-i18n="tabElements"></button>
+      <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
+      <button class="tab" data-tab="about" data-i18n="tabAbout"></button>
+    </nav>
+
+    <div class="drawer-body">
+      <!-- ---------- Appearance ---------- -->
+      <section class="tab-panel active" data-panel="appearance">
+        <div class="field">
+          <label data-i18n="theme"></label>
+          <div class="segmented" id="themeSeg">
+            <button data-value="glass" data-i18n="themeGlass"></button>
+            <button data-value="midnight" data-i18n="themeMidnight"></button>
+            <button data-value="frost" data-i18n="themeFrost"></button>
+            <button data-value="neon" data-i18n="themeNeon"></button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label data-i18n="accentColor"></label>
+          <div class="swatch-row" id="accentSwatches">
+            <button class="swatch" data-value="#7c6cff" style="--sw:#7c6cff"></button>
+            <button class="swatch" data-value="#22d3ee" style="--sw:#22d3ee"></button>
+            <button class="swatch" data-value="#34d399" style="--sw:#34d399"></button>
+            <button class="swatch" data-value="#f472b6" style="--sw:#f472b6"></button>
+            <button class="swatch" data-value="#fbbf24" style="--sw:#fbbf24"></button>
+            <button class="swatch" data-value="#f87171" style="--sw:#f87171"></button>
+            <input type="color" id="accentCustom" value="#7c6cff" />
+          </div>
+        </div>
+
+        <div class="field" data-slider="glow" data-min="0" data-max="1" data-step="0.05">
+          <label data-i18n="glow"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field" data-slider="opacity" data-min="0.15" data-max="1" data-step="0.01">
+          <label data-i18n="opacity"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field" data-slider="blur" data-min="0" data-max="40" data-step="1">
+          <label data-i18n="blur"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field" data-slider="radius" data-min="0" data-max="26" data-step="1">
+          <label data-i18n="radius"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field" data-slider="scale" data-min="0.75" data-max="1.5" data-step="0.05">
+          <label data-i18n="scale"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field" data-slider="fontSize" data-min="11" data-max="18" data-step="1">
+          <label data-i18n="fontSize"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field">
+          <label data-i18n="corner"></label>
+          <div class="corner-grid" id="cornerGrid">
+            <button data-value="tl" title="Top left"></button>
+            <button data-value="tr" title="Top right"></button>
+            <button data-value="bl" title="Bottom left"></button>
+            <button data-value="br" title="Bottom right"></button>
+          </div>
+        </div>
+
+        <div class="field" data-slider="margin" data-min="0" data-max="80" data-step="1">
+          <label data-i18n="margin"></label><output></output>
+          <input type="range" />
+        </div>
+
+        <div class="field">
+          <label data-i18n="language"></label>
+          <select id="languageSelect">
+            <option value="auto" data-i18n="langAuto"></option>
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- ---------- Elements ---------- -->
+      <section class="tab-panel" data-panel="elements">
+        <div class="field">
+          <label data-i18n="eqStyle"></label>
+          <select id="eqStyleSelect">
+            <option value="bars" data-i18n="eqBars"></option>
+            <option value="ring" data-i18n="eqRing"></option>
+            <option value="dots" data-i18n="eqDots"></option>
+            <option value="none" data-i18n="eqNone"></option>
+          </select>
+        </div>
+
+        <div class="switch-list">
+          <label class="switch-row"><span data-i18n="showHeader"></span><input type="checkbox" data-toggle="showHeader" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showServerName"></span><input type="checkbox" data-toggle="showServerName" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showUserCount"></span><input type="checkbox" data-toggle="showUserCount" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showBanner"></span><input type="checkbox" data-toggle="showBanner" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showAvatars"></span><input type="checkbox" data-toggle="showAvatars" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showBadges"></span><input type="checkbox" data-toggle="showBadges" /><i></i></label>
+          <label class="switch-row"><span data-i18n="showSelf"></span><input type="checkbox" data-toggle="showSelf" /><i></i></label>
+          <label class="switch-row"><span data-i18n="hideQuery"></span><input type="checkbox" data-toggle="hideQuery" /><i></i></label>
+          <label class="switch-row"><span data-i18n="talkingFirst"></span><input type="checkbox" data-toggle="talkingFirst" /><i></i></label>
+          <label class="switch-row"><span data-i18n="onlyTalking"></span><input type="checkbox" data-toggle="onlyTalking" /><i></i></label>
+          <label class="switch-row"><span data-i18n="compact"></span><input type="checkbox" data-toggle="compact" /><i></i></label>
+          <label class="switch-row"><span data-i18n="hideEmpty"></span><input type="checkbox" data-toggle="hideEmpty" /><i></i></label>
+          <label class="switch-row"><span data-i18n="animations"></span><input type="checkbox" data-toggle="animations" /><i></i></label>
+        </div>
+      </section>
+
+      <!-- ---------- Connection ---------- -->
+      <section class="tab-panel" data-panel="connection">
+        <div class="conn-status card" id="connStatusCard">
+          <span class="status-pill" id="statusPill">…</span>
+          <div class="status-detail" id="statusDetail"></div>
+        </div>
+
+        <div class="field">
+          <label data-i18n="dataSource"></label>
+          <select id="sourceSelect">
+            <option value="mock" data-i18n="sourceMock"></option>
+            <option value="ts3" data-i18n="sourceTs3"></option>
+            <option value="ts6" data-i18n="sourceTs6"></option>
+          </select>
+          <div class="hint" data-i18n="dataSourceHint"></div>
+        </div>
+
+        <div id="ts3Fields" class="conn-fields">
+          <div class="field"><label>TS3 · Host</label><input type="text" id="ts3Host" spellcheck="false" /></div>
+          <div class="field"><label>TS3 · Port</label><input type="number" id="ts3Port" /></div>
+          <div class="field">
+            <label>TS3 · API key</label>
+            <input type="password" id="ts3ApiKey" spellcheck="false" autocomplete="off" />
+            <div class="hint" data-i18n="ts3KeyHint"></div>
+          </div>
+        </div>
+
+        <div id="ts6Fields" class="conn-fields">
+          <div class="field"><label>TS6 · Host</label><input type="text" id="ts6Host" spellcheck="false" /></div>
+          <div class="field"><label>TS6 · Port</label><input type="number" id="ts6Port" /></div>
+          <div class="field">
+            <label>TS6 · API key</label>
+            <input type="password" id="ts6ApiKey" spellcheck="false" autocomplete="off" />
+            <div class="hint" data-i18n="ts6KeyHint"></div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn primary" id="reconnectBtn" data-i18n="reconnect"></button>
+        </div>
+
+        <div class="hint block" data-i18n="connectionHelp"></div>
+      </section>
+
+      <!-- ---------- About ---------- -->
+      <section class="tab-panel" data-panel="about">
+        <div class="card about-card">
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.0.0</span></div>
+          <div class="hint" data-i18n="aboutText"></div>
+        </div>
+
+        <div class="field">
+          <label data-i18n="profile"></label>
+          <div class="btn-row">
+            <button class="btn" id="exportBtn"><span class="btn-ico" data-ico="download"></span><span data-i18n="exportBtn"></span></button>
+            <button class="btn" id="importBtn"><span class="btn-ico" data-ico="upload"></span><span data-i18n="importBtn"></span></button>
+            <button class="btn danger" id="resetBtn" data-i18n="resetBtn"></button>
+          </div>
+          <input type="file" id="importFile" accept="application/json" hidden />
+        </div>
+
+        <div class="hint block" data-i18n="aboutTip"></div>
+      </section>
+    </div>
+  </aside>
+
+  <script src="js/icons.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
