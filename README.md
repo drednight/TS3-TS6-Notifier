@@ -24,7 +24,7 @@
 
 ### Вариант 1. Готовое приложение (Windows) — рекомендуется
 
-Скачайте **TS3-TS6-Notifier-Setup-1.0.0.exe** (или Portable) из раздела [Releases](../../releases) и запустите.
+Скачайте **TS3-TS6-Notifier-Setup-1.0.0.exe** из раздела [Releases](../../releases) и запустите.
 
 Приложение работает в **трее**:
 - оверлей поверх всех окон (поверх игры в оконном/безрамочном режиме);
@@ -46,7 +46,7 @@ npm start          # сервер + оверлей на http://localhost:3000
 
 ```bash
 npm install        # требует Node.js 20+
-npm run dist       # → dist/TS3-TS6-Notifier-Setup-1.0.0.exe + Portable
+npm run dist       # → dist/TS3-TS6-Notifier-Setup-1.0.0.exe
 ```
 
 Либо доверьтесь CI: каждый тег `v*` собирает exe автоматически в GitHub Actions (`.github/workflows/release.yml`) и прикладывает к релизу.

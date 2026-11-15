@@ -4,6 +4,8 @@
   "description": "Beautiful overlay for TeamSpeak 3 & TeamSpeak 6: channel roster, live speaking indicators, icons and full appearance customization",
   "type": "module",
   "private": true,
+  "author": "drednight",
+  "license": "MIT",
   "main": "app/dist/main.cjs",
   "scripts": {
     "start": "tsx server/index.ts",
@@ -50,10 +52,8 @@
     ],
     "win": {
       "icon": "app/icons/icon.ico",
-      "target": [
-        { "target": "nsis", "artifactName": "TS3-TS6-Notifier-Setup-${version}.${ext}" },
-        { "target": "portable", "artifactName": "TS3-TS6-Notifier-Portable-${version}.${ext}" }
-      ]
+      "target": ["nsis"],
+      "artifactName": "TS3-TS6-Notifier-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,

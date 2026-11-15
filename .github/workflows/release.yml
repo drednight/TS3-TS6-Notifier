@@ -34,7 +34,7 @@ jobs:
       - name: Render icons
         run: npm run icons
 
-      - name: Build Windows app (installer + portable)
+      - name: Build Windows app (installer)
         shell: pwsh
         run: |
           npx electron-builder --win --publish never 2>&1 | Tee-Object -FilePath build.log
@@ -63,8 +63,7 @@ jobs:
           body: |
             ## TS3-TS6 Notifier v${{ github.ref_name }}
 
-            **TS3-TS6-Notifier-Setup-1.0.0.exe** — установщик (рекомендуется)
-            **TS3-TS6-Notifier-Portable-1.0.0.exe** — портативная версия без установки
+            **TS3-TS6-Notifier-Setup-1.0.0.exe** — установщик Windows
 
             ### Первый запуск
             1. Запустите exe (Windows может показать SmartScreen — «Подробнее» → «Всё равно запустить»).
