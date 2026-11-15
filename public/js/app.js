@@ -329,6 +329,10 @@
     $('settingsBtn').style.display = 'none';
   }
 
+  if (new URLSearchParams(location.search).get('open') === 'settings') {
+    Settings.openDrawer();
+  }
+
   Settings.onChange(() => render());
   window.addEventListener('tsn:lang', () => render());
   window.addEventListener('hashchange', () => location.reload());

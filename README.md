@@ -22,12 +22,34 @@
 
 ## Быстрый старт
 
+### Вариант 1. Готовое приложение (Windows) — рекомендуется
+
+Скачайте **TS3-TS6-Notifier-Setup-1.0.0.exe** (или Portable) из раздела [Releases](../../releases) и запустите.
+
+Приложение работает в **трее**:
+- оверлей поверх всех окон (поверх игры в оконном/безрамочном режиме);
+- **клик-сквозь** — мышь проходит сквозь оверлей прямо в игру;
+- правый клик по иконке → **Data source** (Демо / TS3 / TS6), настройки, «Запуск с Windows», показ/скрытие оверлея, выход.
+
+> Windows может показать SmartScreen при первом запуске — «Подробнее» → «Всё равно запустить» (exe не подписан сертификатом).
+
+### Вариант 2. Веб-режим (из исходников)
+
 ```bash
 npm install
 npm start          # сервер + оверлей на http://localhost:3000
 ```
 
 Откройте <http://localhost:3000> — сразу работает **демо-режим** с живыми «участниками». Кнопка ⚙ открывает настройки.
+
+### Сборка exe самостоятельно
+
+```bash
+npm install        # требует Node.js 20+
+npm run dist       # → dist/TS3-TS6-Notifier-Setup-1.0.0.exe + Portable
+```
+
+Либо доверьтесь CI: каждый тег `v*` собирает exe автоматически в GitHub Actions (`.github/workflows/release.yml`) и прикладывает к релизу.
 
 ## Подключение к TeamSpeak 3
 
@@ -87,8 +109,13 @@ npm run typecheck # проверка типов TypeScript
 ## Структура проекта
 
 ```
+app/
+  main.ts               # десктопное приложение (Electron): оверлей, трей, настройки
+  icons-src/            # векторный источник иконок
+  icons/                # готовые иконки (png/ico)
 server/
-  index.ts              # HTTP + WebSocket сервер, REST API, статика
+  app.ts                # ядро: HTTP + WebSocket сервер, REST API
+  index.ts              # CLI-запуск веб-режима
   config.ts             # конфигурация (data/config.json, не в git)
   model.ts              # общая модель состояния
   connectors/
@@ -100,8 +127,14 @@ public/
   index.html            # оверлей + панель настроек
   css/overlay.css       # темы и стили
   js/                   # рендер, настройки, иконки, i18n
-test/protocols.mjs      # тестовый стенд протоколов
+tools/make-icons.mjs    # рендер иконок из SVG
+test/
+  protocols.mjs         # тестовый стенд протоколов (21 проверка)
+  electron-stub.cjs     # заглушка Electron для smoke-теста
+.github/workflows/      # CI: сборка Windows exe + релиз
 ```
+
+Скрипты: `npm start` (веб), `npm run app` (десктоп в dev), `npm run dist` (exe), `npm test`, `npm run smoke:app`, `npm run typecheck`.
 
 ## REST API
 

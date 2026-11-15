@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["server/**/*.ts"]
+  "include": ["server/**/*.ts", "app/**/*.ts"]
 }

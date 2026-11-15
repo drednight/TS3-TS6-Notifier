@@ -380,5 +380,14 @@
     onChange(cb) {
       saveListeners.push(cb);
     },
+    openDrawer() {
+      const drawer = document.getElementById('settingsDrawer');
+      const backdrop = document.getElementById('drawerBackdrop');
+      if (drawer && backdrop) {
+        drawer.hidden = false;
+        backdrop.hidden = false;
+        paintControls();
+      }
+    },
   };
 })();

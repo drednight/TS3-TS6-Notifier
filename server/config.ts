@@ -1,11 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { AppConfig, Appearance, DEFAULT_CONFIG, DEFAULT_APPEARANCE } from './model.js';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DATA_DIR = join(ROOT, 'data');
-const CONFIG_PATH = join(DATA_DIR, 'config.json');
 
 function merge<T extends object>(base: T, patch: unknown): T {
   if (!patch || typeof patch !== 'object') return { ...base };
@@ -29,14 +24,16 @@ export function mergeAppearance(patch: unknown): Appearance {
 
 export class ConfigStore {
   private config: AppConfig;
+  private configPath: string;
 
-  constructor() {
+  constructor(dataDir: string) {
+    this.configPath = join(dataDir, 'config.json');
     this.config = this.load();
   }
 
   private load(): AppConfig {
     try {
-      const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as unknown;
+      const raw = JSON.parse(readFileSync(this.configPath, 'utf8')) as unknown;
       const merged = merge(DEFAULT_CONFIG, raw);
       merged.appearance = merge(DEFAULT_APPEARANCE, (raw as { appearance?: unknown })?.appearance);
       return merged;
@@ -47,8 +44,8 @@ export class ConfigStore {
 
   private save(): void {
     try {
-      mkdirSync(DATA_DIR, { recursive: true });
-      writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2), 'utf8');
+      mkdirSync(dirname(this.configPath), { recursive: true });
+      writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), 'utf8');
     } catch (err) {
       console.error('[config] failed to persist:', err);
     }

@@ -4,11 +4,18 @@
   "description": "Beautiful overlay for TeamSpeak 3 & TeamSpeak 6: channel roster, live speaking indicators, icons and full appearance customization",
   "type": "module",
   "private": true,
+  "main": "app/dist/main.cjs",
   "scripts": {
     "start": "tsx server/index.ts",
     "dev": "tsx server/index.ts",
     "test": "tsx test/protocols.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "icons": "node tools/make-icons.mjs",
+    "smoke:app": "npm run bundle && node -r ./test/electron-stub.cjs app/dist/main.cjs",
+    "bundle": "esbuild app/main.ts --bundle --platform=node --format=cjs --outfile=app/dist/main.cjs --external:electron --external:bufferutil --external:utf-8-validate --log-level=warning",
+    "app": "npm run bundle && electron app/dist/main.cjs",
+    "dist": "npm run bundle && npm run icons && electron-builder --win",
+    "dist:linux": "npm run bundle && npm run icons && electron-builder --linux"
   },
   "engines": {
     "node": ">=20"
@@ -17,9 +24,45 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "png-to-ico": "^2.1.8",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "dev.tsnotifier.app",
+    "productName": "TS3-TS6 Notifier",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/dist/main.cjs",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "app/icons", "to": "icons" }
+    ],
+    "win": {
+      "icon": "app/icons/icon.ico",
+      "target": [
+        { "target": "nsis", "artifactName": "TS3-TS6-Notifier-Setup-${version}.${ext}" },
+        { "target": "portable", "artifactName": "TS3-TS6-Notifier-Portable-${version}.${ext}" }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "TS3-TS6 Notifier"
+    },
+    "linux": {
+      "icon": "app/icons/icon.png",
+      "target": ["AppImage"]
+    }
   }
 }

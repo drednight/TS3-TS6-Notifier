@@ -100,6 +100,12 @@ export interface AppConfig {
   ts3: Ts3Config;
   ts6: Ts6Config;
   appearance: Appearance;
+  /** Desktop (Electron) app preferences. */
+  desktop: {
+    clickThrough: boolean;
+    autostart: boolean;
+    visible: boolean;
+  };
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -135,6 +141,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
+  desktop: { clickThrough: true, autostart: false, visible: true },
 };
 
 export function emptyState(source: SourceKind, status: StatusCode, detail = ''): OverlayState {

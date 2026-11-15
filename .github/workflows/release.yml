@@ -1,0 +1,66 @@
+name: Build desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck & protocol tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Bundle desktop main
+        run: npm run bundle
+
+      - name: Render icons
+        run: npm run icons
+
+      - name: Build Windows app (installer + portable)
+        run: npx electron-builder --win --publish never
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: |
+            dist/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+          generate_release_notes: true
+          body: |
+            ## TS3-TS6 Notifier v${{ github.ref_name }}
+
+            **TS3-TS6-Notifier-Setup-1.0.0.exe** — установщик (рекомендуется)
+            **TS3-TS6-Notifier-Portable-1.0.0.exe** — портативная версия без установки
+
+            ### Первый запуск
+            1. Запустите exe (Windows может показать SmartScreen — «Подробнее» → «Всё равно запустить»).
+            2. Иконка появится в трее — правый клик → **Data source** → TeamSpeak 3 или 6.
+            3. TS3: Настройки → Плагины → Client Query → API key (вставить в Settings).
+            4. TS6: Настройки → Remote Apps → включить → разрешить приложение при запросе.
+            5. Оверлей поверх игры: оконный / безрамочный режим игры.
