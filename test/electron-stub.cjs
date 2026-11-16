@@ -24,7 +24,7 @@ class BrowserWindow {
   constructor(opts = {}) {
     this.opts = opts;
     this.bounds = { x: opts.x ?? 0, y: opts.y ?? 0, width: opts.width ?? 800, height: opts.height ?? 600 };
-    this.webContents = { openDevTools: noop, on: noop, send: noop };
+    this.webContents = { openDevTools: noop, on: noop, send: noop, setWindowOpenHandler: noop };
     console.log('[stub] BrowserWindow created', JSON.stringify({
       w: opts.width, h: opts.height, transparent: opts.transparent, frame: opts.frame,
       alwaysOnTop: opts.alwaysOnTop, skipTaskbar: opts.skipTaskbar, focusable: opts.focusable,

@@ -172,6 +172,12 @@ export interface SoundItem {
   /** Global hotkey combo, e.g. "Ctrl+Alt+1" (desktop app only). */
   hotkey: string;
   volume: number;
+  /** Optional group ("folder") name for organizing the soundboard. */
+  group?: string;
+  /** Trim: playback start offset in seconds. */
+  start?: number;
+  /** Trim: playback end position in seconds (0/absent = full length). */
+  end?: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {

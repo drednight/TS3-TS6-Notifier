@@ -73,11 +73,21 @@
       labels.push([meta, meta.en]);
     }
     labels.sort((a, b) => b[1].length - a[1].length);
+    const map = TSN.config?.classes?.map || {};
     for (const gid of ids) {
       const g = groups.find((x) => x.id === gid);
-      if (!g || !g.name) continue;
-      const hit = labels.find(([, label]) => nameMatches(g.name, label));
-      if (hit) return { group: g, meta: hit[0] };
+      if (!g) continue;
+      // 1) manual mapping (group id → class) — needed for TS6 (no names there)
+      const mapped = map[String(g.id)];
+      if (mapped && mapped !== 'none') {
+        const meta = CLASS_META.find((m) => m.key === mapped);
+        if (meta) return { group: g, meta };
+      }
+      // 2) name matching (TS3 groups carry names)
+      if (g.name) {
+        const hit = labels.find(([, label]) => nameMatches(g.name, label));
+        if (hit) return { group: g, meta: hit[0] };
+      }
     }
     // Fallback: first group carrying an icon.
     for (const gid of ids) {
@@ -159,7 +169,7 @@
     p.buffers.clear();
   }
 
-  async function playOn(kind, file, itemVolume = 1, itemId = null) {
+  async function playOn(kind, file, itemVolume = 1, itemId = null, trim = null) {
     try {
       const ctx = await playerCtx(kind);
       const p = players[kind];
@@ -170,6 +180,14 @@
         el.__item = itemId;
         const device = deviceFor(kind);
         if (el.setSinkId && device) await el.setSinkId(device).catch(() => {});
+        const startAt = Math.max(0, Number(trim?.start) || 0);
+        if (startAt) el.currentTime = startAt;
+        const endAt = Number(trim?.end) || 0;
+        if (endAt > startAt) {
+          el.addEventListener('timeupdate', () => {
+            if (el.currentTime >= endAt) el.pause();
+          });
+        }
         await el.play().catch(() => {});
         return;
       }
@@ -188,17 +206,21 @@
       src.connect(gain).connect(ctx.destination);
       p.sources.add(src);
       src.onended = () => p.sources.delete(src);
-      src.start();
+      const startAt = Math.max(0, Math.min(Number(trim?.start) || 0, Math.max(0, buf.duration - 0.02)));
+      const endAt = Number(trim?.end) || 0;
+      const duration = endAt > startAt ? endAt - startAt : undefined;
+      src.start(0, startAt, duration);
     } catch (err) {
       console.warn(`[soundboard] ${kind} play failed:`, err);
     }
   }
 
-  /** Play to every enabled target ("мне" and "в канал"). */
-  async function playFile(file, itemVolume = 1, itemId = null) {
+  /** Play to every enabled target ("мне" and "в канал"). Re-press restarts — never stacks. */
+  async function playFile(file, itemVolume = 1, itemId = null, trim = null) {
+    if (itemId) stopItem(itemId); // one sound = one track: restart instead of stacking
     const jobs = [];
-    if (enabledFor('local')) jobs.push(playOn('local', file, itemVolume, itemId));
-    if (enabledFor('channel')) jobs.push(playOn('channel', file, itemVolume, itemId));
+    if (enabledFor('local')) jobs.push(playOn('local', file, itemVolume, itemId, trim));
+    if (enabledFor('channel')) jobs.push(playOn('channel', file, itemVolume, itemId, trim));
     await Promise.all(jobs);
     updateStopButtons();
   }
@@ -247,7 +269,7 @@
   function playById(id) {
     const item = (TSN.config?.sounds?.items || []).find((s) => s.id === id);
     if (!item) return;
-    void playFile(item.file, item.volume ?? 1, item.id);
+    void playFile(item.file, item.volume ?? 1, item.id, { start: item.start, end: item.end });
   }
 
   /* ---------------- range fill painting ---------------- */
@@ -348,10 +370,10 @@
   }
 
   function updateStopButtons() {
-    document.querySelectorAll('.sound-row').forEach((row) => {
-      const btn = row.querySelector('.sound-play');
+    document.querySelectorAll('.sound-item').forEach((wrap) => {
+      const btn = wrap.querySelector('.sound-play');
       if (!btn) return;
-      const active = isPlaying(row.dataset.id);
+      const active = isPlaying(wrap.dataset.id);
       btn.textContent = active ? '■' : '▶';
       btn.classList.toggle('playing', active);
     });
@@ -369,28 +391,71 @@
       list.innerHTML = `<div class="hint">${t('soundsEmpty')}</div>`;
       return;
     }
+    const groupNames = [...new Set(items.map((i) => i.group).filter(Boolean))];
     list.innerHTML = items
       .map(
-        (item) => `<div class="sound-row" data-id="${item.id}">
+        (item) => `<div class="sound-item" data-id="${item.id}">
+        <div class="sound-row">
           <button class="icon-btn sound-play" title="${t('testPlay')}">▶</button>
           <input class="sound-name" value="${String(item.name).replace(/"/g, '&quot;')}" />
+          ${item.group ? `<span class="group-chip">${String(item.group).replace(/</g, '&lt;')}</span>` : ''}
           <span class="hotkey-cap" title="${t('hotkeyLabel')}">${item.hotkey || t('hotkeyNone')}</span>
           <button class="icon-btn hotkey-edit" title="${t('hotkeyLabel')}">⌨</button>
           <input class="vol" type="range" min="0" max="1" step="0.05" value="${item.volume ?? 1}" title="${t('soundsVolume')}" />
+          <button class="icon-btn sound-edit" title="${t('editSound')}">✎</button>
           <button class="icon-btn sound-del" title="${t('deleteSound')}">✕</button>
-        </div>`,
+        </div>
+        <div class="sound-details" hidden>
+          <label>${t('soundGroup')}</label>
+          <input class="d-group" list="soundGroupList" value="${String(item.group || '').replace(/"/g, '&quot;')}" />
+          <label>${t('soundStart')}</label>
+          <input class="d-start" type="number" min="0" step="0.1" value="${item.start ?? 0}" />
+          <label>${t('soundEnd')}</label>
+          <input class="d-end" type="number" min="0" step="0.1" value="${item.end ?? 0}" />
+          <label>${t('soundsVolume')}</label>
+          <input class="d-vol" type="number" min="0" max="1" step="0.05" value="${item.volume ?? 1}" />
+          <datalist id="soundGroupList">${groupNames.map((g) => `<option value="${String(g).replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>
+        </div>
+      </div>`,
       )
       .join('');
-    list.querySelectorAll('.sound-row').forEach((row) => {
-      const item = items.find((x) => x.id === row.dataset.id);
-      if (!item) return;
+    list.querySelectorAll('.sound-item').forEach((wrap) => {
+      const row = wrap.querySelector('.sound-row');
+      const details = wrap.querySelector('.sound-details');
+      const item = items.find((x) => x.id === wrap.dataset.id);
+      if (!item || !row) return;
       row.querySelector('.sound-play').addEventListener('click', () => {
         if (isPlaying(item.id)) {
           stopItem(item.id);
         } else {
-          void playFile(item.file, item.volume ?? 1, item.id);
+          void playFile(item.file, item.volume ?? 1, item.id, { start: item.start, end: item.end });
         }
       });
+      const editBtn = row.querySelector('.sound-edit');
+      editBtn.addEventListener('click', () => {
+        details.hidden = !details.hidden;
+        editBtn.classList.toggle('active', !details.hidden);
+      });
+      const num = (cls, apply) => {
+        const el = details.querySelector(cls);
+        if (!el) return;
+        el.addEventListener('change', () => {
+          apply(Math.max(0, Number(el.value) || 0));
+          saveSounds();
+          renderSoundItems();
+        });
+      };
+      const groupEl = details.querySelector('.d-group');
+      if (groupEl) {
+        groupEl.addEventListener('change', () => {
+          item.group = groupEl.value.trim();
+          saveSounds();
+          renderSoundItems();
+        });
+      }
+      num('.d-start', (v) => (item.start = v));
+      num('.d-end', (v) => (item.end = v));
+      num('.d-vol', (v) => (item.volume = Math.min(1, v)));
       row.querySelector('.sound-name').addEventListener('change', (e) => {
         item.name = e.target.value.trim() || item.name;
         saveSounds();
@@ -595,7 +660,7 @@
     const openBoard = document.getElementById('openBoardBtn');
     if (openBoard) {
       openBoard.addEventListener('click', () => {
-        window.open('/board.html', '_blank', 'width=520,height=440');
+        window.open('/board.html', 'tsn-board', 'width=520,height=440');
       });
     }
 
@@ -610,6 +675,38 @@
     });
     window.addEventListener('click', () => void playerCtx('local'), { once: true });
     window.addEventListener('keydown', () => void playerCtx('local'), { once: true });
+  }
+
+  /* ---------------- TS6 group → class map ---------------- */
+
+  function renderTs6GroupMap() {
+    const host = document.getElementById('ts6GroupMap');
+    if (!host) return;
+    const groups = TSN.state?.groups || [];
+    const map = TSN.config?.classes?.map || {};
+    if (!groups.length) {
+      host.innerHTML = `<div class="hint">${t('ts6GroupsWaiting')}</div>`;
+      return;
+    }
+    host.innerHTML = groups
+      .map((g) => {
+        const cur = map[String(g.id)] || '';
+        return `<div class="group-map-row" data-gid="${g.id}">
+          <span class="group-map-id">#${g.id}</span>
+          <span class="group-map-name">${String(g.name || '—').replace(/</g, '&lt;')}</span>
+          <select>
+            <option value="">${t('ts6GroupsNone')}</option>
+            ${CLASS_META.map((m) => `<option value="${m.key}" ${cur === m.key ? 'selected' : ''}>${m.ru}</option>`).join('')}
+          </select>
+        </div>`;
+      })
+      .join('');
+    host.querySelectorAll('.group-map-row').forEach((row) => {
+      row.querySelector('select').addEventListener('change', (e) => {
+        const gid = row.dataset.gid;
+        putConfig({ classes: { map: { [gid]: e.target.value || 'none' } } });
+      });
+    });
   }
 
   /* ---------------- display target (desktop, multi-monitor) ---------------- */
@@ -653,6 +750,9 @@
     wireSoundTab();
     void wireDisplaySelect();
     wireRanges(document);
+    renderTs6GroupMap();
+    document.addEventListener('tsn:state', renderTs6GroupMap);
+    document.addEventListener('tsn:config', renderTs6GroupMap);
     document.dispatchEvent(new CustomEvent('tsn:features-ready'));
   }
 

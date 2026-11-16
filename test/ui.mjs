@@ -205,6 +205,15 @@ try {
     await new Promise((r) => setTimeout(r, 60));
     const cap = doc.querySelector('.sound-row .hotkey-cap');
     check('settings: sound row shows assigned hotkey', cap?.textContent.includes('Ctrl+Alt+1'), cap?.textContent);
+    check('settings: sound item editor (group/trim)', !!doc.querySelector('.sound-item .sound-details') && !!doc.querySelector('.sound-item .d-group') && !!doc.querySelector('.sound-item .d-start') && !!doc.querySelector('.sound-item .d-end'));
+
+    // TS6 group → class mapping UI
+    check('settings: TS6 group map present', !!doc.getElementById('ts6GroupMap'));
+    dom.window.TSN.state = { ...fakeState, groups: [{ id: 6, name: 'Лучники Ордена', iconId: 0 }, { id: 12, name: '', iconId: 0 }] };
+    doc.dispatchEvent(new dom.window.CustomEvent('tsn:state'));
+    await new Promise((r) => setTimeout(r, 40));
+    const mapRows = doc.querySelectorAll('#ts6GroupMap .group-map-row');
+    check('settings: TS6 group map lists server groups', mapRows.length === 2, `rows=${mapRows.length}`);
     dom.window.close();
   }
 
@@ -226,6 +235,7 @@ try {
     check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('menuStop') && !!doc.getElementById('boardGear'));
     check('board: top menu present (add/delete/stop/hotkeys/audio)', !!doc.getElementById('menuAdd') && !!doc.getElementById('menuDelete') && !!doc.getElementById('menuStop') && !!doc.getElementById('menuHotkeys') && !!doc.getElementById('menuAudio'));
     check('board: audio popover with dual outputs', !!doc.getElementById('audioPop') && !!doc.getElementById('popLocalVol') && !!doc.getElementById('popChannelVol') && !!doc.getElementById('popLocalEnabled') && !!doc.getElementById('popChannelEnabled'));
+    check('board: edit popover (group/trim/volume)', !!doc.getElementById('boardEdit') && !!doc.getElementById('editGroup') && !!doc.getElementById('editStart') && !!doc.getElementById('editEnd') && !!doc.getElementById('editVol'));
     check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();

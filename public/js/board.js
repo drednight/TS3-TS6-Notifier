@@ -19,20 +19,48 @@
     const grid = $('boardGrid');
     const empty = $('boardEmpty');
     const items = config?.sounds?.items || [];
-    const sig = items.map((i) => `${i.id}:${i.name}:${i.file}:${i.hotkey}`).join(',');
+    const sig = items
+      .map((i) => `${i.id}:${i.name}:${i.file}:${i.hotkey}:${i.group || ''}:${i.start ?? ''}:${i.end ?? ''}:${i.volume ?? ''}`)
+      .join(',');
     if (sig === gridSig) return;
     gridSig = sig;
     empty.hidden = items.length > 0;
     grid.hidden = items.length === 0;
-    grid.innerHTML = items
-      .map(
-        (i) =>
-          `<button class="board-btn" data-id="${i.id}">
-            <span class="board-btn-name">${String(i.name).replace(/</g, '&lt;')}</span>
-            <span class="board-btn-key">${String(i.hotkey || '').replace(/</g, '&lt;')}</span>
-          </button>`,
-      )
+
+    // group into "folders"; ungrouped sounds go under their own section
+    const sections = [];
+    const byName = new Map();
+    for (const item of items) {
+      const name = item.group || '';
+      if (!byName.has(name)) {
+        byName.set(name, []);
+        sections.push(name);
+      }
+      byName.get(name).push(item);
+    }
+    grid.innerHTML = sections
+      .map((name) => {
+        const list = byName.get(name) || [];
+        const title = name
+          ? `<div class="board-group-title">${String(name).replace(/</g, '&lt;')}</div>`
+          : sections.length > 1
+            ? `<div class="board-group-title">${t('noGroup')}</div>`
+            : '';
+        return `<section class="board-group">${title}<div class="board-group-grid">${list
+          .map(
+            (i) =>
+              `<button class="board-btn" data-id="${i.id}">
+                <span class="board-btn-name">${String(i.name).replace(/</g, '&lt;')}</span>
+                <span class="board-btn-key">${String(i.hotkey || '').replace(/</g, '&lt;')}</span>
+              </button>`,
+          )
+          .join('')}</div></section>`;
+      })
       .join('');
+
+    grid.querySelectorAll('.board-group-title').forEach((title) => {
+      title.addEventListener('click', () => title.closest('.board-group').classList.toggle('collapsed'));
+    });
     grid.querySelectorAll('.board-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const item = (config?.sounds?.items || []).find((x) => x.id === btn.dataset.id);
@@ -41,13 +69,75 @@
           deleteItem(item);
           return;
         }
+        if (editMode) {
+          openEdit(item);
+          return;
+        }
         flash(btn);
-        if (window.TSN?.Soundboard) void window.TSN.Soundboard.playFile(item.file, item.volume ?? 1, item.id);
+        if (window.TSN?.Soundboard) {
+          void window.TSN.Soundboard.playFile(item.file, item.volume ?? 1, item.id, { start: item.start, end: item.end });
+        }
       });
       btn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         window.TSN?.Soundboard?.stopAll();
       });
+    });
+  }
+
+  /* ---------------- edit popover (name / group / volume / trim) ---------------- */
+
+  let editMode = false;
+  let editing = null;
+
+  function openEdit(item) {
+    editing = item;
+    $('editTitle').textContent = item.name;
+    $('editName').value = item.name;
+    $('editGroup').value = item.group || '';
+    $('editVol').value = String(item.volume ?? 1);
+    $('editStart').value = String(item.start ?? 0);
+    $('editEnd').value = String(item.end ?? 0);
+    $('boardEdit').hidden = false;
+  }
+
+  function closeEdit() {
+    editing = null;
+    $('boardEdit').hidden = true;
+    setEditMode(false);
+  }
+
+  function setEditMode(on) {
+    editMode = on;
+    $('menuEdit').classList.toggle('on', on);
+    $('boardGrid').classList.toggle('editing', on);
+  }
+
+  function wireEdit() {
+    $('menuEdit').addEventListener('click', () => {
+      if (editMode) {
+        setEditMode(false);
+        $('boardEdit').hidden = true;
+      } else {
+        setDeleteMode(false);
+        setEditMode(true);
+      }
+    });
+    $('editCancel').addEventListener('click', closeEdit);
+    $('editSave').addEventListener('click', () => {
+      if (editing) {
+        editing.name = $('editName').value.trim() || editing.name;
+        editing.group = $('editGroup').value.trim();
+        editing.volume = Number($('editVol').value) || 1;
+        editing.start = Math.max(0, Number($('editStart').value) || 0);
+        editing.end = Math.max(0, Number($('editEnd').value) || 0);
+        saveItems([...(config?.sounds?.items || [])]);
+      }
+      closeEdit();
+    });
+    $('editDelete').addEventListener('click', () => {
+      if (editing) deleteItem(editing);
+      closeEdit();
     });
   }
 
@@ -121,6 +211,10 @@
     $('menuDelete').classList.toggle('on', on);
     $('boardGrid').classList.toggle('deleting', on);
     $('boardHint').textContent = on ? t('deleteModeHint') : t('boardHint');
+    if (on) {
+      setEditMode(false);
+      $('boardEdit').hidden = true;
+    }
   }
 
   /* ---------------- audio popover (мне / в канал) ---------------- */
@@ -193,6 +287,7 @@
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (deleteMode) setDeleteMode(false);
+        if (editMode) closeEdit();
         $('audioPop').hidden = true;
         $('menuAudio').classList.remove('on');
       }
@@ -249,9 +344,11 @@
     $('menuHotkeys').insertAdjacentHTML('afterbegin', window.TSIcons.icon('keyboard', 14));
     $('menuAudio').insertAdjacentHTML('afterbegin', window.TSIcons.icon('speaker', 14));
     $('boardGear').addEventListener('click', () => {
-      window.open('/?open=settings&bare=1', '_blank', 'width=420,height=800');
+      window.open('/?open=settings&bare=1', 'tsn-settings', 'width=420,height=800');
     });
     wireMenu();
+    wireEdit();
+    $('menuEdit').insertAdjacentHTML('afterbegin', window.TSIcons.icon('gear', 14));
     renderGrid(); // show the empty state right away
     fetch('/api/config')
       .then((r) => r.json())

@@ -21,6 +21,7 @@
       <button id="menuDelete" class="board-menu-btn danger" data-i18n="boardMenuDelete"></button>
       <button id="menuStop" class="board-menu-btn" data-i18n="stopSound"></button>
       <button id="menuHotkeys" class="board-menu-btn" data-i18n="hotkeysEnabled"></button>
+      <button id="menuEdit" class="board-menu-btn" data-i18n="editSound"></button>
       <span class="board-menu-spacer"></span>
       <button id="menuAudio" class="board-menu-btn" data-i18n="boardMenuAudio"></button>
       <input type="file" id="boardUpload" accept="audio/*" hidden />
@@ -57,7 +58,37 @@
       </div>
     </div>
 
-    <main id="boardGrid" class="board-grid"></main>
+    <div id="boardEdit" class="board-edit-pop" hidden>
+      <div class="edit-title" id="editTitle"></div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="soundName"></span>
+        <input type="text" id="editName" />
+      </div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="soundGroup"></span>
+        <input type="text" id="editGroup" />
+      </div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="soundsVolume"></span>
+        <input type="range" id="editVol" min="0" max="1" step="0.05" value="1" />
+      </div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="soundStart"></span>
+        <input type="number" id="editStart" min="0" step="0.1" value="0" />
+      </div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="soundEnd"></span>
+        <input type="number" id="editEnd" min="0" step="0.1" value="0" />
+      </div>
+      <div class="edit-actions">
+        <button id="editDelete" class="board-menu-btn danger" data-i18n="deleteSound"></button>
+        <button id="editCancel" class="board-menu-btn" data-i18n="cancel"></button>
+        <button id="editSave" class="board-menu-btn primary" data-i18n="saveSound"></button>
+      </div>
+    </div>
+    <main id="boardBody">
+      <div id="boardGrid" class="board-grid"></div>
+    </main>
     <div id="boardEmpty" class="empty-state" hidden>
       <div class="empty-title" data-i18n="soundsEmpty"></div>
       <div class="empty-sub" data-i18n="boardEmptySub"></div>

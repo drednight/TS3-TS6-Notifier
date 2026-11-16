@@ -57,6 +57,7 @@ let handle: AppHandle | null = null;
 let overlayWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
 let boardWin: BrowserWindow | null = null;
+const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
 let overlayVisible = true;
 
@@ -115,6 +116,38 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
         win.loadURL(tag === 'overlay' ? overlayUrl() : tag === 'board' ? boardUrl() : settingsUrl());
       }
     }, 1200);
+  });
+  // Child pages (settings/board) open via window.open — keep ONE window per
+  // name instead of spawning a new BrowserWindow on every click.
+  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    try {
+      const target = new URL(url, settingsUrl());
+      if (target.origin === new URL(settingsUrl()).origin) {
+        const name = frameName || 'tsn-child';
+        // Reuse the app's own single-instance windows when possible.
+        const managed = name === 'tsn-board' ? boardWin : name === 'tsn-settings' ? settingsWin : null;
+        const existing = managed && !managed.isDestroyed() ? managed : childWindows.get(name);
+        if (existing && !existing.isDestroyed()) {
+          if (managed === settingsWin) void existing.loadURL(target.toString());
+          existing.focus();
+          return { action: 'deny' };
+        }
+        const child = new BrowserWindow({
+          width: name === 'tsn-board' ? 540 : 430,
+          height: name === 'tsn-board' ? 560 : 820,
+          autoHideMenuBar: true,
+          title: 'TS3-TS6 Notifier',
+        });
+        childWindows.set(name, child);
+        child.on('closed', () => childWindows.delete(name));
+        watchWebContents(child, name === 'tsn-board' ? 'board' : 'settings');
+        void child.loadURL(target.toString());
+        return { action: 'deny' };
+      }
+    } catch {
+      /* fall through */
+    }
+    return { action: 'deny' };
   });
 }
 
