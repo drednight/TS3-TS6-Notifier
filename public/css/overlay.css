@@ -18,6 +18,8 @@
   --scale: 1;
   --font-size: 13px;
   --margin: 18px;
+  --margin-x: 18px;
+  --margin-y: 18px;
 
   --panel-bg: rgba(14, 16, 27, var(--panel-opacity));
   --panel-border: rgba(255, 255, 255, 0.09);
@@ -100,10 +102,10 @@ html, body {
   transition: border-radius 0.25s ease;
 }
 
-body[data-corner="tl"] #panel { top: var(--margin); left: var(--margin); transform-origin: top left; }
-body[data-corner="tr"] #panel { top: var(--margin); right: var(--margin); transform-origin: top right; }
-body[data-corner="bl"] #panel { bottom: var(--margin); left: var(--margin); transform-origin: bottom left; }
-body[data-corner="br"] #panel { bottom: var(--margin); right: var(--margin); transform-origin: bottom right; }
+body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
+body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
+body[data-corner="bl"] #panel { bottom: var(--margin-y); left: var(--margin-x); transform-origin: bottom left; }
+body[data-corner="br"] #panel { bottom: var(--margin-y); right: var(--margin-x); transform-origin: bottom right; }
 
 /* ============================ header ============================ */
 
@@ -800,3 +802,118 @@ input[type="range"]::-moz-range-thumb {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ===================== class icons ===================== */
+
+.avatar .class-glyph { position: absolute; inset: 0; margin: auto; color: #fff; filter: drop-shadow(0 1px 3px rgba(0,0,0,.45)); }
+body.no-avatars .avatar .class-glyph { display: none; }
+.row .class-ico { display: none; }
+
+/* ===================== whisper section ===================== */
+
+.whisper-block { margin: 2px 10px 4px; }
+.whisper-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); opacity: .85; padding: 2px 2px 4px;
+}
+.whisper-head::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--accent-rgb), transparent); opacity: .35; }
+.whisper-list { display: flex; flex-direction: column; gap: 2px; }
+.whisper-list .row { animation: whisperPulse 2.6s ease-in-out infinite; }
+.whisper-list .row .nick { color: var(--accent); }
+.whisper-list .row::before {
+  content: ''; position: absolute; inset: 0; border-radius: var(--card-radius, 12px);
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), .18), transparent 70%);
+  pointer-events: none;
+}
+body.no-anim .whisper-list .row { animation: none; }
+
+@keyframes whisperPulse {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; }
+}
+
+/* ===================== chat toasts ===================== */
+
+.chat-feed { display: flex; flex-direction: column; gap: 4px; padding: 4px 10px 2px; }
+.chat-toast {
+  display: flex; align-items: baseline; gap: 7px; padding: 5px 9px;
+  border-radius: 10px; font-size: 11.5px; line-height: 1.35;
+  background: rgba(var(--fg-rgb, 255 255 255), .05);
+  border: 1px solid rgba(255 255 255, .07);
+  animation: chatIn .28s ease both;
+  overflow-wrap: anywhere;
+}
+.chat-toast.fading { animation: chatOut .6s ease both; }
+.chat-toast .chat-nick { font-weight: 700; color: var(--accent); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-toast .chat-text { opacity: .92; }
+.chat-toast .chat-kind {
+  flex: none; font-size: 8.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 6px; background: rgba(var(--accent-rgb), .18); color: var(--accent);
+}
+.chat-toast.kind-private { border-color: rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .10); }
+.chat-toast.kind-server .chat-kind { background: rgba(251, 191, 36, .18); color: #fbbf24; }
+body.no-anim .chat-toast { animation: none; }
+
+@keyframes chatIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes chatOut { from { opacity: 1; } to { opacity: 0; transform: translateY(4px); } }
+
+/* ===================== soundboard strip ===================== */
+
+.sound-board {
+  display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px 8px;
+  border-top: 1px solid rgba(255 255 255, .07); margin-top: 2px;
+}
+.sound-chip {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 10.5px; font-weight: 600; padding: 4px 9px; border-radius: 999px;
+  color: rgba(255 255 255, .85); background: rgba(var(--accent-rgb), .14);
+  border: 1px solid rgba(var(--accent-rgb), .3); transition: .16s;
+}
+.sound-chip:hover { background: rgba(var(--accent-rgb), .3); transform: translateY(-1px); }
+.sound-chip:active { transform: scale(.95); }
+.sound-chip .chip-ico { opacity: .9; display: inline-flex; }
+
+/* ===================== settings: classes / sound tabs ===================== */
+
+.class-legend {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 6px; margin: 4px 0 10px;
+}
+.class-legend .legend-item {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 8px 4px; border-radius: 10px; font-size: 9.5px; text-align: center;
+  background: rgba(255 255 255, .045); border: 1px solid rgba(255 255 255, .07); color: var(--fg);
+}
+.class-legend .class-glyph { color: var(--accent); }
+
+.map-list { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.map-row {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px;
+  border-radius: 10px; background: rgba(255 255 255, .045); border: 1px solid rgba(255 255 255, .07);
+}
+.map-row .map-key {
+  flex: none; font-size: 10px; font-weight: 700; font-family: var(--mono, monospace);
+  padding: 2px 7px; border-radius: 6px; background: rgba(var(--accent-rgb), .16); color: var(--accent);
+}
+.map-row .map-name { flex: 1; font-size: 11.5px; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-row select { flex: none; max-width: 130px; }
+.map-row .icon-btn { flex: none; width: 26px; height: 26px; }
+.map-add-row { display: flex; gap: 6px; margin-top: 6px; }
+.map-add-row input { flex: 1; }
+
+.sound-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.sound-row {
+  display: flex; align-items: center; gap: 7px; padding: 7px 8px;
+  border-radius: 10px; background: rgba(255 255 255, .045); border: 1px solid rgba(255 255 255, .07);
+}
+.sound-row .sound-name { flex: 1; font-size: 12px; background: transparent; border: none; color: var(--fg); outline: none; min-width: 60px; }
+.sound-row .hotkey-btn {
+  flex: none; font-size: 10px; font-weight: 700; font-family: var(--mono, monospace);
+  padding: 3px 8px; border-radius: 7px; cursor: pointer;
+  background: rgba(255 255 255, .07); border: 1px solid rgba(255 255 255, .12); color: var(--fg);
+}
+.sound-row .hotkey-btn.capturing { border-color: var(--accent); color: var(--accent); animation: whisperPulse 1.2s infinite; }
+.sound-row .vol { width: 74px; flex: none; }
+.sound-row .icon-btn { width: 28px; height: 28px; flex: none; }
+.hint.mono { font-family: var(--mono, monospace); font-size: 10px; }

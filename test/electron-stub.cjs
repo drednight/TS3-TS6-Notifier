@@ -104,6 +104,7 @@ const electron = {
     setApplicationMenu: noop,
   },
   nativeImage: { createFromPath: () => ({}) },
+  globalShortcut: { register: () => true, unregisterAll: noop, isRegistered: () => false },
   screen: {
     getPrimaryDisplay: () => ({ workArea }),
     on: noop,

@@ -70,7 +70,7 @@
     if (u.inputMuted) parts.push(`<span class="badge mic-off">${icon('micOff', 13, 2.1)}</span>`);
     if (u.outputMuted) parts.push(`<span class="badge deaf">${icon('headphonesOff', 13, 2.1)}</span>`);
     if (u.away) parts.push(`<span class="badge away">${icon('moon', 12, 2.1)}</span>`);
-    if (u.channelCommander) parts.push(`<span class="badge commander">${icon('star', 12, 2.1)}</span>`);
+    if (u.channelCommander) parts.push(`<span class="badge commander" title="Channel Commander">${window.TSIcons.crown(14)}</span>`);
     if (u.prioritySpeaker) parts.push(`<span class="badge priority">${icon('shield', 12, 2.1)}</span>`);
     return parts.join('');
   }
@@ -110,22 +110,28 @@
 
   function updateRow(pack, u) {
     const a = Settings.appearance;
+    const classKey = window.TSN && window.TSN.classFor ? window.TSN.classFor(u) : null;
     const sig = [
-      u.talking, u.inputMuted, u.outputMuted, u.away, u.awayMessage,
+      u.talking, u.whispering, u.inputMuted, u.outputMuted, u.away, u.awayMessage,
       u.channelCommander, u.prioritySpeaker, u.isSelf, u.nickname,
-      u.avatarHash, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
+      u.avatarHash, u.serverGroups, classKey, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
     ].join('|');
     if (sig === pack.sig) return;
     pack.sig = sig;
 
     const el = pack.el;
     el.classList.toggle('talking', u.talking);
+    el.classList.toggle('whisper', !!u.whispering);
     el.classList.toggle('self', u.isSelf);
     el.classList.toggle('muted', u.inputMuted);
     el.classList.toggle('away', u.away);
 
     pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
-    pack.ini.textContent = initials(u.nickname);
+    if (classKey) {
+      pack.ini.innerHTML = window.TSIcons.classGlyph(classKey, a.compact ? 15 : 19);
+    } else {
+      pack.ini.textContent = initials(u.nickname);
+    }
     pack.pip.style.background = pipColor(u);
 
     pack.nick.textContent = u.nickname;
@@ -171,8 +177,13 @@
       $('bannerDetail').textContent = statusHint();
     }
 
-    // rows
+    // rows — whisperers go to their own fading section
     const list = $('userList');
+    const whisperList = $('whisperList');
+    const whisperBlock = $('whisperBlock');
+    const whisperActive = a.showWhispers && users.some((u) => u.whispering);
+    whisperBlock.hidden = !whisperActive;
+    const containerFor = (u) => (whisperActive && u.whispering ? whisperList : list);
     const seen = new Set();
     for (const u of users) {
       seen.add(u.id);
@@ -180,7 +191,7 @@
       if (!pack) {
         pack = buildRow(u);
         rows.set(u.id, pack);
-        list.appendChild(pack.el);
+        containerFor(u).appendChild(pack.el);
       }
       if (leavingTimers.has(u.id)) {
         clearTimeout(leavingTimers.get(u.id));
@@ -193,7 +204,7 @@
     // Keep DOM order in sync with the sorted list (talking-first etc.).
     for (const u of users) {
       const pack = rows.get(u.id);
-      if (pack) list.appendChild(pack.el);
+      if (pack) containerFor(u).appendChild(pack.el);
     }
 
     for (const [id, pack] of rows) {
@@ -215,11 +226,94 @@
     list.hidden = empty;
     $('panel').style.display = empty && a.hideEmpty && state.status === 'live' ? 'none' : '';
 
+    renderChat();
+    renderBoard();
+
     // connection tab
     const pill = $('statusPill');
     pill.className = `status-pill ${state.status}`;
     pill.textContent = t(statusKey(state.status));
     $('statusDetail').textContent = statusHint();
+  }
+
+  /* ---------------- chat toasts ---------------- */
+
+  const chatRows = new Map(); // id -> { el, timer }
+
+  function renderChat() {
+    const a = Settings.appearance;
+    const feed = $('chatFeed');
+    if (!feed) return;
+    const show = a.showChat && !Settings.clean && state.status === 'live';
+    feed.hidden = !show;
+    if (!show) {
+      for (const [, rec] of chatRows) {
+        clearTimeout(rec.timer);
+        rec.el.remove();
+      }
+      chatRows.clear();
+      return;
+    }
+    const delayMs = Math.max(2, Number(a.chatDelay) || 8) * 1000;
+    const now = Date.now();
+    const msgs = (state.chat || []).slice(-8).filter((m) => now - m.at < delayMs + 1500);
+
+    for (const [id, rec] of chatRows) {
+      if (!msgs.some((m) => m.id === id)) {
+        clearTimeout(rec.timer);
+        rec.el.remove();
+        chatRows.delete(id);
+      }
+    }
+    for (const m of msgs) {
+      if (m.kind === 'private' && !a.chatPrivate) continue;
+      if (chatRows.has(m.id)) continue;
+      const el = document.createElement('div');
+      el.className = `chat-toast kind-${m.kind}`;
+      const badge =
+        m.kind === 'private' ? `<span class="chat-kind">${t('chatPrivateBadge')}</span>` :
+        m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` : '';
+      el.innerHTML = `${badge}<span class="chat-nick"></span><span class="chat-text"></span>`;
+      el.querySelector('.chat-nick').textContent = m.nickname;
+      el.querySelector('.chat-text').textContent = m.text;
+      feed.appendChild(el);
+      const rec = { el, timer: 0 };
+      rec.timer = setTimeout(() => {
+        el.classList.add('fading');
+        setTimeout(() => {
+          el.remove();
+          chatRows.delete(m.id);
+        }, 650);
+      }, delayMs);
+      chatRows.set(m.id, rec);
+    }
+  }
+
+  /* ---------------- soundboard strip ---------------- */
+
+  let boardSig = '';
+
+  function renderBoard() {
+    const board = $('soundBoard');
+    if (!board) return;
+    const sounds = config?.sounds;
+    const show = sounds?.enabled && sounds?.boardVisible !== false && !Settings.clean;
+    const items = sounds?.items || [];
+    const sig = show + '|' + items.map((i) => `${i.id}:${i.name}:${i.file}`).join(',');
+    if (sig === boardSig) return;
+    boardSig = sig;
+    board.hidden = !show;
+    board.innerHTML = show
+      ? items
+          .map(
+            (i) =>
+              `<button class="sound-chip" data-id="${i.id}"><span class="chip-ico">${icon('wave', 11, 2.2)}</span>${String(i.name).replace(/</g, '&lt;')}</button>`,
+          )
+          .join('')
+      : '';
+    board.querySelectorAll('.sound-chip').forEach((btn) => {
+      btn.addEventListener('click', () => window.TSN?.Soundboard?.playById(btn.dataset.id));
+    });
   }
 
   /* ---------------- connection tab ---------------- */
@@ -286,6 +380,18 @@
 
   /* ---------------- websocket ---------------- */
 
+  function syncFeatures() {
+    const TSN = (window.TSN = window.TSN || {});
+    TSN.config = config;
+    TSN.state = state;
+    try {
+      document.dispatchEvent(new CustomEvent('tsn:config'));
+      document.dispatchEvent(new CustomEvent('tsn:state'));
+    } catch {
+      /* ignore */
+    }
+  }
+
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -301,17 +407,23 @@
         config = msg.config;
         Settings.syncServer(config);
         fillConnectionTab();
+        syncFeatures();
         if (msg.state) {
           state = msg.state;
+          syncFeatures();
           render();
         }
       } else if (msg.type === 'state') {
         state = msg.state;
+        syncFeatures();
         render();
       } else if (msg.type === 'config') {
         config = msg.config;
         Settings.syncServer(config);
         fillConnectionTab();
+        syncFeatures();
+      } else if (msg.type === 'sound') {
+        window.TSN?.Soundboard?.playById(msg.id);
       }
     };
 

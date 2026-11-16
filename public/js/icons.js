@@ -66,3 +66,60 @@
 
   window.TSIcons = { icon, avatarGradient, initials };
 })();
+
+/* 17 game class glyphs (stroke) + gold commander crown. */
+(function () {
+  const C = {
+    archer: 'M6 4a12 12 0 0 1 0 16M12 12h9M18 9l3 3-3 3',
+    priest: 'M12 2v20M6 7h12M8 13h8',
+    warrior: 'M4 20 18 6M15 5l3 3M20 20 6 6M3 5l3 3',
+    mage: 'M6 15 12 3l6 12M4 15h16M12 17v3',
+    werewolf: 'M4 5l4 3M20 5l-4 3M6 9v3a6 6 0 0 0 12 0V9M9 12h.01M15 12h.01M10 16h4',
+    druid: 'M20 4C10 4 4 10 4 20c10 0 16-6 16-16zM8 16c2-4 5-7 8-9',
+    assassin: 'M12 2v12M8 6h8M9 14h6l-1 6h-4l-1-6z',
+    shaman: 'M6 8 4 3l3 2M18 8l2-5-3 2M6 8v4a6 6 0 0 0 12 0V8M9 11h.01M15 11h.01M9 15c2 2 4 2 6 0',
+    ghost: 'M5 22V10a7 7 0 0 1 14 0v12l-2.3-2-2.4 2-2.3-2-2.4 2L5 22zM9.5 10h.01M14.5 10h.01',
+    reaper: 'M4 21 17 8M7 3c8-1 13 4 13 10-4-4-9-5-14-3',
+    paladin: 'M12 2 4 6v6c0 5 4 8 8 10 4-2 8-5 8-10V6l-8-4zM12 7v8M9 10h6',
+    gunslinger: 'M3 7h13l2 3h4v2h-4l-1 3h-4l-1 5H8l1-7H3z',
+    guardian: 'M5 21V8l7-5 7 5v13M5 21h14M10 21v-6h4v6M9 11h2M13 11h2',
+    mystic: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+    bard: 'M9 18V6l10-2v12M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM19 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z',
+    blood: 'M12 2c4 6 7 9 7 13a7 7 0 0 1-14 0c0-4 3-7 7-13zM9 15c1-2 2-3.5 3-5 1 1.8 2 3 3 5',
+    monkey: 'M12 4a6 6 0 0 0-6 6v2a6 6 0 0 0 12 0v-2a6 6 0 0 0-6-6zM6 9a2.5 2.5 0 1 0 0 5M18 9a2.5 2.5 0 1 1 0 5M9 11h.01M15 11h.01M10 14.5c1 1 1 2 2 2s1-1 2-2',
+  };
+  const LABELS = {
+    archer: ['Лучник', 'Archer'], priest: ['Прист', 'Priest'], warrior: ['Воин', 'Warrior'],
+    mage: ['Маг', 'Mage'], werewolf: ['Оборотень', 'Werewolf'], druid: ['Друид', 'Druid'],
+    assassin: ['Убийца', 'Assassin'], shaman: ['Шаман', 'Shaman'], ghost: ['Призрак', 'Ghost'],
+    reaper: ['Жнец', 'Reaper'], paladin: ['Паладин', 'Paladin'], gunslinger: ['Стрелок', 'Gunslinger'],
+    guardian: ['Страж', 'Guardian'], mystic: ['Мистик', 'Mystic'], bard: ['Бард', 'Bard'],
+    blood: ['Дух крови', 'Blood Spirit'], monkey: ['Обезьяна', 'Monkey'],
+  };
+  function classGlyph(key, size) {
+    const d = C[key];
+    if (!d) return '';
+    const s = size || 18;
+    return (
+      '<svg class="class-glyph cls-' + key + '" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" ' +
+      'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="' + d + '"/></svg>'
+    );
+  }
+  function crown(size) {
+    const s = size || 13;
+    return (
+      '<svg class="crown" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path fill="#f6c453" stroke="none" d="M3 18 4.5 6.5l4.6 2.8L12 3.5l2.9 5.8 4.6-2.8L21 18H3zM4.8 19.6h14.4v1.6H4.8z"/>' +
+      '</svg>'
+    );
+  }
+  const T = window.TSIcons;
+  T.CLASSES = Object.keys(C);
+  T.classGlyph = classGlyph;
+  T.classLabel = function (key, lang) {
+    const l = LABELS[key];
+    return l ? (lang === 'en' ? l[1] : l[0]) : key;
+  };
+  T.crown = crown;
+})();

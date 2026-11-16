@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   app,
   BrowserWindow,
+  globalShortcut,
   Menu,
   nativeImage,
   screen,
@@ -231,6 +232,27 @@ function applyAutostart(): void {
   }
 }
 
+/* ---------------- soundboard hotkeys ---------------- */
+
+function registerSoundHotkeys(): void {
+  if (!handle) return;
+  try {
+    globalShortcut.unregisterAll();
+    const { items, enabled } = handle.store.get().sounds;
+    if (!enabled) return;
+    for (const item of items) {
+      if (!item.hotkey) continue;
+      const ok = globalShortcut.register(item.hotkey, () => {
+        log(`[app] sound hotkey ${item.hotkey} → ${item.name}`);
+        handle?.broadcast({ type: 'sound', id: item.id });
+      });
+      if (!ok) log(`[app] hotkey ${item.hotkey} unavailable`);
+    }
+  } catch (err) {
+    log(`[app] hotkey registration error: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 function buildTrayMenu(): void {
   if (!tray || !handle) return;
   const cfg = handle.store.get();
@@ -312,6 +334,8 @@ async function boot(): Promise<void> {
   createOverlay();
   createTray();
   applyAutostart();
+  registerSoundHotkeys();
+  handle.events.on('config', () => registerSoundHotkeys());
 
   // First run: open the settings window so the UI is immediately visible.
   const cfg = handle.store.get();
@@ -340,6 +364,11 @@ if (gotLock) {
 
   app.on('before-quit', () => {
     log('=== shutting down ===');
+    try {
+      globalShortcut.unregisterAll();
+    } catch {
+      /* ignore */
+    }
     handle?.close();
   });
 }

@@ -37,6 +37,12 @@ function ts3Response(cmd) {
   if (cmd.startsWith('clientnotifyregister')) return 'error id=0 msg=ok';
   if (cmd.startsWith('serverconnectionhandlerlist')) return 'schandlerid=1|schandlerid=2\nerror id=0 msg=ok';
   if (cmd.startsWith('use ')) return 'error id=0 msg=ok';
+  if (cmd.startsWith('servergrouplist')) {
+    return (
+      [fields({ sgid: 6, name: 'Warriors', iconid: 12345 }), fields({ sgid: 12, name: 'Маги', iconid: 54321 })].join('|') +
+      '\nerror id=0 msg=ok'
+    );
+  }
   if (cmd.startsWith('whoami')) return fields({ clid: 1, cid: 10, client_nickname: 'Alice' }) + '\nerror id=0 msg=ok';
   if (cmd.startsWith('clientvariable') && cmd.includes('client_input_hardware') && !cmd.includes('client_flag_avatar')) {
     return fields({ clid: 1, client_input_hardware: 1 }) + '\nerror id=0 msg=ok';
@@ -65,6 +71,7 @@ function ts3Response(cmd) {
 
 const ts3Server = net.createServer((socket) => {
   socket.write('TS3 Client\n\nselected schandlerid=1\n');
+  globalThis.ts3LastSocket = socket;
   let buf = '';
   socket.on('data', (d) => {
     buf += d.toString();
@@ -122,6 +129,11 @@ ts6Wss.on('connection', (ws) => {
       // wrapped event + top-level events after a beat
       setTimeout(() => {
         ws.send(JSON.stringify({ type: 'proto.ServerEvent', payload: { connectionId: 7, talkStatusChanged: { clientId: 101, status: 1 } } }));
+        // whisper: status ≥ 2
+        ws.send(JSON.stringify({ type: 'talkStatusChanged', payload: { connectionId: 7, clientId: 100, status: 2 } }));
+        // chat messages (defensive name parsing)
+        ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, msg: 'privet', invokerId: 101, invokerName: 'Elena', targetMode: 2 } }));
+        ws.send(JSON.stringify({ type: 'proto.ServerEvent', payload: { connectionId: 7, chatMessage: { text: 'wrapped hi', senderName: 'Ruslan', senderId: 100, targetMode: 3 } } }));
         ws.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, newChannelId: 5, oldChannelId: 9 } }));
         ws.send(JSON.stringify({ type: 'clientSelfPropertyUpdated', payload: { connectionId: 7, flag: 'inputMuted', newValue: true } }));
         ws.send(JSON.stringify({ type: 'clientPropertiesUpdated', payload: { connectionId: 7, clientId: 100, properties: { nickname: 'Ruslan2' } } }));
@@ -166,6 +178,21 @@ check('ts3: commander + priority', (() => {
   return a?.channelCommander === true && b?.prioritySpeaker === true;
 })());
 check('ts3: avatar hash', last3?.users.find((u) => u.nickname === 'Alice')?.avatarHash === 'deadbeef');
+check('ts3: server groups fetched', (() => {
+  const g = last3?.groups || [];
+  return g.length === 2 && g[0].id === 6 && g[0].iconId === 12345 && g[1].name === 'Маги';
+})(), JSON.stringify(last3?.groups));
+
+/* live notifications: chat + whisper */
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=2 msg=hello\\schat schandlerid=1 invokerid=2 invokername=Борис\n');
+globalThis.ts3LastSocket?.write('notifytalkstatuschange targetmode=1 status=1 clid=2 schandlerid=1\n');
+await new Promise((r) => setTimeout(r, 500));
+const last3b = ts3States[ts3States.length - 1];
+check('ts3: chat message captured', (() => {
+  const m = last3b?.chat || [];
+  return m.length === 1 && m[0].text === 'hello chat' && m[0].nickname === 'Борис' && m[0].kind === 'channel';
+})(), JSON.stringify(last3b?.chat));
+check('ts3: whisper detected from targetmode', last3b?.users.find((u) => u.nickname === 'Борис')?.whispering === true);
 
 /* ---- TS6 assertions ---- */
 const last6 = ts6States[ts6States.length - 1];
@@ -183,6 +210,16 @@ check('ts6: away + priority flags', (() => {
   return e?.away === true && e?.awayMessage === 'tea' && e?.prioritySpeaker === true && e?.outputMuted === true;
 })());
 check('ts6: commander flag', last6?.users.find((u) => u.nickname === 'Ruslan2')?.channelCommander === true);
+check('ts6: whisper flag from status≥2', last6?.users.find((u) => u.nickname === 'Ruslan2')?.whispering === true);
+check('ts6: chat message parsed', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'privet' && x.nickname === 'Elena' && x.kind === 'channel');
+})(), JSON.stringify(last6?.chat));
+check('ts6: wrapped chat parsed', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'wrapped hi' && x.nickname === 'Ruslan' && x.kind === 'server');
+})(), JSON.stringify(last6?.chat));
+check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
 
 /* ---- teardown ---- */
 c3.stop();

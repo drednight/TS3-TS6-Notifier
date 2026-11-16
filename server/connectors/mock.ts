@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { OverlayState, UserState, emptyState, makeUser } from '../model.js';
+import { ChatMessage, OverlayState, ServerGroup, UserState, emptyState, makeUser } from '../model.js';
 import type { Connector } from './wire.js';
 
 interface MockActor {
@@ -27,6 +27,24 @@ const SEED: Array<[string, Partial<UserState>]> = [
 
 const CHANNELS = ['Рандеву', 'Игровой канал', 'Lounge', 'Тихая гавань', 'Музыкальная'];
 
+const MOCK_GROUPS: ServerGroup[] = [
+  { id: 6, name: 'Воины', iconId: 1006 },
+  { id: 12, name: 'Маги', iconId: 1012 },
+  { id: 16, name: 'Тени', iconId: 1016 },
+  { id: 10, name: 'Командиры', iconId: 1010 },
+];
+
+const CHAT_LINES = [
+  'всем привет!',
+  'кто сегодня в рейде?',
+  'гг',
+  'погнали на арену',
+  'у меня лагает голос',
+  'кто-нибудь слышит меня?',
+  'спасибо за игру!',
+  'через 5 минут буду',
+];
+
 /**
  * Demo data source: simulates a living TeamSpeak channel so the overlay can
  * be previewed (and demoed) without any client running.
@@ -36,6 +54,9 @@ export class MockConnector extends EventEmitter implements Connector {
   private actors: MockActor[] = [];
   private selfId = 'self';
   private channelName = CHANNELS[0]!;
+  private chat: ChatMessage[] = [];
+  private chatSeq = 0;
+  private chatLine = 0;
   private lastEmit = 0;
   private pending: OverlayState | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
@@ -76,12 +97,31 @@ export class MockConnector extends EventEmitter implements Connector {
       if (!actor.present) continue;
       const u = actor.user;
       if (u.talking && now >= actor.talkUntil) {
-        actor.user = { ...u, talking: false };
+        actor.user = { ...u, talking: false, whispering: false };
         actor.nextTalkAt = now + 400 + Math.random() * 2600;
         changed = true;
       } else if (!u.talking && !u.inputMuted && !u.away && now >= actor.nextTalkAt && Math.random() < 0.3) {
-        actor.user = { ...u, talking: true };
+        actor.user = { ...u, talking: true, whispering: Math.random() < 0.22 };
         actor.talkUntil = now + 1100 + Math.random() * 3600;
+        changed = true;
+      }
+    }
+
+    // Occasional chat traffic.
+    if (Math.random() < 0.03) {
+      const present = this.actors.filter((a) => a.present && !a.user.isSelf);
+      if (present.length) {
+        const a = present[Math.floor(Math.random() * present.length)]!;
+        const msg: ChatMessage = {
+          id: `m${++this.chatSeq}`,
+          userId: a.user.id,
+          nickname: a.user.nickname,
+          text: CHAT_LINES[this.chatLine++ % CHAT_LINES.length]!,
+          kind: Math.random() < 0.2 ? 'private' : 'channel',
+          at: Date.now(),
+        };
+        this.chat.push(msg);
+        if (this.chat.length > 20) this.chat = this.chat.slice(-20);
         changed = true;
       }
     }
@@ -148,6 +188,8 @@ export class MockConnector extends EventEmitter implements Connector {
       channelId: 'demo-channel',
       selfId: this.selfId,
       users,
+      groups: MOCK_GROUPS,
+      chat: this.chat,
       updatedAt: Date.now(),
     };
   }

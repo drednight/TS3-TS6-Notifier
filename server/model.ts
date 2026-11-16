@@ -21,6 +21,8 @@ export interface UserState {
   channelId: number;
   /** Currently speaking. */
   talking: boolean;
+  /** Whispering (target-mode speech) — shown in a separate fading section. */
+  whispering: boolean;
   /** Microphone muted (hardware off, client-side mute or server-side mute). */
   inputMuted: boolean;
   /** Speakers/headphones muted. */
@@ -50,7 +52,27 @@ export interface OverlayState {
   selfId: string | null;
   /** Users of the current channel, including self. */
   users: UserState[];
+  /** Server groups (TS3 provides names + icon ids; TS6 usually only ids). */
+  groups: ServerGroup[];
+  /** Rolling chat log for toast notifications. */
+  chat: ChatMessage[];
   updatedAt: number;
+}
+
+export interface ServerGroup {
+  id: number;
+  name: string;
+  /** Server-side icon id (0 = none) — used to map groups to game classes. */
+  iconId: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  userId: string;
+  nickname: string;
+  text: string;
+  kind: 'channel' | 'private' | 'server';
+  at: number;
 }
 
 export interface Ts3Config {
@@ -77,7 +99,8 @@ export interface Appearance {
   scale: number;
   fontSize: number;
   corner: 'tl' | 'tr' | 'bl' | 'br';
-  margin: number;
+  marginX: number;
+  marginY: number;
   language: 'auto' | 'ru' | 'en';
   showHeader: boolean;
   showServerName: boolean;
@@ -93,6 +116,12 @@ export interface Appearance {
   onlyTalking: boolean;
   compact: boolean;
   hideEmpty: boolean;
+  /** Whisper section with fading rows. */
+  showWhispers: boolean;
+  /** Chat toasts. */
+  showChat: boolean;
+  chatDelay: number;
+  chatPrivate: boolean;
 }
 
 export interface AppConfig {
@@ -108,6 +137,32 @@ export interface AppConfig {
     /** First run already greeted the user with the settings window. */
     seen: boolean;
   };
+  /** Game class icons: map TS server groups / icon ids to class keys. */
+  classes: {
+    enabled: boolean;
+    /** "icon:12345" or "group:6" → class key (see frontend CLASS list). */
+    map: Record<string, string>;
+  };
+  /** Soundboard. */
+  sounds: {
+    enabled: boolean;
+    volume: number;
+    /** Audio output device id ('' = default). */
+    outputDevice: string;
+    /** Show the board inside the overlay panel. */
+    boardVisible: boolean;
+    items: SoundItem[];
+  };
+}
+
+export interface SoundItem {
+  id: string;
+  name: string;
+  /** URL the browser can play: /sounds/<file> or /presets/<file>. */
+  file: string;
+  /** Global hotkey combo, e.g. "Ctrl+Alt+1" (desktop app only). */
+  hotkey: string;
+  volume: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -120,7 +175,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
   scale: 1,
   fontSize: 13,
   corner: 'tr',
-  margin: 18,
+  marginX: 18,
+  marginY: 18,
   language: 'auto',
   showHeader: true,
   showServerName: true,
@@ -136,6 +192,10 @@ export const DEFAULT_APPEARANCE: Appearance = {
   onlyTalking: false,
   compact: false,
   hideEmpty: false,
+  showWhispers: true,
+  showChat: true,
+  chatDelay: 8,
+  chatPrivate: true,
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -144,6 +204,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
   desktop: { clickThrough: true, autostart: false, visible: true, seen: false },
+  classes: { enabled: false, map: {} },
+  sounds: { enabled: false, volume: 0.8, outputDevice: '', boardVisible: true, items: [] },
 };
 
 export function emptyState(source: SourceKind, status: StatusCode, detail = ''): OverlayState {
@@ -156,6 +218,8 @@ export function emptyState(source: SourceKind, status: StatusCode, detail = ''):
     channelId: '',
     selfId: null,
     users: [],
+    groups: [],
+    chat: [],
     updatedAt: Date.now(),
   };
 }
@@ -166,6 +230,7 @@ export function makeUser(id: string, nickname: string, patch: Partial<UserState>
     nickname,
     channelId: 0,
     talking: false,
+    whispering: false,
     inputMuted: false,
     outputMuted: false,
     away: false,

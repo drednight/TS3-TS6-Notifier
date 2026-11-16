@@ -16,7 +16,8 @@
     scale: 1,
     fontSize: 13,
     corner: 'tr',
-    margin: 18,
+    marginX: 18,
+    marginY: 18,
     language: 'auto',
     showHeader: true,
     showServerName: true,
@@ -32,6 +33,10 @@
     onlyTalking: false,
     compact: false,
     hideEmpty: false,
+    showWhispers: true,
+    showChat: true,
+    chatDelay: 8,
+    chatPrivate: true,
   };
 
   const ENUMS = {
@@ -48,13 +53,15 @@
     radius: [0, 26],
     scale: [0.75, 1.5],
     fontSize: [11, 18],
-    margin: [0, 80],
+    marginX: [0, 240],
+    marginY: [0, 240],
+    chatDelay: [2, 60],
   };
 
   const BOOLS = [
     'showHeader', 'showServerName', 'showUserCount', 'showBanner', 'showAvatars',
     'showBadges', 'showSelf', 'hideQuery', 'animations', 'talkingFirst',
-    'onlyTalking', 'compact', 'hideEmpty',
+    'onlyTalking', 'compact', 'hideEmpty', 'showWhispers', 'showChat', 'chatPrivate',
   ];
 
   let local = {};
@@ -104,7 +111,8 @@
     const q = new URLSearchParams(location.search);
     const map = {
       theme: 'theme', accent: 'accent', glow: 'glow', opacity: 'opacity', blur: 'blur',
-      radius: 'radius', scale: 'scale', font: 'fontSize', corner: 'corner', margin: 'margin',
+      radius: 'radius', scale: 'scale', font: 'fontSize', corner: 'corner',
+      marginx: 'marginX', marginy: 'marginY',
       lang: 'language', eq: 'eqStyle',
     };
     const out = {};
@@ -116,6 +124,13 @@
       if (BOOLS.includes(key)) value = raw === '1' || raw === 'true';
       const s = sanitize({ [key]: value });
       if (key in s) out[key] = s[key];
+    }
+    // Legacy ?margin=N sets both axes.
+    const legacy = q.get('margin');
+    if (legacy !== null) {
+      const s = sanitize({ marginX: Number(legacy), marginY: Number(legacy) });
+      if ('marginX' in s) out.marginX = s.marginX;
+      if ('marginY' in s) out.marginY = s.marginY;
     }
     if (q.get('compact') !== null) out.compact = q.get('compact') === '1';
     if (q.get('anim') !== null) out.animations = q.get('anim') !== '0';
@@ -148,7 +163,9 @@
     root.setProperty('--radius', `${a.radius}px`);
     root.setProperty('--scale', a.scale);
     root.setProperty('--font-size', `${a.fontSize}px`);
-    root.setProperty('--margin', `${a.margin}px`);
+    root.setProperty('--margin', `${a.marginX}px`);
+    root.setProperty('--margin-x', `${a.marginX}px`);
+    root.setProperty('--margin-y', `${a.marginY}px`);
 
     document.body.dataset.theme = a.theme;
     document.body.dataset.corner = a.corner;
@@ -189,7 +206,7 @@
 
   function fmt(key, value) {
     if (key === 'opacity' || key === 'glow' || key === 'scale') return `${Math.round(value * 100)}%`;
-    if (key === 'fontSize') return `${value}px`;
+    if (key === 'chatDelay') return `${value} s`;
     return `${value}px`;
   }
 

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
-import { OverlayState, StatusCode, UserState, emptyState, makeUser } from '../model.js';
+import { ChatMessage, OverlayState, ServerGroup, StatusCode, UserState, emptyState, makeUser } from '../model.js';
 import {
   Connector,
   JObj,
@@ -40,6 +40,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
   private clients = new Map<number, UserState>();
   private channels = new Map<number, ChannelInfo>();
   private ownByConnection = new Map<number, number>();
+  private chat: ChatMessage[] = [];
+  private chatSeq = 0;
   private connectionId = 0;
   private preferredConnectionId = 0;
   private ownClientId = 0;
@@ -299,7 +301,14 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
       case 'talkStatusChanged': {
         const clientId = jInt(payload, 'clientId');
-        const talking = jInt(payload, 'status') === 1;
+        const status = jInt(payload, 'status');
+        // status: 0 = silent, 1 = talking, ≥2 or whisper/targetMode flags = whisper.
+        const talking = status >= 1;
+        const whisper =
+          talking &&
+          (status >= 2 ||
+            jBool(payload, 'whisper') ||
+            ('targetMode' in payload && jInt(payload, 'targetMode') !== 0));
         if (foreign) {
           if (talking && clientId && this.ownClientIdFor(connId) === clientId) {
             this.noteActiveConnection(connId, 'self talk');
@@ -307,8 +316,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
           return;
         }
         const client = this.clients.get(clientId);
-        if (client && client.talking !== talking) {
-          this.clients.set(clientId, { ...client, talking });
+        if (client && (client.talking !== talking || client.whispering !== whisper)) {
+          this.clients.set(clientId, { ...client, talking, whispering: whisper });
           this.emitState();
         }
         return;
@@ -404,7 +413,49 @@ export class Ts6Connector extends EventEmitter implements Connector {
       case 'neededPermissions':
       case 'clientNeededPermissions':
         return;
+
+      default: {
+        // Chat messages (names differ between TS6 builds — extract defensively).
+        if (/message|chat/i.test(type) && !/perm|status/i.test(type)) {
+          this.handleChatEvent(payload);
+        }
+        return;
+      }
     }
+  }
+
+  private handleChatEvent(payload: JObj): void {
+    const inner = asObj(payload['message']) ?? asObj(payload['properties']) ?? asObj(payload['data']) ?? payload;
+    const body =
+      jStr(payload, 'msg') ||
+      jStr(payload, 'message') ||
+      jStr(payload, 'text') ||
+      jStr(payload, 'content') ||
+      jStr(inner, 'msg') ||
+      jStr(inner, 'message') ||
+      jStr(inner, 'text') ||
+      jStr(inner, 'content');
+    if (!body) return;
+    const userId = String(jInt(payload, 'invokerId') || jInt(payload, 'senderId') || jInt(payload, 'clientId') || jInt(payload, 'clid'));
+    const nickname =
+      jStr(payload, 'invokerName') ||
+      jStr(payload, 'senderName') ||
+      jStr(inner, 'nickname') ||
+      this.clients.get(Number(userId))?.nickname ||
+      '?';
+    const mode = jInt(payload, 'targetMode') || jInt(payload, 'targetmode');
+    this.pushChat({
+      userId,
+      nickname,
+      text: body,
+      kind: mode === 1 ? 'private' : mode === 3 ? 'server' : 'channel',
+    });
+  }
+
+  private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
+    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: Date.now() });
+    if (this.chat.length > 20) this.chat = this.chat.slice(-20);
+    this.emitState();
   }
 
   private handleAuth(payload: JObj): void {
@@ -537,6 +588,15 @@ export class Ts6Connector extends EventEmitter implements Connector {
   /* -------------------------------------------------- publish */
 
   private buildState(): OverlayState {
+    const groupMap = new Map<number, ServerGroup>();
+    for (const c of this.clients.values()) {
+      for (const id of String(c.serverGroups ?? '')
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isFinite(n) && n > 0)) {
+        if (!groupMap.has(id)) groupMap.set(id, { id, name: '', iconId: 0 });
+      }
+    }
     return {
       ...emptyState('ts6', this.curStatus, this.curDetail),
       serverName: this.serverName,
@@ -546,6 +606,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
       users: [...this.clients.values()].filter(
         (c) => this.ownChannelId > 0 && c.channelId === this.ownChannelId,
       ),
+      groups: [...groupMap.values()].sort((a, b) => a.id - b.id),
+      chat: this.chat,
       updatedAt: Date.now(),
     };
   }
@@ -582,6 +644,11 @@ function applyProperties(client: UserState, props: JObj): UserState {
     patch.outputMuted = jBool(props, 'outputMuted') || jBool(props, 'outputOnlyMuted');
   }
   if (hasKey(props, 'flagTalking')) patch.talking = jBool(props, 'flagTalking');
+  if (hasKey(props, 'flagTalkingWithWhisper') || hasKey(props, 'isWhispering') || hasKey(props, 'whisper')) {
+    const whispering = jBool(props, 'flagTalkingWithWhisper') || jBool(props, 'isWhispering') || jBool(props, 'whisper');
+    patch.whispering = whispering;
+    if (whispering) patch.talking = true;
+  }
   if (hasKey(props, 'away')) patch.away = jBool(props, 'away');
   if (hasKey(props, 'awayMessage')) patch.awayMessage = jStr(props, 'awayMessage');
   if (hasKey(props, 'isPrioritySpeaker')) patch.prioritySpeaker = jBool(props, 'isPrioritySpeaker');

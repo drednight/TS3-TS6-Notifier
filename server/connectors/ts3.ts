@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
-import { OverlayState, UserState, emptyState, makeUser, StatusCode } from '../model.js';
+import { readFileSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
+import { join } from 'node:path';
+import { ChatMessage, OverlayState, ServerGroup, UserState, emptyState, makeUser, StatusCode } from '../model.js';
 import {
   Connector,
   Ts3Fields,
@@ -11,6 +14,24 @@ import {
   ts3ParseResponse,
   ts3Unescape,
 } from './wire.js';
+
+/** TS3 keeps the ClientQuery key in plain text — pick it up automatically. */
+function readTs3ApiKey(): string {
+  const candidates =
+    platform() === 'win32'
+      ? [join(process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming'), 'TS3Client', 'clientquery.ini')]
+      : [join(homedir(), '.ts3client', 'clientquery.ini'), join(homedir(), 'snap', 'teamspeak3', 'current', '.ts3client', 'clientquery.ini')];
+  for (const path of candidates) {
+    try {
+      const text = readFileSync(path, 'utf8');
+      const m = /^\s*api_key\s*=\s*(.+?)\s*$/im.exec(text);
+      if (m?.[1]) return m[1];
+    } catch {
+      /* try next */
+    }
+  }
+  return '';
+}
 
 interface PendingCommand {
   resolve: (raw: string) => void;
@@ -43,6 +64,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
   private clients = new Map<number, UserState>();
   private channels = new Map<number, ChannelInfo>();
+  private groups: ServerGroup[] = [];
+  private chat: ChatMessage[] = [];
+  private chatSeq = 0;
   private ownClidByHandler = new Map<number, number>();
   private ownClid = 0;
   private ownCid = 0;
@@ -104,20 +128,23 @@ export class Ts3Connector extends EventEmitter implements Connector {
       const socket = net.createConnection({ host: this.host, port: this.port });
       this.socket = socket;
       socket.setEncoding('utf8');
-      socket.setTimeout(20000);
 
       let settled = false;
       const fail = (err: Error) => {
         if (settled) return;
         settled = true;
+        clearTimeout(connectTimer);
         socket.destroy();
         if (this.socket === socket) this.socket = null;
         this.pending = [];
         reject(err);
       };
 
+      // Connect timeout only — the ClientQuery socket can be silent for long
+      // stretches, so an inactivity timeout would kill a healthy connection.
+      const connectTimer = setTimeout(() => fail(new Error('ClientQuery connect timeout')), 5000);
+
       socket.on('error', fail);
-      socket.on('timeout', () => fail(new Error('ClientQuery timeout')));
       socket.on('close', () => fail(new Error('ClientQuery connection closed')));
       socket.on('data', (chunk: string) => {
         this.buffer += chunk;
@@ -130,6 +157,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
       });
 
       socket.on('connect', () => {
+        clearTimeout(connectTimer);
         void this.bootstrap()
           .then(() => {
             if (settled) return;
@@ -144,6 +172,14 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private async bootstrap(): Promise<void> {
     // Let the plugin print its greeting banner (dropped as noise).
     await new Promise((r) => setTimeout(r, 150));
+
+    if (!this.apiKey) {
+      const auto = readTs3ApiKey();
+      if (auto) {
+        this.apiKey = auto;
+        console.log('[ts3] API key picked up from clientquery.ini');
+      }
+    }
 
     if (this.apiKey) {
       const auth = await this.command(`auth apikey=${ts3Escape(this.apiKey)}`);
@@ -179,17 +215,26 @@ export class Ts3Connector extends EventEmitter implements Connector {
     head.lines.push(line);
   }
 
-  private command(cmd: string): Promise<{ items: Ts3Fields[]; errorId: number; errorMessage: string }> {
+  private command(cmd: string, timeoutMs = 8000): Promise<{ items: Ts3Fields[]; errorId: number; errorMessage: string }> {
     return new Promise((resolve, reject) => {
       const socket = this.socket;
       if (!socket || socket.destroyed) {
         reject(new Error('not connected'));
         return;
       }
-      this.pending.push({
+      const timer = setTimeout(() => {
+        const idx = this.pending.findIndex((p) => p === entry);
+        if (idx >= 0) this.pending.splice(idx, 1);
+        reject(new Error(`ClientQuery command timeout: ${cmd.split(' ')[0]}`));
+      }, timeoutMs);
+      const entry: PendingCommand = {
         lines: [],
-        resolve: (raw) => resolve(ts3ParseResponse(raw)),
-      });
+        resolve: (raw) => {
+          clearTimeout(timer);
+          resolve(ts3ParseResponse(raw));
+        },
+      };
+      this.pending.push(entry);
       socket.write(cmd + '\n');
     });
   }
@@ -305,6 +350,17 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
       await this.readAvatars(clients);
       this.clients = clients;
+
+      // Server groups (names + icon ids) — used for class icon mapping.
+      const grRes = await this.safe('servergrouplist');
+      if (grRes.errorId === 0) {
+        this.groups = grRes.items.map((i) => ({
+          id: fInt(i, 'sgid'),
+          name: fStr(i, 'name'),
+          iconId: fInt(i, 'iconid'),
+        }));
+      }
+
       this.publish('live', '');
     } catch (err) {
       this.publish('offline', err instanceof Error ? err.message : String(err));
@@ -360,6 +416,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
       case 'notifytalkstatuschange': {
         const clid = fInt(fields, 'clid');
         const talking = fInt(fields, 'status') === 1;
+        // Whisper detection (available on newer clients): targetmode ≠ 0 or an
+        // explicit whisper flag marks the speech as targeted/whispered.
+        const whisper = talking && (('targetmode' in fields && fInt(fields, 'targetmode') !== 0) || fBool(fields, 'whisper'));
         if (!inScope) {
           // Self started speaking on another server tab → follow the mic.
           if (talking && schandlerid > 0 && this.ownClidByHandler.get(schandlerid) === clid) {
@@ -369,10 +428,26 @@ export class Ts3Connector extends EventEmitter implements Connector {
           return;
         }
         const user = this.clients.get(clid);
-        if (user && user.talking !== talking) {
-          this.clients.set(clid, { ...user, talking });
+        if (user && (user.talking !== talking || user.whispering !== whisper)) {
+          this.clients.set(clid, { ...user, talking, whispering: whisper });
           this.emitState();
         }
+        return;
+      }
+
+      case 'notifytextmessage': {
+        if (!inScope) return;
+        const targetMode = fInt(fields, 'targetmode');
+        const kind: ChatMessage['kind'] = targetMode === 1 ? 'private' : targetMode === 3 ? 'server' : 'channel';
+        const text = fStr(fields, 'msg');
+        if (!text) return;
+        const userId = String(fInt(fields, 'invokerid') || fInt(fields, 'clid'));
+        this.pushChat({
+          userId,
+          nickname: fStr(fields, 'invokername') || this.clients.get(Number(userId))?.nickname || '?',
+          text,
+          kind,
+        });
         return;
       }
 
@@ -434,6 +509,12 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
   /* -------------------------------------------------- publish */
 
+  private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
+    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: Date.now() });
+    if (this.chat.length > 20) this.chat = this.chat.slice(-20);
+    this.emitState();
+  }
+
   private buildState(): OverlayState {
     return {
       ...emptyState('ts3', this.curStatus, this.curDetail),
@@ -444,6 +525,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
       users: [...this.clients.values()].filter(
         (c) => this.ownCid > 0 && c.channelId === this.ownCid,
       ),
+      groups: this.groups,
+      chat: this.chat,
       updatedAt: Date.now(),
     };
   }

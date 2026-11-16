@@ -136,6 +136,8 @@ try {
     check('overlay: away shown', !!doc.querySelector('#userList .row.away'));
     check('overlay: settings button hidden in clean mode', doc.getElementById('settingsBtn').style.display === 'none');
     check('overlay: drawer hidden initially', doc.getElementById('settingsDrawer').hidden === true);
+    check('overlay: whisper/chat/board containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed') && !!doc.getElementById('soundBoard'));
+    check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 17);
     dom.window.close();
   }
 
@@ -161,6 +163,14 @@ try {
     check('settings: accent change applies live', after === '#22d3ee', `${before} → ${after}`);
     doc.querySelector('[data-toggle="compact"]').click();
     check('settings: compact toggle applies class', dom.window.document.body.classList.contains('compact'));
+
+    // v1.0.2 feature round
+    check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
+    check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
+    check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
+    check('settings: classes legend rendered', doc.querySelectorAll('#classLegend .legend-item').length === 17, 'count=' + doc.querySelectorAll('#classLegend .legend-item').length);
+    check('settings: classes tab wired', !!doc.getElementById('classesEnabled') && !!doc.getElementById('mapAddBtn') && !!doc.getElementById('mapKeyInput'));
+    check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('addPresetsBtn') && !!doc.getElementById('soundUploadBtn'));
     dom.window.close();
   }
 } finally {
