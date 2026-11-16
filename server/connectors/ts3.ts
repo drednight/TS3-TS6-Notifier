@@ -361,7 +361,14 @@ export class Ts3Connector extends EventEmitter implements Connector {
     if (this.stopped || !this.socket) return;
     try {
       await this.safe(`use schandlerid=${this.activeSchandlerId}`);
-      const who = await this.safe('whoami');
+      let who = await this.safe('whoami');
+      if (who.errorId !== 0 || who.items.length === 0) {
+        // The tracked handler may have gone stale (tab switch, reconnect) —
+        // rediscover it before reporting "not connected".
+        await this.findActiveHandler();
+        await this.safe(`use schandlerid=${this.activeSchandlerId}`);
+        who = await this.safe('whoami');
+      }
       if (who.errorId !== 0 || who.items.length === 0) {
         this.clients.clear();
         this.ownClid = 0;
@@ -514,7 +521,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
       }
 
       case 'notifytextmessage': {
-        if (!inScope) return;
+        // Chat is accepted from every server tab (not just the tracked one):
+        // messages on other tabs are still news and feed the unread badge.
         const targetMode = fInt(fields, 'targetmode');
         const kind: ChatMessage['kind'] = targetMode === 1 ? 'private' : targetMode === 3 ? 'server' : 'channel';
         const text = fStr(fields, 'msg');
@@ -580,15 +588,36 @@ export class Ts3Connector extends EventEmitter implements Connector {
         return;
       }
 
-      case 'notifycurrentserverconnectionchanged':
+      case 'notifycurrentserverconnectionchanged': {
+        // The user switched server tabs in the TS3 client — follow them,
+        // otherwise whoami/chat run against a stale handler and the app
+        // shows "no connection" while the client is online.
+        const hid = fInt(fields, 'schandlerid');
+        if (hid > 0 && hid !== this.activeSchandlerId) {
+          this.activeSchandlerId = hid;
+          this.scheduleRefresh();
+        }
         return;
+      }
     }
   }
 
   /* -------------------------------------------------- publish */
 
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
-    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: Date.now() });
+    const now = Date.now();
+    const last = this.chat[this.chat.length - 1];
+    // Own-message echo arrives twice with different metadata (e.g. target
+    // mode missing on the second copy) — merge instead of showing a twin.
+    if (last && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
+      const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
+      const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
+      const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;
+      this.chat[this.chat.length - 1] = { ...last, kind, nickname };
+      this.emitState();
+      return;
+    }
+    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: now });
     if (this.chat.length > 20) this.chat = this.chat.slice(-20);
     this.emitState();
   }

@@ -13,7 +13,6 @@
 
   function injectIcons() {
     $('settingsBtn').innerHTML = icon('gear', 16.5);
-    $('closeDrawer').innerHTML = icon('x', 16);
     document.querySelector('.drawer-logo').innerHTML = icon('logo', 20, 0);
     document.querySelector('.channel-name .wave-ico').innerHTML = icon('wave', 14, 2.2);
     document.querySelector('.empty-icon').innerHTML = icon('users', 20);
@@ -254,11 +253,48 @@
 
   const chatRows = new Map(); // id -> { el, timer }
 
+  /* ---------------- unread-message badge ---------------- */
+
+  const seenChatIds = new Set();
+  let unreadCount = 0;
+  let unreadTimer = 0;
+
+  function clearUnread() {
+    unreadCount = 0;
+    if (unreadTimer) clearTimeout(unreadTimer);
+    unreadTimer = 0;
+    const el = $('chatUnread');
+    if (el) el.hidden = true;
+  }
+
+  function trackUnread() {
+    const el = $('chatUnread');
+    if (!el) return;
+    for (const m of state.chat || []) {
+      if (!m.id || seenChatIds.has(m.id)) continue;
+      seenChatIds.add(m.id);
+      const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
+      if (isSelf) continue;
+      if (m.kind === 'private' && !Settings.appearance.chatPrivate) continue;
+      unreadCount += 1;
+    }
+    if (unreadCount <= 0) return;
+    el.hidden = false;
+    el.title = t('unreadTitle');
+    $('chatUnreadCount').textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+    el.classList.remove('bump');
+    void el.offsetWidth; // restart the pulse animation
+    el.classList.add('bump');
+    if (unreadTimer) clearTimeout(unreadTimer);
+    unreadTimer = setTimeout(clearUnread, 45000);
+  }
+
   function renderChat() {
     const a = Settings.appearance;
+    trackUnread();
     const feed = $('chatFeed');
     if (!feed) return;
-    const show = a.showChat && state.status === 'live';
+    const show = a.showChat;
     feed.hidden = !show;
     if (!show) {
       for (const [, rec] of chatRows) {
@@ -339,6 +375,7 @@
     $('ts6ApiKey').value = config.ts6.apiKey;
     $('ts3Fields').classList.toggle('visible', config.source === 'ts3');
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
+    $('elevateToggle').checked = config.desktop?.elevate !== false;
   }
 
   function wireConnectionTab() {
@@ -373,6 +410,10 @@
 
     $('reconnectBtn').addEventListener('click', () => {
       fetch('/api/reconnect', { method: 'POST' }).catch(() => {});
+    });
+
+    $('elevateToggle').addEventListener('change', () => {
+      putConfig({ desktop: { elevate: $('elevateToggle').checked } });
     });
   }
 
@@ -436,6 +477,7 @@
   injectIcons();
   Settings.init();
   wireConnectionTab();
+  $('chatUnread').addEventListener('click', clearUnread);
 
   if (Settings.clean) {
     $('settingsBtn').style.display = 'none';

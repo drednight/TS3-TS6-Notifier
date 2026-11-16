@@ -39,6 +39,9 @@
       </div>
 
       <div id="chatFeed" class="chat-feed" hidden></div>
+      <div id="chatUnread" class="chat-unread" hidden data-i18n-title="unreadTitle">
+        <span class="cu-dot"></span><span id="chatUnreadCount">0</span>
+      </div>
 
       <div id="emptyState" class="empty-state" hidden>
         <div class="empty-icon"></div>
@@ -59,7 +62,6 @@
           <div class="drawer-sub" data-i18n="settingsSubtitle"></div>
         </div>
       </div>
-      <button id="closeDrawer" class="icon-btn" aria-label="Close"></button>
     </header>
 
     <nav class="tabs" id="tabs">
@@ -311,6 +313,9 @@
           <button class="btn primary" id="reconnectBtn" data-i18n="reconnect"></button>
         </div>
 
+        <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
+        <div class="hint block" data-i18n="elevateHint"></div>
+
         <div class="hint block" data-i18n="connectionHelp"></div>
               <details class="collapse-block" id="ts6GroupsBlock">
           <summary data-i18n="ts6GroupsTitle"></summary>
@@ -322,7 +327,7 @@
       <!-- ---------- About ---------- -->
       <section class="tab-panel" data-panel="about">
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.8</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.9</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
 

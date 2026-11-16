@@ -509,7 +509,19 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
-    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: Date.now() });
+    const now = Date.now();
+    const last = this.chat[this.chat.length - 1];
+    // Own-message echo arrives twice (second copy loses the target mode) —
+    // merge instead of showing a twin.
+    if (last && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
+      const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
+      const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
+      const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;
+      this.chat[this.chat.length - 1] = { ...last, kind, nickname };
+      this.emitState();
+      return;
+    }
+    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: now });
     if (this.chat.length > 20) this.chat = this.chat.slice(-20);
     this.emitState();
   }

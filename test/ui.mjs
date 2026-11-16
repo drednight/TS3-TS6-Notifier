@@ -212,6 +212,10 @@ try {
     const soundPanel = doc.querySelector('[data-panel="sound"]');
     check('settings: sound tab hidden (feature parked)', soundTabBtn?.hidden === true && soundPanel?.hidden === true);
     check('settings: server groups in a collapsed block at the bottom', !!doc.getElementById('ts6GroupsBlock') && doc.getElementById('ts6GroupsBlock').open === false);
+    // v1.1.9: chat polish + desktop toggles
+    check('settings: header close X removed', !doc.getElementById('closeDrawer'));
+    check('settings: run-as-admin toggle present', !!doc.getElementById('elevateToggle'));
+    check('overlay: unread-message badge present', !!doc.getElementById('chatUnread') && !!doc.getElementById('chatUnreadCount'));
     check('settings: adding sounds lives in the board menu only', !doc.getElementById('soundUploadBtn') && !doc.getElementById('addPresetsBtn'));
     check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
 

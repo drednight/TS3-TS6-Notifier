@@ -197,6 +197,29 @@ check('ts3: chat message captured', (() => {
 })(), JSON.stringify(last3b?.chat));
 check('ts3: whisper detected from targetmode', last3b?.users.find((u) => u.nickname === 'Борис')?.whispering === true);
 
+/* duplicate delivery (own-message echo) must collapse into one entry */
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
+await new Promise((r) => setTimeout(r, 400));
+const last3c = ts3States[ts3States.length - 1];
+check('ts3: duplicate delivery merged into one message', (() => {
+  const m = (last3c?.chat || []).filter((x) => x.text === 'dup test');
+  return m.length === 1 && m[0].nickname === 'Vasya' && m[0].kind === 'server';
+})(), JSON.stringify(last3c?.chat));
+
+/* chat from another server tab must not be dropped */
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=2 msg=other\\stab schandlerid=2 invokerid=4 invokername=Oleg\n');
+await new Promise((r) => setTimeout(r, 400));
+const last3d = ts3States[ts3States.length - 1];
+check('ts3: chat from another server tab accepted', (last3d?.chat || []).some((x) => x.text === 'other tab' && x.nickname === 'Oleg'),
+  JSON.stringify(last3d?.chat));
+
+/* GUI server-tab switch must move the tracked handler */
+globalThis.ts3LastSocket?.write('notifycurrentserverconnectionchanged schandlerid=2\n');
+await new Promise((r) => setTimeout(r, 800));
+check('ts3: follows notifycurrentserverconnectionchanged', c3.activeSchandlerId === 2, `active=${c3.activeSchandlerId}`);
+check('ts3: still live after tab switch', ts3States[ts3States.length - 1]?.status === 'live', ts3States[ts3States.length - 1]?.status);
+
 /* ---- TS6 assertions ---- */
 const last6 = ts6States[ts6States.length - 1];
 check('ts6: reached live state', last6?.status === 'live', `status=${last6?.status}`);
