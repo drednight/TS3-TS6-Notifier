@@ -110,11 +110,11 @@
 
   function updateRow(pack, u) {
     const a = Settings.appearance;
-    const classKey = window.TSN && window.TSN.classFor ? window.TSN.classFor(u) : null;
+    const iconUrl = window.TSN && window.TSN.groupIconUrl ? window.TSN.groupIconUrl(u) : null;
     const sig = [
       u.talking, u.whispering, u.inputMuted, u.outputMuted, u.away, u.awayMessage,
       u.channelCommander, u.prioritySpeaker, u.isSelf, u.nickname,
-      u.avatarHash, u.serverGroups, classKey, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
+      u.avatarHash, u.serverGroups, iconUrl, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
     ].join('|');
     if (sig === pack.sig) return;
     pack.sig = sig;
@@ -126,10 +126,21 @@
     el.classList.toggle('muted', u.inputMuted);
     el.classList.toggle('away', u.away);
 
-    pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
-    if (classKey) {
-      pack.ini.innerHTML = window.TSIcons.classGlyph(classKey, a.compact ? 15 : 19);
+    if (iconUrl) {
+      pack.avatar.style.background = 'rgba(255,255,255,0.06)';
+      pack.ini.innerHTML = '';
+      const img = document.createElement('img');
+      img.className = 'group-ico';
+      img.alt = '';
+      img.src = iconUrl;
+      img.onerror = () => {
+        img.remove();
+        pack.ini.textContent = initials(u.nickname);
+        pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
+      };
+      pack.ini.appendChild(img);
     } else {
+      pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
       pack.ini.textContent = initials(u.nickname);
     }
     pack.pip.style.background = pipColor(u);
@@ -227,7 +238,6 @@
     $('panel').style.display = empty && a.hideEmpty && state.status === 'live' ? 'none' : '';
 
     renderChat();
-    renderBoard();
 
     // connection tab
     const pill = $('statusPill');
@@ -287,33 +297,6 @@
       }, delayMs);
       chatRows.set(m.id, rec);
     }
-  }
-
-  /* ---------------- soundboard strip ---------------- */
-
-  let boardSig = '';
-
-  function renderBoard() {
-    const board = $('soundBoard');
-    if (!board) return;
-    const sounds = config?.sounds;
-    const show = sounds?.enabled && sounds?.boardVisible !== false && !Settings.clean;
-    const items = sounds?.items || [];
-    const sig = show + '|' + items.map((i) => `${i.id}:${i.name}:${i.file}`).join(',');
-    if (sig === boardSig) return;
-    boardSig = sig;
-    board.hidden = !show;
-    board.innerHTML = show
-      ? items
-          .map(
-            (i) =>
-              `<button class="sound-chip" data-id="${i.id}"><span class="chip-ico">${icon('wave', 11, 2.2)}</span>${String(i.name).replace(/</g, '&lt;')}</button>`,
-          )
-          .join('')
-      : '';
-    board.querySelectorAll('.sound-chip').forEach((btn) => {
-      btn.addEventListener('click', () => window.TSN?.Soundboard?.playById(btn.dataset.id));
-    });
   }
 
   /* ---------------- connection tab ---------------- */
@@ -423,7 +406,9 @@
         fillConnectionTab();
         syncFeatures();
       } else if (msg.type === 'sound') {
-        window.TSN?.Soundboard?.playById(msg.id);
+        // Only the overlay page (clean mode) plays hotkey triggers —
+        // otherwise open windows would double-play.
+        if (Settings.clean) window.TSN?.Soundboard?.playById(msg.id);
       }
     };
 

@@ -56,6 +56,7 @@ function verifyAssets(): void {
 let handle: AppHandle | null = null;
 let overlayWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
+let boardWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let overlayVisible = true;
 
@@ -81,10 +82,19 @@ function settingsUrl(): string {
   return `http://127.0.0.1:${handle?.port() ?? 0}/?open=settings&bare=1`;
 }
 
+function boardUrl(): string {
+  return `http://127.0.0.1:${handle?.port() ?? 0}/board.html`;
+}
+
 function fitOverlay(): void {
   if (!overlayWin) return;
-  const workArea = screen.getPrimaryDisplay().workArea;
-  overlayWin.setBounds(workArea);
+  const want = handle?.store.get().desktop.display ?? 'primary';
+  let target = screen.getPrimaryDisplay();
+  if (want && want !== 'primary') {
+    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
+    if (found) target = found;
+  }
+  overlayWin.setBounds(target.workArea);
 }
 
 function applyClickThrough(): void {
@@ -101,16 +111,21 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     log(`[${tag}] did-fail-load code=${code} ${desc} url=${url}`);
     setTimeout(() => {
-      if (!win.isDestroyed()) win.loadURL(tag === 'overlay' ? overlayUrl() : settingsUrl());
+      if (!win.isDestroyed()) {
+        win.loadURL(tag === 'overlay' ? overlayUrl() : tag === 'board' ? boardUrl() : settingsUrl());
+      }
     }, 1200);
   });
 }
 
-/** Settings window is open — keep the overlay panel hidden behind it. */
-let hiddenForSettings = false;
-
 function createOverlay(): void {
-  const workArea = screen.getPrimaryDisplay().workArea;
+  const want = handle?.store.get().desktop.display ?? 'primary';
+  let target = screen.getPrimaryDisplay();
+  if (want && want !== 'primary') {
+    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
+    if (found) target = found;
+  }
+  const workArea = target.workArea;
   overlayWin = new BrowserWindow({
     x: workArea.x,
     y: workArea.y,
@@ -146,7 +161,7 @@ function createOverlay(): void {
   const show = () => {
     if (shown || !overlayWin || overlayWin.isDestroyed()) return;
     shown = true;
-    if (overlayVisible && !hiddenForSettings) overlayWin.showInactive();
+    if (overlayVisible) overlayWin.showInactive();
     applyClickThrough();
     log('[app] overlay shown');
   };
@@ -165,10 +180,7 @@ function openSettings(): void {
     settingsWin.focus();
     return;
   }
-  // Open settings alone: hide the overlay panel while the settings window is
-  // up (visibility intent is not persisted — the overlay comes back on close).
-  hiddenForSettings = true;
-  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
+  // Settings open in their own window; the overlay stays visible on top.
   settingsWin = new BrowserWindow({
     width: 392,
     height: 780,
@@ -188,12 +200,40 @@ function openSettings(): void {
   settingsWin.loadURL(settingsUrl());
   settingsWin.on('closed', () => {
     settingsWin = null;
-    hiddenForSettings = false;
-    // Restore the overlay per the user's visibility preference.
-    if (overlayVisible && overlayWin && !overlayWin.isDestroyed()) overlayWin.showInactive();
-    log('[app] settings closed → overlay restored');
   });
   log('[app] settings window opened');
+}
+
+/* ---------------- soundboard window ---------------- */
+
+function openBoard(): void {
+  if (boardWin && !boardWin.isDestroyed()) {
+    boardWin.show();
+    boardWin.focus();
+    return;
+  }
+  boardWin = new BrowserWindow({
+    width: 520,
+    height: 440,
+    minWidth: 340,
+    minHeight: 260,
+    autoHideMenuBar: true,
+    icon: nativeImage.createFromPath(join(ICONS_DIR, 'icon.png')),
+    title: 'TS3-TS6 Notifier — Soundboard',
+    alwaysOnTop: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      devTools: !IS_PACKAGED,
+    },
+  });
+  boardWin.setMenuBarVisibility(false);
+  watchWebContents(boardWin, 'board');
+  boardWin.loadURL(boardUrl());
+  boardWin.on('closed', () => {
+    boardWin = null;
+  });
+  log('[app] soundboard window opened');
 }
 
 /* ---------------- tray ---------------- */
@@ -201,7 +241,7 @@ function openSettings(): void {
 function setOverlayVisible(visible: boolean): void {
   overlayVisible = visible;
   if (!overlayWin) return;
-  if (visible && !hiddenForSettings) {
+  if (visible) {
     overlayWin.showInactive();
   } else {
     overlayWin.hide();
@@ -273,6 +313,10 @@ function buildTrayMenu(): void {
       label: 'Settings…',
       click: () => openSettings(),
     },
+    {
+      label: 'Soundboard',
+      click: () => openBoard(),
+    },
     { type: 'separator' },
     {
       label: 'Data source',
@@ -340,21 +384,26 @@ async function boot(): Promise<void> {
     dataDir: DATA_DIR,
     publicDir: PUBLIC_DIR,
     log,
+    listDisplays: () =>
+      screen.getAllDisplays().map((d) => ({
+        id: String(d.id),
+        label: d.label || `${d.size.width}×${d.size.height}`,
+        primary: d.id === screen.getPrimaryDisplay().id,
+      })),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
 
-  // First run: open the settings window so the UI is immediately visible —
-  // hide the overlay panel from the start to avoid a flash behind settings.
+  // First run: open the settings window so the UI is immediately visible.
   const cfg = handle.store.get();
   const firstRun = !cfg.desktop.seen;
-  if (firstRun) hiddenForSettings = true;
 
   createOverlay();
   createTray();
   applyAutostart();
   registerSoundHotkeys();
   handle.events.on('config', () => registerSoundHotkeys());
+  handle.events.on('config', () => fitOverlay());
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });

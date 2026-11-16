@@ -39,8 +39,19 @@
     chatPrivate: true,
   };
 
+  const THEME_ACCENTS = {
+    glass: '#7c6cff',
+    midnight: '#4f7dff',
+    frost: '#0ea5e9',
+    neon: '#ff2d95',
+    emerald: '#10b981',
+    carmine: '#f43f5e',
+    amber: '#f59e0b',
+    mono: '#e5e5e5',
+  };
+
   const ENUMS = {
-    theme: ['glass', 'midnight', 'frost', 'neon'],
+    theme: ['glass', 'midnight', 'frost', 'neon', 'emerald', 'carmine', 'amber', 'mono'],
     corner: ['tl', 'tr', 'bl', 'br'],
     language: ['auto', 'ru', 'en'],
     eqStyle: ['bars', 'ring', 'dots', 'none'],
@@ -260,6 +271,10 @@
     const s = sanitize({ [key]: value });
     if (!(key in s)) return;
     local[key] = s[key];
+    if (key === 'theme' && THEME_ACCENTS[s[key]]) {
+      // Themes carry their own signature accent — switch along with the theme.
+      local.accent = THEME_ACCENTS[s[key]];
+    }
     notifyChange();
     paintControls();
     if (key === 'language') I18N.setLanguage(appearance.language);

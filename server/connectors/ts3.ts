@@ -25,7 +25,7 @@ function readTs3ApiKey(): string {
     try {
       const text = readFileSync(path, 'utf8');
       const m = /^\s*api_key\s*=\s*(.+?)\s*$/im.exec(text);
-      if (m?.[1]) return m[1];
+      if (m?.[1]) return m[1].replace(/^["']|["']$/g, '').trim();
     } catch {
       /* try next */
     }
@@ -61,6 +61,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private periodicTimer: NodeJS.Timeout | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
   private authFailed = false;
+  private greetingSeen = false;
+  private traceCount = 0;
 
   private clients = new Map<number, UserState>();
   private channels = new Map<number, ChannelInfo>();
@@ -124,10 +126,12 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private connectOnce(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.authFailed = false;
+      this.greetingSeen = false;
       this.publish('connecting', '');
       const socket = net.createConnection({ host: this.host, port: this.port });
       this.socket = socket;
       socket.setEncoding('utf8');
+      socket.setNoDelay(true);
 
       let settled = false;
       const fail = (err: Error) => {
@@ -169,23 +173,58 @@ export class Ts3Connector extends EventEmitter implements Connector {
     });
   }
 
+  /** Bounded protocol trace — lands in app.log for diagnostics. */
+  private trace(msg: string): void {
+    if (this.traceCount++ < 600) console.log(`[ts3] ${msg}`);
+  }
+
+  /** Wait for the plugin greeting banner before sending commands. */
+  private async drainGreeting(maxMs = 2500): Promise<void> {
+    const start = Date.now();
+    while (!this.greetingSeen && Date.now() - start < maxMs) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   private async bootstrap(): Promise<void> {
-    // Let the plugin print its greeting banner (dropped as noise).
-    await new Promise((r) => setTimeout(r, 150));
+    await this.drainGreeting();
 
     if (!this.apiKey) {
       const auto = readTs3ApiKey();
       if (auto) {
         this.apiKey = auto;
-        console.log('[ts3] API key picked up from clientquery.ini');
+        this.trace('API key picked up from clientquery.ini');
       }
     }
 
     if (this.apiKey) {
-      const auth = await this.command(`auth apikey=${ts3Escape(this.apiKey)}`);
-      if (auth.errorId !== 0) {
+      let auth = await this.tryAuth();
+      if (auth === 'timeout') {
+        // Some builds answer slowly right after connect — retry once.
+        await new Promise((r) => setTimeout(r, 700));
+        auth = await this.tryAuth();
+      }
+      if (auth === 'error') {
         this.authFailed = true;
-        throw new Error(`ClientQuery auth failed: ${auth.errorMessage || `error ${auth.errorId}`}`);
+        throw new Error('ClientQuery auth failed — неверный API key (проверьте настройки)');
+      }
+      if (auth === 'timeout') {
+        // Plugin alive but silent on auth → probe the link before giving up.
+        const probe = await this.probeLink();
+        if (!probe) {
+          throw new Error(
+            'ClientQuery не отвечает. Перезапустите TeamSpeak 3 и проверьте плагин Client Query (Настройки → Плагины)',
+          );
+        }
+        console.log('[ts3] plugin ignores auth — old build without API key support, continuing');
+      }
+    } else {
+      // No key: make sure the link answers at all so errors are clear.
+      const probe = await this.probeLink();
+      if (!probe) {
+        throw new Error(
+          'ClientQuery не отвечает. Перезапустите TeamSpeak 3 и проверьте плагин Client Query (Настройки → Плагины)',
+        );
       }
     }
 
@@ -196,12 +235,50 @@ export class Ts3Connector extends EventEmitter implements Connector {
     this.periodicTimer = setInterval(() => void this.fullRefresh(), 45000);
   }
 
+  /** Try `auth`; classify the outcome instead of throwing on timeout. */
+  private async tryAuth(): Promise<'ok' | 'error' | 'timeout'> {
+    try {
+      const auth = await this.command(`auth apikey=${ts3Escape(this.apiKey)}`, 8000);
+      return auth.errorId === 0 ? 'ok' : 'error';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return msg.includes('timeout') ? 'timeout' : 'error';
+    }
+  }
+
+  /** True when the plugin answers ordinary commands (even with an error). */
+  private async probeLink(): Promise<boolean> {
+    try {
+      await this.command('whoami', 5000);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return !msg.includes('timeout');
+    }
+  }
+
   /* -------------------------------------------------- protocol I/O */
 
   private handleLine(line: string): void {
     if (!line) return;
+    this.trace(`<< ${line}`);
+    // Defensive: some builds glue the banner and the first response together
+    // (banner without trailing newline) — split at the embedded error line.
+    const errIdx = line.indexOf('error id=');
+    if (errIdx > 0) {
+      this.handleLine(line.slice(0, errIdx));
+      this.handleLine(line.slice(errIdx));
+      return;
+    }
+    if (line.startsWith('TS3 Client') || line.startsWith('selected schandlerid=')) {
+      this.greetingSeen = true;
+    }
     if (line.startsWith('notify')) {
       this.handleEvent(line);
+      return;
+    }
+    if (line.startsWith('selected schandlerid=')) {
+      // Unsolicited GUI tab switches — never part of a command response.
       return;
     }
     const head = this.pending[0];
@@ -235,6 +312,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
         },
       };
       this.pending.push(entry);
+      this.trace(`>> ${cmd}`);
       socket.write(cmd + '\n');
     });
   }

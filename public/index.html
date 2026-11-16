@@ -40,8 +40,6 @@
 
       <div id="chatFeed" class="chat-feed" hidden></div>
 
-      <div id="soundBoard" class="sound-board" hidden></div>
-
       <div id="emptyState" class="empty-state" hidden>
         <div class="empty-icon"></div>
         <div class="empty-title" data-i18n="emptyChannel"></div>
@@ -67,7 +65,6 @@
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="appearance" data-i18n="tabAppearance"></button>
       <button class="tab" data-tab="elements" data-i18n="tabElements"></button>
-      <button class="tab" data-tab="classes" data-i18n="tabClasses"></button>
       <button class="tab" data-tab="sound" data-i18n="tabSound"></button>
       <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
       <button class="tab" data-tab="about" data-i18n="tabAbout"></button>
@@ -83,6 +80,10 @@
             <button data-value="midnight" data-i18n="themeMidnight"></button>
             <button data-value="frost" data-i18n="themeFrost"></button>
             <button data-value="neon" data-i18n="themeNeon"></button>
+            <button data-value="emerald" data-i18n="themeEmerald"></button>
+            <button data-value="carmine" data-i18n="themeCarmine"></button>
+            <button data-value="amber" data-i18n="themeAmber"></button>
+            <button data-value="mono" data-i18n="themeMono"></button>
           </div>
         </div>
 
@@ -149,6 +150,14 @@
           <input type="range" />
         </div>
 
+        <div class="field" id="displayField" hidden>
+          <label data-i18n="displayLabel"></label>
+          <select id="displaySelect">
+            <option value="primary" data-i18n="displayPrimary"></option>
+          </select>
+          <div class="hint" data-i18n="displayHint"></div>
+        </div>
+
         <div class="field">
           <label data-i18n="language"></label>
           <select id="languageSelect">
@@ -196,36 +205,10 @@
         </div>
       </section>
 
-      <!-- ---------- Classes ---------- -->
-      <section class="tab-panel" data-panel="classes">
-        <div class="switch-list">
-          <label class="switch-row"><span data-i18n="classesEnabled"></span><input type="checkbox" id="classesEnabled" /><i></i></label>
-        </div>
-
-        <div class="hint block" data-i18n="classesHint"></div>
-        <div class="class-legend" id="classLegend"></div>
-
-        <div class="field">
-          <label data-i18n="classesFromServer"></label>
-          <div id="groupMapList" class="map-list"></div>
-        </div>
-
-        <div class="field">
-          <label data-i18n="classesManual"></label>
-          <div class="map-add-row">
-            <input type="text" id="mapKeyInput" placeholder="icon:12345 / group:6" spellcheck="false" />
-            <select id="mapClassSelect"></select>
-            <button class="btn" id="mapAddBtn" data-i18n="addBtn"></button>
-          </div>
-          <div id="mapManualList" class="map-list"></div>
-        </div>
-      </section>
-
       <!-- ---------- Sound ---------- -->
       <section class="tab-panel" data-panel="sound">
         <div class="switch-list">
           <label class="switch-row"><span data-i18n="soundsEnabled"></span><input type="checkbox" id="soundsEnabled" /><i></i></label>
-          <label class="switch-row"><span data-i18n="boardVisible"></span><input type="checkbox" id="boardVisible" /><i></i></label>
         </div>
 
         <div class="field">
@@ -264,6 +247,7 @@
         <div class="btn-row">
           <button class="btn" id="soundUploadBtn"><span class="btn-ico" data-ico="upload"></span><span data-i18n="uploadSound"></span></button>
           <button class="btn" id="addPresetsBtn" data-i18n="addPresets"></button>
+          <button class="btn primary" id="openBoardBtn" data-i18n="openBoard"></button>
           <input type="file" id="soundUpload" accept="audio/*" hidden />
         </div>
 
@@ -317,7 +301,7 @@
       <!-- ---------- About ---------- -->
       <section class="tab-panel" data-panel="about">
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.0.3</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.0</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
 

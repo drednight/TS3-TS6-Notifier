@@ -136,7 +136,7 @@ try {
     check('overlay: away shown', !!doc.querySelector('#userList .row.away'));
     check('overlay: settings button hidden in clean mode', doc.getElementById('settingsBtn').style.display === 'none');
     check('overlay: drawer hidden initially', doc.getElementById('settingsDrawer').hidden === true);
-    check('overlay: whisper/chat/board containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed') && !!doc.getElementById('soundBoard'));
+    check('overlay: whisper/chat containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed'));
     check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 17);
     dom.window.close();
   }
@@ -168,8 +168,6 @@ try {
     check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
-    check('settings: classes legend rendered', doc.querySelectorAll('#classLegend .legend-item').length === 17, 'count=' + doc.querySelectorAll('#classLegend .legend-item').length);
-    check('settings: classes tab wired', !!doc.getElementById('classesEnabled') && !!doc.getElementById('mapAddBtn') && !!doc.getElementById('mapKeyInput'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('addPresetsBtn') && !!doc.getElementById('soundUploadBtn'));
     check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
     dom.window.close();
@@ -182,6 +180,16 @@ try {
     check('bare: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
     check('bare: overlay stage hidden', doc.body.classList.contains('bare') && doc.getElementById('stage').style.display === 'none');
     check('bare: settings drawer open', doc.getElementById('settingsDrawer').hidden === false);
+    dom.window.close();
+  }
+
+  /* ---- 4. soundboard panel page ---- */
+  {
+    const { dom, errors } = await bootPage(`${BASE}/board.html`);
+    const doc = dom.window.document;
+    check('board: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
+    check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('boardStop') && !!doc.getElementById('boardGear'));
+    check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
   }
 } finally {

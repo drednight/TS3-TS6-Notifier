@@ -9,6 +9,7 @@ import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
 import { Ts6Connector } from './connectors/ts6.js';
+import { findTs3Icon } from './icons.js';
 
 export interface AppOptions {
   port: number;
@@ -16,6 +17,8 @@ export interface AppOptions {
   dataDir: string;
   publicDir: string;
   log?: (msg: string) => void;
+  /** Desktop only: enumerate connected displays for the overlay target setting. */
+  listDisplays?: () => Array<{ id: string; label: string; primary: boolean }>;
 }
 
 export interface AppHandle {
@@ -166,6 +169,27 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
       broadcast({ type: 'config', config: store.get() });
       events.emit('config', store.get());
       json(res, 200, { ok: true, restart, config: store.get() });
+      return;
+    }
+
+    if (url.startsWith('/api/tsicon/') && method === 'GET') {
+      const id = parseInt(url.slice('/api/tsicon/'.length).split('?')[0] ?? '', 10);
+      const icon = Number.isFinite(id) ? findTs3Icon(id) : null;
+      if (!icon) {
+        res.writeHead(404).end('Not found');
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': icon.mime,
+        'Cache-Control': 'public, max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(icon.data);
+      return;
+    }
+
+    if (url.startsWith('/api/displays') && method === 'GET') {
+      json(res, 200, { ok: true, displays: opts.listDisplays ? opts.listDisplays() : [] });
       return;
     }
 

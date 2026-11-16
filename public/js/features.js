@@ -1,4 +1,4 @@
-/* Class icon mapping + soundboard (shared by overlay and settings). */
+/* Soundboard + group icons + display target (shared by overlay and settings). */
 (function () {
   const t = (key) => window.I18N.t(key);
 
@@ -8,29 +8,23 @@
   TSN.config = TSN.config || null;
   TSN.state = TSN.state || null;
 
-  /* ---------------- class mapping ---------------- */
+  /* ---------------- group icon (replaces avatar art) ---------------- */
 
-  /** Resolve the game class key for a user (or null). */
-  function classFor(user) {
-    const cfg = TSN.config;
-    if (!cfg?.classes?.enabled || !user) return null;
-    const map = cfg.classes.map || {};
-    const groups = String(user.serverGroups || '')
+  /**
+   * URL of the user's server-group icon (TS3 reads it from the client cache),
+   * or null when no group icon is available.
+   */
+  function groupIconUrl(user) {
+    if (!user) return null;
+    const ids = String(user.serverGroups || '')
       .split(',')
-      .map((s) => parseInt(s.trim(), 10))
+      .map((x) => parseInt(x.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-    const stateGroups = TSN.state?.groups || [];
-    for (const gid of groups) {
-      const hit = map[`group:${gid}`];
-      if (hit) return hit;
-      const g = stateGroups.find((x) => x.id === gid);
-      if (g && g.iconId > 0) {
-        const iconHit = map[`icon:${g.iconId}`];
-        if (iconHit) return iconHit;
-      }
+    const groups = TSN.state?.groups || [];
+    for (const gid of ids) {
+      const g = groups.find((x) => x.id === gid);
+      if (g && g.iconId > 0) return `/api/tsicon/${g.iconId}`;
     }
-    // Also allow direct client icon mapping when the connector exposes it.
-    if (user.avatarHash && map[`icon:${user.avatarHash}`]) return map[`icon:${user.avatarHash}`];
     return null;
   }
 
@@ -117,136 +111,6 @@
     }, 300);
   }
 
-  function classSelectOptions(selected) {
-    const lang = window.I18N.lang;
-    const opts = [`<option value="">${t('classNone')}</option>`];
-    for (const key of window.TSIcons.CLASSES) {
-      opts.push(
-        `<option value="${key}" ${key === selected ? 'selected' : ''}>${window.TSIcons.classLabel(key, lang)}</option>`,
-      );
-    }
-    return opts.join('');
-  }
-
-  /* ---------------- classes tab ---------------- */
-
-  function renderLegend() {
-    const box = document.getElementById('classLegend');
-    if (!box) return;
-    const lang = window.I18N.lang;
-    box.innerHTML = window.TSIcons.CLASSES.map(
-      (key) =>
-        `<div class="legend-item">${window.TSIcons.classGlyph(key, 22)}<span>${window.TSIcons.classLabel(key, lang)}</span></div>`,
-    ).join('');
-  }
-
-  function renderGroupMap() {
-    const list = document.getElementById('groupMapList');
-    if (!list) return;
-    const cfg = TSN.config;
-    const groups = TSN.state?.groups || [];
-    const map = cfg?.classes?.map || {};
-    if (!groups.length) {
-      list.innerHTML = `<div class="hint">${t('noGroupsYet')}</div>`;
-    } else {
-      list.innerHTML = groups
-        .map((g) => {
-          const key = g.iconId > 0 ? `icon:${g.iconId}` : `group:${g.id}`;
-          const label = g.name || `#${g.id}`;
-          return `<div class="map-row" data-key="${key}">
-            <span class="map-key">${key}</span>
-            <span class="map-name" title="${key}">${label} (id ${g.id}${g.iconId > 0 ? `, icon ${g.iconId}` : ''})</span>
-            <select class="map-class">${classSelectOptions(map[key] || '')}</select>
-            <button class="icon-btn map-apply" title="${t('addBtn')}">✓</button>
-          </div>`;
-        })
-        .join('');
-      list.querySelectorAll('.map-row').forEach((row) => {
-        row.querySelector('.map-apply').addEventListener('click', () => {
-          const key = row.dataset.key;
-          const val = row.querySelector('.map-class').value;
-          const next = { ...(TSN.config.classes.map || {}) };
-          if (val) next[key] = val;
-          else delete next[key];
-          TSN.config.classes = { ...TSN.config.classes, map: next };
-          putConfig({ classes: { map: next } });
-          renderManualMap();
-        });
-      });
-    }
-    renderManualMap();
-  }
-
-  function renderManualMap() {
-    const list = document.getElementById('mapManualList');
-    if (!list) return;
-    const map = TSN.config?.classes?.map || {};
-    const groups = TSN.state?.groups || [];
-    const knownKeys = new Set(groups.map((g) => (g.iconId > 0 ? `icon:${g.iconId}` : `group:${g.id}`)));
-    const manual = Object.entries(map).filter(([k]) => !knownKeys.has(k));
-    list.innerHTML = manual
-      .map(
-        ([key, val]) => `<div class="map-row" data-key="${key}">
-          <span class="map-key">${key}</span>
-          <span class="map-name"></span>
-          <select class="map-class">${classSelectOptions(val)}</select>
-          <button class="icon-btn map-del" title="${t('deleteSound')}">✕</button>
-        </div>`,
-      )
-      .join('');
-    list.querySelectorAll('.map-row').forEach((row) => {
-      const key = row.dataset.key;
-      row.querySelector('.map-class').addEventListener('change', (e) => {
-        const next = { ...(TSN.config.classes.map || {}) };
-        if (e.target.value) next[key] = e.target.value;
-        else delete next[key];
-        TSN.config.classes = { ...TSN.config.classes, map: next };
-        putConfig({ classes: { map: next } });
-      });
-      row.querySelector('.map-del').addEventListener('click', () => {
-        const next = { ...(TSN.config.classes.map || {}) };
-        delete next[key];
-        TSN.config.classes = { ...TSN.config.classes, map: next };
-        putConfig({ classes: { map: next } });
-        renderGroupMap();
-      });
-    });
-  }
-
-  function wireClassesTab() {
-    renderLegend();
-    const enabled = document.getElementById('classesEnabled');
-    if (enabled) {
-      enabled.addEventListener('change', () => {
-        TSN.config.classes = { ...TSN.config.classes, enabled: enabled.checked };
-        putConfig({ classes: { enabled: enabled.checked } });
-      });
-    }
-    const addBtn = document.getElementById('mapAddBtn');
-    const keyInput = document.getElementById('mapKeyInput');
-    const classSel = document.getElementById('mapClassSelect');
-    if (classSel) classSel.innerHTML = classSelectOptions('');
-    if (addBtn && keyInput && classSel) {
-      addBtn.addEventListener('click', () => {
-        const key = keyInput.value.trim();
-        const val = classSel.value;
-        if (!/^(icon|group):\d+$/.test(key) || !val) return;
-        const next = { ...(TSN.config.classes.map || {}), [key]: val };
-        TSN.config.classes = { ...TSN.config.classes, map: next };
-        putConfig({ classes: { map: next } });
-        keyInput.value = '';
-        classSel.value = '';
-        renderGroupMap();
-      });
-    }
-    renderGroupMap();
-    document.addEventListener('tsn:state', () => renderGroupMap());
-    document.addEventListener('tsn:config', () => {
-      const e = document.getElementById('classesEnabled');
-      if (e && TSN.config) e.checked = !!TSN.config.classes?.enabled;
-    });
-  }
-
   /* ---------------- sound tab ---------------- */
 
   function captureHotkey(btn, item) {
@@ -261,11 +125,7 @@
       if (e.shiftKey) parts.push('Shift');
       if (e.metaKey) parts.push('Super');
       let key = e.code || e.key || '';
-      key = key
-        .replace(/^Key/, '')
-        .replace(/^Digit/, '')
-        .replace('Numpad', 'Numpad')
-        .replace('Escape', 'Escape');
+      key = key.replace(/^Key/, '').replace(/^Digit/, '');
       if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
         if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
       }
@@ -409,26 +269,18 @@
 
   function wireSoundTab() {
     const enabled = document.getElementById('soundsEnabled');
-    const board = document.getElementById('boardVisible');
     const volume = document.getElementById('soundVolume');
     const outSel = document.getElementById('audioOutput');
     const sync = () => {
       const s = TSN.config?.sounds;
       if (!s) return;
       if (enabled) enabled.checked = !!s.enabled;
-      if (board) board.checked = s.boardVisible !== false;
       if (volume) volume.value = String(s.volume ?? 0.8);
     };
     if (enabled) {
       enabled.addEventListener('change', () => {
         TSN.config.sounds = { ...TSN.config.sounds, enabled: enabled.checked };
         putConfig({ sounds: { enabled: enabled.checked } });
-      });
-    }
-    if (board) {
-      board.addEventListener('change', () => {
-        TSN.config.sounds = { ...TSN.config.sounds, boardVisible: board.checked };
-        putConfig({ sounds: { boardVisible: board.checked } });
       });
     }
     if (volume) {
@@ -491,6 +343,13 @@
     const presetsBtn = document.getElementById('addPresetsBtn');
     if (presetsBtn) presetsBtn.addEventListener('click', addPresets);
 
+    const openBoard = document.getElementById('openBoardBtn');
+    if (openBoard) {
+      openBoard.addEventListener('click', () => {
+        window.open('/board.html', '_blank', 'width=520,height=440');
+      });
+    }
+
     sync();
     renderSoundItems();
     void refreshDevices();
@@ -504,17 +363,52 @@
     window.addEventListener('keydown', () => void ensureCtx(), { once: true });
   }
 
+  /* ---------------- display target (desktop, multi-monitor) ---------------- */
+
+  async function wireDisplaySelect() {
+    const field = document.getElementById('displayField');
+    const sel = document.getElementById('displaySelect');
+    if (!field || !sel) return;
+    try {
+      const res = await fetch('/api/displays');
+      const out = await res.json();
+      const displays = out.displays || [];
+      if (!displays.length) return; // web mode — hide the field
+      field.hidden = false;
+      sel.innerHTML = displays
+        .map(
+          (d) =>
+            `<option value="${d.id}">${d.primary ? `${t('displayPrimary')} — ` : ''}${String(d.label).replace(/</g, '&lt;')}</option>`,
+        )
+        .join('');
+      const primary = displays.find((d) => d.primary);
+      if (primary) {
+        const opt = sel.querySelector(`option[value="${primary.id}"]`);
+        if (opt) opt.value = 'primary';
+      }
+      sel.value = TSN.config?.desktop?.display || 'primary';
+      if (!sel.value) sel.value = 'primary';
+      sel.addEventListener('change', () => {
+        if (!TSN.config) return;
+        TSN.config.desktop = { ...TSN.config.desktop, display: sel.value };
+        putConfig({ desktop: { display: sel.value } });
+      });
+    } catch {
+      /* web mode */
+    }
+  }
+
   /* ---------------- init ---------------- */
 
   function initFeatures() {
-    wireClassesTab();
     wireSoundTab();
+    void wireDisplaySelect();
     masterVolume = Number(TSN.config?.sounds?.volume ?? 0.8);
     outputDevice = TSN.config?.sounds?.outputDevice || '';
     document.dispatchEvent(new CustomEvent('tsn:features-ready'));
   }
 
-  TSN.classFor = classFor;
+  TSN.groupIconUrl = groupIconUrl;
   TSN.Soundboard = { playFile, playById, setOutputDevice, ensureCtx };
   TSN.initFeatures = initFeatures;
 
