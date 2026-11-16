@@ -17,6 +17,7 @@ import {
   screen,
   Tray,
 } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { startServer, type AppHandle } from '../server/app.js';
 
 const IS_PACKAGED = app.isPackaged;
@@ -63,6 +64,41 @@ let tray: Tray | null = null;
 let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
+
+/* ---------------- auto update (GitHub Releases) ---------------- */
+
+/**
+ * Self-update via electron-updater: on packaged builds the app checks the
+ * GitHub release for a newer version, downloads the NSIS installer in the
+ * background and installs it silently on quit.
+ */
+function setupAutoUpdate(): void {
+  if (!app.isPackaged) return;
+  try {
+    autoUpdater.setFeedURL({ provider: 'github', owner: 'drednight', repo: 'TS3-TS6-Notifier' });
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('checking-for-update', () => log('[update] checking for updates'));
+    autoUpdater.on('update-available', (info) => log(`[update] available: ${info.version}`));
+    autoUpdater.on('update-not-available', () => log('[update] already up to date'));
+    autoUpdater.on('update-downloaded', (info) => log(`[update] ${info.version} downloaded — installs on quit`));
+    autoUpdater.on('error', (err) => log('[update] error: ' + err));
+    void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+    setInterval(() => {
+      void autoUpdater.checkForUpdates().catch(() => {});
+    }, 4 * 60 * 60 * 1000);
+  } catch (err) {
+    log('[update] setup failed: ' + err);
+  }
+}
+
+function checkForUpdatesNow(): void {
+  if (!app.isPackaged) {
+    log('[update] dev build — nothing to check');
+    return;
+  }
+  void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+}
 
 /* ---------------- elevation (Windows) ---------------- */
 
@@ -404,6 +440,10 @@ function buildTrayMenu(): void {
       label: 'Settings…',
       click: () => openSettings(),
     },
+    {
+      label: 'Проверить обновления',
+      click: () => checkForUpdatesNow(),
+    },
     // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
     ...(SOUNDS_UI_HIDDEN
       ? []
@@ -502,6 +542,7 @@ async function boot(): Promise<void> {
   createOverlay();
   createTray();
   applyAutostart();
+  setupAutoUpdate();
   registerSoundHotkeys();
   handle.events.on('config', () => registerSoundHotkeys());
   handle.events.on('config', () => fitOverlay());

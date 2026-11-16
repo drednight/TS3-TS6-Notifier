@@ -64,8 +64,8 @@
     radius: [0, 26],
     scale: [0.75, 1.5],
     fontSize: [11, 18],
-    marginX: [0, 240],
-    marginY: [0, 240],
+    marginX: [0, 500],
+    marginY: [0, 500],
     chatDelay: [2, 60],
   };
 

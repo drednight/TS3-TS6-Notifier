@@ -167,8 +167,8 @@ html, body {
   transition: border-radius 0.25s ease;
 }
 
-body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
-body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
+body[data-corner="tl"] #panel { bottom: var(--margin-y); left: var(--margin-x); transform-origin: bottom left; }
+body[data-corner="tr"] #panel { bottom: var(--margin-y); right: var(--margin-x); transform-origin: bottom right; }
 body[data-corner="bl"] #panel { bottom: var(--margin-y); left: var(--margin-x); transform-origin: bottom left; }
 body[data-corner="br"] #panel { bottom: var(--margin-y); right: var(--margin-x); transform-origin: bottom right; }
 
@@ -927,6 +927,20 @@ body.no-anim .whisper-list .row { animation: none; }
 .chat-toast.fading { animation: chatOut .6s ease both; }
 .chat-toast .chat-nick { font-weight: 700; color: var(--accent); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-toast .chat-text { opacity: .92; font-family: inherit; }
+
+/* join/leave/move feed rows */
+.chat-toast.kind-system {
+  font-size: 11px;
+  opacity: .85;
+  font-style: italic;
+  justify-content: center;
+}
+.chat-toast.kind-system .chat-nick { display: none; }
+
+/* the panel header is the drag handle for saved placement */
+#panelHeader { cursor: grab; user-select: none; -webkit-user-select: none; }
+body.dragging { user-select: none; -webkit-user-select: none; }
+body.dragging #panelHeader { cursor: grabbing; }
 .chat-toast .chat-nick, .chat-toast .chat-text { font-variant-emoji: emoji; }
 
 /* unread-message badge */

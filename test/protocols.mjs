@@ -122,6 +122,7 @@ function ts6AuthDump() {
 
 const ts6Wss = new WebSocketServer({ port: 5999 });
 ts6Wss.on('connection', (ws) => {
+  globalThis.ts6Sock = ws;
   ws.on('message', (raw) => {
     const msg = JSON.parse(raw.toString());
     if (msg.type === 'auth') {
@@ -220,6 +221,19 @@ await new Promise((r) => setTimeout(r, 800));
 check('ts3: follows notifycurrentserverconnectionchanged', c3.activeSchandlerId === 2, `active=${c3.activeSchandlerId}`);
 check('ts3: still live after tab switch', ts3States[ts3States.length - 1]?.status === 'live', ts3States[ts3States.length - 1]?.status);
 
+/* event feed: join / leave / poke */
+globalThis.ts3LastSocket?.write('notifycliententerview clid=5 ctid=1 client_nickname=Гоша client_type=0 schandlerid=2\n');
+globalThis.ts3LastSocket?.write('notifyclientpoke invokerid=2 invokername=Борис msg=privet schandlerid=2\n');
+globalThis.ts3LastSocket?.write('notifyclientleftview clid=5 client_nickname=Гоша schandlerid=2\n');
+await new Promise((r) => setTimeout(r, 400));
+const last3e = ts3States[ts3States.length - 1];
+check('ts3: join feed row rendered', (last3e?.chat || []).some((x) => x.kind === 'system' && x.event === 'join' && x.nickname === 'Гоша'),
+  JSON.stringify(last3e?.chat));
+check('ts3: leave feed row rendered (events never merge)', (last3e?.chat || []).some((x) => x.kind === 'system' && x.event === 'leave' && x.nickname === 'Гоша'),
+  JSON.stringify(last3e?.chat));
+check('ts3: poke row rendered', (last3e?.chat || []).some((x) => x.kind === 'poke' && x.nickname === 'Борис' && x.detail === 'privet'),
+  JSON.stringify(last3e?.chat));
+
 /* ---- TS6 assertions ---- */
 const last6 = ts6States[ts6States.length - 1];
 check('ts6: reached live state', last6?.status === 'live', `status=${last6?.status}`);
@@ -253,6 +267,14 @@ check('ts6: senderId beats generic message id', (() => {
   const m = last6?.chat || [];
   return m.some((x) => x.text === 'decoy id beaten' && x.userId === '100');
 })(), JSON.stringify(last6?.chat));
+
+/* event feed on TS6: clientConnected */
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientConnected', payload: { connectionId: 7, clientId: 103, channelId: 2, properties: { nickname: 'Новичок' } } }));
+await new Promise((r) => setTimeout(r, 300));
+check('ts6: join feed row rendered', (() => {
+  const m = ts6States[ts6States.length - 1]?.chat || [];
+  return m.some((x) => x.kind === 'system' && x.event === 'join' && x.nickname === 'Новичок');
+})(), JSON.stringify(ts6States[ts6States.length - 1]?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
 
 /* ---- teardown ---- */

@@ -202,6 +202,47 @@ try {
     badge.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     check('overlay: badge stays cleared after read', badge.hidden === true);
 
+    // v1.1.11: system event feed (join/leave/move) — localised row, no '…:'
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'c92', userId: 'u2', nickname: 'Мария', text: 'Мария', kind: 'system', event: 'join', detail: 'UI Test Channel', at: Date.now() },
+          { id: 'c93', userId: 'u2', nickname: 'Мария', text: 'привет', kind: 'channel', at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const sysRow = [...doc.querySelectorAll('#chatFeed .chat-toast.kind-system')].map((el) => el.textContent).join(' | ');
+    check('overlay: system event row localised (join)', /Мария/.test(sysRow) && /UI Test Channel/.test(sysRow) && !/…:/.test(sysRow), sysRow);
+    check('overlay: system rows are not counted as unread', badge.hidden === false && doc.getElementById('chatUnreadCount').textContent === '1', doc.getElementById('chatUnreadCount').textContent);
+
+    // v1.1.11: drag the panel by its header — offsets are saved (±500px)
+    const header = doc.getElementById('panelHeader');
+    header.dispatchEvent(new dom.window.MouseEvent('mouseenter'));
+    header.dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 160, clientY: 80 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 160, clientY: 80 }));
+    const mx = doc.documentElement.style.getPropertyValue('--margin-x');
+    const my = doc.documentElement.style.getPropertyValue('--margin-y');
+    // corner=tr: marginX from the right edge (drag left → grows); the panel is
+    // bottom-anchored so dragging up grows marginY
+    check('overlay: header drag updates offsets', mx === '58px' && my === '38px', `x=${mx} y=${my}`);
+
+    // v1.1.11: the panel is bottom-anchored so it fills upward
+    let growsUp = false;
+    try {
+      for (const sheet of doc.styleSheets) {
+        for (const rule of sheet.cssRules || []) {
+          if (rule.selectorText === 'body[data-corner="tr"] #panel' && rule.style.bottom) growsUp = true;
+        }
+      }
+    } catch {
+      growsUp = true;
+    }
+    check('overlay: panel is bottom-anchored (fills upward)', growsUp);
+
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;
     TSN.state = { ...fakeState, groups: [{ id: 4, name: 'Служители света', iconId: 10 }, { id: 5, name: 'Лучники Ордена', iconId: 777 }] };
@@ -247,6 +288,7 @@ try {
 
     // v1.0.2 feature round
     check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
+    check('settings: margin sliders reach 500px', doc.querySelector('[data-slider="marginX"]').getAttribute('data-max') === '500' && doc.querySelector('[data-slider="marginY"]').getAttribute('data-max') === '500');
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));

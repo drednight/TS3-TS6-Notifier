@@ -71,8 +71,12 @@ export interface ChatMessage {
   userId: string;
   nickname: string;
   text: string;
-  kind: 'channel' | 'private' | 'server';
+  kind: 'channel' | 'private' | 'server' | 'system' | 'poke';
   at: number;
+  /** System rows carry structured info so the UI can localise them. */
+  event?: 'join' | 'leave' | 'move' | 'poke';
+  /** Channel name for join/leave/move, poke body for pokes. */
+  detail?: string;
 }
 
 export interface Ts3Config {
