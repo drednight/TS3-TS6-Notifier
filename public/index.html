@@ -11,6 +11,7 @@
   <!-- ======================= OVERLAY ======================= -->
   <div id="stage">
     <section id="panel" aria-label="TeamSpeak overlay">
+      <div id="moveHint" hidden></div>
       <header id="panelHeader">
         <span class="conn-dot" id="connDot" title=""></span>
         <div class="title-block">
@@ -142,12 +143,12 @@
           </div>
         </div>
 
-        <div class="field" data-slider="marginX" data-min="0" data-max="240" data-step="1">
+        <div class="field" data-slider="marginX" data-min="0" data-max="500" data-step="1">
           <label data-i18n="marginX"></label><output></output>
           <input type="range" />
         </div>
 
-        <div class="field" data-slider="marginY" data-min="0" data-max="240" data-step="1">
+        <div class="field" data-slider="marginY" data-min="0" data-max="500" data-step="1">
           <label data-i18n="marginY"></label><output></output>
           <input type="range" />
         </div>
@@ -316,6 +317,12 @@
         <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
         <div class="hint block" data-i18n="elevateHint"></div>
 
+        <div class="field">
+          <label data-i18n="moveHotkeyLabel"></label>
+          <input type="text" id="moveHotkey" spellcheck="false" placeholder="Ctrl+Shift+M" />
+          <div class="hint" data-i18n="moveHotkeyHint"></div>
+        </div>
+
         <div class="hint block" data-i18n="connectionHelp"></div>
               <details class="collapse-block" id="ts6GroupsBlock">
           <summary data-i18n="ts6GroupsTitle"></summary>
@@ -327,7 +334,7 @@
       <!-- ---------- About ---------- -->
       <section class="tab-panel" data-panel="about">
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.10</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.12</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
 

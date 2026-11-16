@@ -64,8 +64,8 @@
     radius: [0, 26],
     scale: [0.75, 1.5],
     fontSize: [11, 18],
-    marginX: [0, 240],
-    marginY: [0, 240],
+    marginX: [0, 20000],
+    marginY: [0, 20000],
     chatDelay: [2, 60],
   };
 
@@ -227,6 +227,32 @@
     return `${value}px`;
   }
 
+  // Margin sliders follow the user's screen size: the overlay may be dragged
+  // anywhere on the display, so the offsets can reach every pixel of it.
+  let boundsCache = null;
+  function overlayBounds() {
+    if (boundsCache) return boundsCache;
+    const sw = Number(window.screen?.availWidth) || 1920;
+    const sh = Number(window.screen?.availHeight) || 1080;
+    boundsCache = { maxX: Math.round(sw), maxY: Math.round(sh) };
+    try {
+      fetch('/api/displays')
+        .then((r) => r.json())
+        .then((body) => {
+          const list = body?.displays || [];
+          const d = list.find((x) => x.primary) || list[0];
+          if (d?.width && d?.height) {
+            boundsCache = { maxX: Math.round(d.width), maxY: Math.round(d.height) };
+            paintControls();
+          }
+        })
+        .catch(() => {});
+    } catch {
+      /* plain web — screen fallback stays */
+    }
+    return boundsCache;
+  }
+
   function paintControls() {
     const a = appearance;
 
@@ -246,6 +272,21 @@
     document.querySelectorAll('[data-toggle]').forEach((input) => {
       input.checked = !!a[input.getAttribute('data-toggle')];
     });
+
+    const bounds = overlayBounds();
+    for (const [key, max] of [['marginX', bounds.maxX], ['marginY', bounds.maxY]]) {
+      const field = document.querySelector(`[data-slider="${key}"]`);
+      const input = field?.querySelector('input[type="range"]');
+      if (!input) continue;
+      input.min = '0';
+      input.max = String(max);
+      input.step = '1';
+      input.value = String(Math.min(Number(max), Number(a[key]) || 0));
+      const pct = (Number(input.value) / Number(max)) * 100;
+      input.style.setProperty('--fill', `${Math.max(0, Math.min(100, pct))}%`);
+      const output = field.querySelector('output');
+      if (output) output.textContent = fmt(key, Number(input.value));
+    }
 
     document.querySelectorAll('#themeSeg button').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.value === a.theme);

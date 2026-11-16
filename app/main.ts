@@ -17,6 +17,7 @@ import {
   screen,
   Tray,
 } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { startServer, type AppHandle } from '../server/app.js';
 
 const IS_PACKAGED = app.isPackaged;
@@ -63,6 +64,74 @@ let tray: Tray | null = null;
 let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
+
+/* ---------------- overlay move hotkey ---------------- */
+
+let moveHotkeyReg = '';
+
+/**
+ * A dedicated "move overlay" hotkey arms move mode for a short window: the
+ * panel takes the mouse so it can be dragged anywhere (and its buttons
+ * clicked), then releases it again. Dragging is impossible without the key,
+ * so gameplay never loses the cursor by accident.
+ */
+function registerMoveHotkey(): void {
+  const combo = handle?.store.get().desktop.moveHotkey?.trim() || 'CommandOrControl+Shift+M';
+  if (moveHotkeyReg === combo) return;
+  if (moveHotkeyReg) {
+    try {
+      globalShortcut.unregister(moveHotkeyReg);
+    } catch {
+      /* already gone */
+    }
+    moveHotkeyReg = '';
+  }
+  try {
+    if (globalShortcut.register(combo, () => handle?.broadcast({ type: 'move-mode' }))) {
+      moveHotkeyReg = combo;
+      log(`[app] overlay move hotkey: ${combo}`);
+    } else {
+      log(`[app] move hotkey refused (busy?): ${combo}`);
+    }
+  } catch (err) {
+    log('[app] move hotkey error: ' + err);
+  }
+}
+
+/* ---------------- auto update (GitHub Releases) ---------------- */
+
+/**
+ * Self-update via electron-updater: on packaged builds the app checks the
+ * GitHub release for a newer version, downloads the NSIS installer in the
+ * background and installs it silently on quit.
+ */
+function setupAutoUpdate(): void {
+  if (!app.isPackaged) return;
+  try {
+    autoUpdater.setFeedURL({ provider: 'github', owner: 'drednight', repo: 'TS3-TS6-Notifier' });
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('checking-for-update', () => log('[update] checking for updates'));
+    autoUpdater.on('update-available', (info) => log(`[update] available: ${info.version}`));
+    autoUpdater.on('update-not-available', () => log('[update] already up to date'));
+    autoUpdater.on('update-downloaded', (info) => log(`[update] ${info.version} downloaded — installs on quit`));
+    autoUpdater.on('error', (err) => log('[update] error: ' + err));
+    void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+    setInterval(() => {
+      void autoUpdater.checkForUpdates().catch(() => {});
+    }, 4 * 60 * 60 * 1000);
+  } catch (err) {
+    log('[update] setup failed: ' + err);
+  }
+}
+
+function checkForUpdatesNow(): void {
+  if (!app.isPackaged) {
+    log('[update] dev build — nothing to check');
+    return;
+  }
+  void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+}
 
 /* ---------------- elevation (Windows) ---------------- */
 
@@ -404,6 +473,10 @@ function buildTrayMenu(): void {
       label: 'Settings…',
       click: () => openSettings(),
     },
+    {
+      label: 'Проверить обновления',
+      click: () => checkForUpdatesNow(),
+    },
     // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
     ...(SOUNDS_UI_HIDDEN
       ? []
@@ -485,6 +558,8 @@ async function boot(): Promise<void> {
         id: String(d.id),
         label: d.label || `${d.size.width}×${d.size.height}`,
         primary: d.id === screen.getPrimaryDisplay().id,
+        width: d.workArea.width,
+        height: d.workArea.height,
       })),
     setOverlayClickThrough: (ignore: boolean) => {
       if (overlayWin && !overlayWin.isDestroyed()) {
@@ -502,9 +577,12 @@ async function boot(): Promise<void> {
   createOverlay();
   createTray();
   applyAutostart();
+  setupAutoUpdate();
+  registerMoveHotkey();
   registerSoundHotkeys();
   handle.events.on('config', () => registerSoundHotkeys());
   handle.events.on('config', () => fitOverlay());
+  handle.events.on('config', () => registerMoveHotkey());
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });

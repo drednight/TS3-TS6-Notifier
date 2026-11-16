@@ -18,7 +18,7 @@ export interface AppOptions {
   publicDir: string;
   log?: (msg: string) => void;
   /** Desktop only: enumerate connected displays for the overlay target setting. */
-  listDisplays?: () => Array<{ id: string; label: string; primary: boolean }>;
+  listDisplays?: () => Array<{ id: string; label: string; primary: boolean; width?: number; height?: number }>;
   /** Desktop only: temporarily take/release mouse input on the overlay window. */
   setOverlayClickThrough?: (ignore: boolean) => void;
 }

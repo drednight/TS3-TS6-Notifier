@@ -297,6 +297,7 @@
       seenChatIds.add(m.id);
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
       if (isSelf) continue;
+      if (m.kind === 'system') continue;
       if (m.kind === 'private' && !Settings.appearance.chatPrivate) continue;
       unreadCount += 1;
     }
@@ -308,6 +309,9 @@
     void el.offsetWidth; // restart the pulse animation
     el.classList.add('bump');
   }
+
+  // strip zero-width / bidi control chars — they render as garbage glyphs
+  const cleanChat = (s) => String(s || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
 
   function renderChat() {
     const a = Settings.appearance;
@@ -335,6 +339,7 @@
         chatRows.delete(id);
       }
     }
+    const clean = cleanChat;
     for (const m of msgs) {
       if (m.kind === 'private' && !a.chatPrivate) continue;
       if (chatRows.has(m.id)) continue;
@@ -342,8 +347,31 @@
       el.className = `chat-toast kind-${m.kind}`;
       const badge =
         m.kind === 'private' ? `<span class="chat-kind">${t('chatPrivateBadge')}</span>` :
-        m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` : '';
+        m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` :
+        m.kind === 'poke' ? `<span class="chat-kind">${t('pokeBadge')}</span>` : '';
       el.innerHTML = `${badge}<span class="chat-nick"></span><span class="chat-text"></span>`;
+      if (m.kind === 'system' || (m.kind === 'poke' && m.event === 'poke' && !m.text)) {
+        // Structured event row: localised here so connectors stay language-free.
+        const name = clean(m.nickname || m.text || '…');
+        const detail = clean(m.detail || '');
+        let s2 = '';
+        if (m.event === 'join') s2 = detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
+        else if (m.event === 'leave') s2 = detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
+        else if (m.event === 'move') s2 = t('evMove').replace('{n}', name).replace('{c}', detail || '…');
+        else s2 = name;
+        el.querySelector('.chat-text').textContent = s2;
+        feed.appendChild(el);
+        const rec = { el, timer: 0 };
+        rec.timer = setTimeout(() => {
+          el.classList.add('fading');
+          setTimeout(() => {
+            el.remove();
+            chatRows.delete(m.id);
+          }, 650);
+        }, delayMs);
+        chatRows.set(m.id, rec);
+        continue;
+      }
       // Resolve the sender's nick robustly: the event may omit it — fall back
       // to the live user list by id.
       const sender = (state.users || []).find((u) => String(u.id) === String(m.userId));
@@ -351,8 +379,6 @@
       // Server messages have no sender at all — label them instead of '…'
       const nick = eventName || sender?.nickname || (m.kind === 'server' ? t('chatServerBadge') : '');
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
-      // strip zero-width / bidi control chars — they render as garbage glyphs
-      const clean = (s) => String(s || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
       el.querySelector('.chat-nick').textContent = clean(nick)
         ? `${clean(nick)}${isSelf ? ` (${t('you')})` : ''}:`
         : '…:';
@@ -396,6 +422,7 @@
     $('ts3Fields').classList.toggle('visible', config.source === 'ts3');
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
+    $('moveHotkey').value = config.desktop?.moveHotkey || 'CommandOrControl+Shift+M';
   }
 
   function wireConnectionTab() {
@@ -434,6 +461,12 @@
 
     $('elevateToggle').addEventListener('change', () => {
       putConfig({ desktop: { elevate: $('elevateToggle').checked } });
+    });
+
+    $('moveHotkey').addEventListener('change', () => {
+      const value = $('moveHotkey').value.trim() || 'CommandOrControl+Shift+M';
+      $('moveHotkey').value = value;
+      putConfig({ desktop: { moveHotkey: value } });
     });
   }
 
@@ -481,6 +514,9 @@
         Settings.syncServer(config);
         fillConnectionTab();
         syncFeatures();
+      } else if (msg.type === 'move-mode') {
+        if (moveMode) exitMoveMode();
+        else enterMoveMode();
       } else if (msg.type === 'sound') {
         // Only the overlay page (clean mode) plays hotkey triggers —
         // otherwise open windows would double-play.
@@ -497,6 +533,107 @@
   injectIcons();
   Settings.init();
   wireConnectionTab();
+  /* ---------------- overlay move mode (drag with hotkey) ---------------- */
+
+  function postClickthrough(ignore) {
+    try {
+      fetch('/api/overlay/clickthrough', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ignore }),
+      }).catch(() => {});
+    } catch {
+      /* plain web — no desktop hook */
+    }
+  }
+
+  let moveMode = false;
+  let moveModeTimer = 0;
+
+  function exitMoveMode() {
+    if (!moveMode) return;
+    moveMode = false;
+    if (moveModeTimer) clearTimeout(moveModeTimer);
+    moveModeTimer = 0;
+    document.body.classList.remove('move-mode');
+    const hint = $('moveHint');
+    if (hint) hint.hidden = true;
+    postClickthrough(clickThroughWanted());
+  }
+
+  function enterMoveMode() {
+    if (document.body.classList.contains('bare')) return;
+    moveMode = true;
+    document.body.classList.add('move-mode');
+    const hint = $('moveHint');
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = t('moveHint');
+    }
+    // The overlay is click-through for gameplay — take the mouse only while
+    // move mode is armed so the panel (and its buttons) can be used.
+    postClickthrough(false);
+    if (moveModeTimer) clearTimeout(moveModeTimer);
+    moveModeTimer = setTimeout(exitMoveMode, 60000);
+  }
+
+  function wireOverlayDrag() {
+    const header = $('panelHeader');
+    if (!header) return;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let baseX = 0;
+    let baseY = 0;
+    let curX = 0;
+    let curY = 0;
+
+    header.addEventListener('mousedown', (e) => {
+      // Dragging is ONLY possible in move mode (armed via the "Переместить
+      // оверлей" hotkey) so the game never loses the mouse by accident.
+      if (!moveMode || e.target.closest('button')) return;
+      e.preventDefault();
+      dragging = true;
+      document.body.classList.add('dragging');
+      startX = e.clientX;
+      startY = e.clientY;
+      baseX = curX = Number(Settings.appearance.marginX) || 0;
+      baseY = curY = Number(Settings.appearance.marginY) || 0;
+      const panel = $('panel');
+
+      const move = (ev) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        const corner = document.body.dataset.corner || 'tr';
+        const rightSide = corner === 'tr' || corner === 'br';
+        // No arbitrary limits: the panel can travel to any point of the
+        // screen — only clamped so it stays fully visible. The top edge is
+        // anchored, so the panel fills downward as users join.
+        const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
+        const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
+        curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
+        curY = Math.min(maxY, Math.max(0, baseY + dy));
+        document.documentElement.style.setProperty('--margin-x', `${curX}px`);
+        document.documentElement.style.setProperty('--margin-y', `${curY}px`);
+      };
+      const up = () => {
+        dragging = false;
+        document.body.classList.remove('dragging');
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        Settings.appearance.marginX = curX;
+        Settings.appearance.marginY = curY;
+        putConfig({ appearance: { ...Settings.appearance, marginX: curX, marginY: curY } });
+        // A finished drag ends move mode right away — the key is a one-shot.
+        exitMoveMode();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  }
+
+  wireOverlayDrag();
+
   $('chatUnread').addEventListener('click', clearUnread);
   $('chatUnread').addEventListener('mouseenter', () => setBadgeHover(true));
   $('chatUnread').addEventListener('mouseleave', () => setBadgeHover(false));
