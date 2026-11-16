@@ -4,6 +4,10 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Author styles below set `display`, which would otherwise defeat the
+   UA rule for the `hidden` attribute — keep hidden meaning hidden. */
+[hidden] { display: none !important; }
+
 :root {
   --accent: #7c6cff;
   --accent-rgb: 124, 108, 255;

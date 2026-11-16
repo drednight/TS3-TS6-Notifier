@@ -1,6 +1,6 @@
 {
   "name": "ts3-ts6-notifier",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Beautiful overlay for TeamSpeak 3 & TeamSpeak 6: channel roster, live speaking indicators, icons and full appearance customization",
   "type": "module",
   "private": true,
@@ -10,7 +10,9 @@
   "scripts": {
     "start": "tsx server/index.ts",
     "dev": "tsx server/index.ts",
-    "test": "tsx test/protocols.mjs",
+    "test": "tsx test/protocols.mjs && tsx test/ui.mjs && npm run test:packaged",
+    "test:ui": "tsx test/ui.mjs",
+    "test:packaged": "node test/packaged.mjs",
     "typecheck": "tsc --noEmit",
     "icons": "node tools/make-icons.mjs",
     "smoke:app": "npm run bundle && node -r ./test/electron-stub.cjs app/dist/main.cjs",
@@ -32,6 +34,7 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.0",
+    "jsdom": "^31.0.1",
     "png-to-ico": "^2.1.8",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
@@ -39,6 +42,7 @@
   "build": {
     "appId": "dev.tsnotifier.app",
     "productName": "TS3-TS6 Notifier",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
@@ -48,11 +52,16 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "app/icons", "to": "icons" }
+      {
+        "from": "app/icons",
+        "to": "icons"
+      }
     ],
     "win": {
       "icon": "app/icons/icon.ico",
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "artifactName": "TS3-TS6-Notifier-Setup-${version}.${ext}"
     },
     "nsis": {
@@ -62,7 +71,9 @@
     },
     "linux": {
       "icon": "app/icons/icon.png",
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
   }
 }

@@ -1,0 +1,91 @@
+/**
+ * Packaged-layout test: reproduces the exact file layout electron-builder
+ * ships (resources/app/{app/dist/main.cjs, public/**, package.json} +
+ * resources/icons) and verifies the embedded server serves every asset.
+ *
+ * Run: npm run test:packaged
+ */
+import { cp, mkdir, rm, writeFile, access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const PKG = join(ROOT, '.tmp-pkg');
+
+const results = [];
+function check(name, cond, extra = '') {
+  results.push(!!cond);
+  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`);
+}
+
+// Build the packaged layout
+await rm(PKG, { recursive: true, force: true });
+const APP_DIR = join(PKG, 'resources', 'app');
+const RES_DIR = join(PKG, 'resources');
+await mkdir(join(APP_DIR, 'app', 'dist'), { recursive: true });
+await cp(join(ROOT, 'public'), join(APP_DIR, 'public'), { recursive: true });
+await cp(join(ROOT, 'app', 'dist', 'main.cjs'), join(APP_DIR, 'app', 'dist', 'main.cjs'));
+await cp(join(ROOT, 'app', 'icons'), join(RES_DIR, 'icons'), { recursive: true });
+await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-notifier', main: 'app/dist/main.cjs' }));
+
+// Boot the bundled main against that layout (electron stubbed)
+const proc = spawn('node', ['-r', './test/electron-stub.cjs', 'app/dist/main.cjs'], {
+  cwd: ROOT,
+  env: { ...process.env, TSN_APP_PATH: APP_DIR, TSN_RESOURCES_PATH: RES_DIR, TSN_SMOKE_EXIT: '0' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+let out = '';
+proc.stdout.on('data', (d) => (out += d.toString()));
+proc.stderr.on('data', (d) => (out += d.toString()));
+
+// Find the port the server printed
+let port = 0;
+for (let i = 0; i < 60 && !port; i++) {
+  await new Promise((r) => setTimeout(r, 250));
+  const m = /running at http:\/\/127\.0\.0\.1:(\d+)/.exec(out);
+  if (m) port = Number(m[1]);
+}
+
+try {
+  check('packaged: server started from packaged layout', port > 0, `port=${port}`);
+
+  if (port > 0) {
+    const pages = [
+      ['/', 'text/html', 'channelNameText'],
+      ['/css/overlay.css', 'text/css', '[hidden]'],
+      ['/js/app.js', 'text/javascript', 'TSIcons'],
+      ['/js/icons.js', 'text/javascript', 'avatarGradient'],
+      ['/js/settings.js', 'text/javascript', 'openDrawer'],
+      ['/js/i18n.js', 'text/javascript', 'setLanguage'],
+      ['/favicon.svg', 'image/svg+xml', '<svg'],
+    ];
+    for (const [path, mime, marker] of pages) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      const body = await res.text();
+      check(`packaged: ${path} → ${mime}`, res.status === 200 && (res.headers.get('content-type') || '').includes(mime), `status=${res.status}`);
+      check(`packaged: ${path} content ok`, body.includes(marker), marker);
+    }
+    const api = await fetch(`http://127.0.0.1:${port}/api/state`);
+    check('packaged: /api/state works', api.status === 200);
+    const wsUrl = `ws://127.0.0.1:${port}/ws`;
+    const { default: WebSocket } = await import('ws');
+    const alive = await new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl);
+      ws.on('open', () => {
+        ws.close();
+        resolve(true);
+      });
+      ws.on('error', () => resolve(false));
+    });
+    check('packaged: websocket upgrade works', alive);
+  }
+} finally {
+  proc.kill('SIGTERM');
+  await rm(PKG, { recursive: true, force: true });
+}
+
+const failed = results.filter((r) => !r).length;
+console.log(`\n${results.length - failed}/${results.length} packaged checks passed`);
+process.exit(failed ? 1 : 0);

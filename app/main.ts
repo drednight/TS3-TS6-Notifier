@@ -5,6 +5,7 @@
  * tray icon and a separate settings window. The embedded HTTP/WS server and
  * TeamSpeak connectors are the exact same code as the standalone web version.
  */
+import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   app,
@@ -21,8 +22,35 @@ const ROOT = IS_PACKAGED ? app.getAppPath() : join(__dirname, '..', '..');
 const PUBLIC_DIR = join(ROOT, 'public');
 const ICONS_DIR = IS_PACKAGED ? join(process.resourcesPath, 'icons') : join(ROOT, 'app', 'icons');
 const DATA_DIR = join(app.getPath('userData'), 'data');
+const LOG_FILE = join(app.getPath('userData'), 'app.log');
 
-const log = (msg: string) => console.log(msg);
+/* ---------------- logging (file + console) ---------------- */
+
+let logReady = false;
+function log(msg: string): void {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  if (!logReady) return;
+  try {
+    appendFileSync(LOG_FILE, line + '\n');
+  } catch {
+    /* ignore */
+  }
+}
+
+function verifyAssets(): void {
+  const probes = ['index.html', 'css/overlay.css', 'js/app.js', 'js/settings.js', 'js/i18n.js', 'js/icons.js'];
+  const parts = probes.map((p) => {
+    try {
+      statSync(join(PUBLIC_DIR, p));
+      return `${p}=ok`;
+    } catch {
+      return `${p}=MISSING`;
+    }
+  });
+  log(`[app] assets in ${PUBLIC_DIR}: ${parts.join(' ')}`);
+  log(`[app] icons dir: ${ICONS_DIR}, data dir: ${DATA_DIR}, packaged=${IS_PACKAGED}`);
+}
 
 let handle: AppHandle | null = null;
 let overlayWin: BrowserWindow | null = null;
@@ -60,11 +88,20 @@ function fitOverlay(): void {
 function applyClickThrough(): void {
   if (!overlayWin) return;
   const on = handle?.store.get().desktop.clickThrough ?? true;
-  if (on) {
-    overlayWin.setIgnoreMouseEvents(true, { forward: true });
-  } else {
-    overlayWin.setIgnoreMouseEvents(false);
-  }
+  overlayWin.setIgnoreMouseEvents(!!on, { forward: true });
+}
+
+/** Log renderer console + page failures; retry loading on failure. */
+function watchWebContents(win: BrowserWindow, tag: string): void {
+  win.webContents.on('console-message', (_e, level, message) => {
+    if (level >= 2) log(`[${tag}] console: ${message}`);
+  });
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    log(`[${tag}] did-fail-load code=${code} ${desc} url=${url}`);
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.loadURL(tag === 'overlay' ? overlayUrl() : settingsUrl());
+    }, 1200);
+  });
 }
 
 function createOverlay(): void {
@@ -96,16 +133,25 @@ function createOverlay(): void {
   overlayWin.setMenuBarVisibility(false);
   overlayWin.setAlwaysOnTop(true, 'screen-saver');
   overlayWin.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
+  watchWebContents(overlayWin, 'overlay');
   overlayWin.loadURL(overlayUrl());
-  overlayWin.once('ready-to-show', () => {
-    if (overlayVisible) overlayWin?.showInactive();
+
+  // ready-to-show is unreliable for transparent windows — always fall back.
+  let shown = false;
+  const show = () => {
+    if (shown || !overlayWin || overlayWin.isDestroyed()) return;
+    shown = true;
+    if (overlayVisible) overlayWin.showInactive();
     applyClickThrough();
-    log('[app] overlay ready');
-  });
+    log('[app] overlay shown');
+  };
+  overlayWin.once('ready-to-show', show);
+  setTimeout(show, 1500);
 
   screen.on('display-metrics-changed', fitOverlay);
   screen.on('display-added', fitOverlay);
   screen.on('display-removed', fitOverlay);
+  log(`[app] overlay bounds ${workArea.width}x${workArea.height}+${workArea.x}+${workArea.y}`);
 }
 
 function openSettings(): void {
@@ -129,10 +175,12 @@ function openSettings(): void {
     },
   });
   settingsWin.setMenuBarVisibility(false);
+  watchWebContents(settingsWin, 'settings');
   settingsWin.loadURL(settingsUrl());
   settingsWin.on('closed', () => {
     settingsWin = null;
   });
+  log('[app] settings window opened');
 }
 
 /* ---------------- tray ---------------- */
@@ -153,6 +201,7 @@ function setSource(source: 'mock' | 'ts3' | 'ts6'): void {
   handle?.store.update({ source });
   handle?.restartConnector();
   buildTrayMenu();
+  log(`[app] data source → ${source}`);
 }
 
 function toggleClickThrough(): void {
@@ -242,6 +291,15 @@ function createTray(): void {
 /* ---------------- boot ---------------- */
 
 async function boot(): Promise<void> {
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true });
+    logReady = true;
+  } catch {
+    /* fall through — console logging still works */
+  }
+  log('=== TS3-TS6 Notifier starting ===');
+  verifyAssets();
+
   handle = await startServer({
     port: 0,
     host: '127.0.0.1',
@@ -254,12 +312,25 @@ async function boot(): Promise<void> {
   createOverlay();
   createTray();
   applyAutostart();
+
+  // First run: open the settings window so the UI is immediately visible.
+  const cfg = handle.store.get();
+  if (!cfg.desktop.seen) {
+    handle.store.update({ desktop: { seen: true } });
+    setTimeout(() => openSettings(), 600);
+    log('[app] first run → opening settings');
+  }
   log('[app] ready');
 }
 
 if (gotLock) {
   app.whenReady().then(boot).catch((err) => {
     console.error('[app] fatal:', err);
+    try {
+      appendFileSync(LOG_FILE, `FATAL ${err instanceof Error ? err.stack : String(err)}\n`);
+    } catch {
+      /* ignore */
+    }
     app.exit(1);
   });
 
@@ -268,6 +339,7 @@ if (gotLock) {
   });
 
   app.on('before-quit', () => {
+    log('=== shutting down ===');
     handle?.close();
   });
 }

@@ -1,6 +1,12 @@
 /**
  * Minimal 'electron' module mock for smoke-testing the bundled desktop main
- * process without a display: node -r ./test/electron-stub.cjs app/dist/main.cjs
+ * process without a display:
+ *   node -r ./test/electron-stub.cjs app/dist/main.cjs
+ *
+ * Env:
+ *   TSN_APP_PATH       — override app.getAppPath() (packaged-layout tests)
+ *   TSN_RESOURCES_PATH — override process.resourcesPath equivalent
+ *   TSN_SMOKE_EXIT=0   — don't auto-exit after 4s (external kill instead)
  */
 const Module = require('module');
 const os = require('os');
@@ -9,6 +15,10 @@ const path = require('path');
 function noop() {}
 
 const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+const APP_PATH = process.env.TSN_APP_PATH || path.join(__dirname, '..');
+const RES_PATH = process.env.TSN_RESOURCES_PATH || APP_PATH;
+// Electron injects process.resourcesPath at runtime — emulate it.
+process.resourcesPath = RES_PATH;
 
 class BrowserWindow {
   constructor(opts = {}) {
@@ -28,7 +38,6 @@ class BrowserWindow {
   }
   loadURL(url) {
     console.log('[stub] loadURL', url);
-    // verify the page is actually served
     fetch(url).then(
       (r) => console.log('[stub] page status', r.status),
       (e) => console.log('[stub] page fetch failed', e.message),
@@ -74,8 +83,8 @@ class Tray {
 
 const electron = {
   app: {
-    isPackaged: false,
-    getAppPath: () => path.join(__dirname, '..'),
+    isPackaged: !!process.env.TSN_APP_PATH,
+    getAppPath: () => APP_PATH,
     getPath: (name) => path.join(os.tmpdir(), 'tsn-stub', name),
     setAppUserModelId: noop,
     requestSingleInstanceLock: () => true,
@@ -109,8 +118,9 @@ Module._load = function (request, ...rest) {
   return origLoad.call(this, request, ...rest);
 };
 
-// graceful end of the smoke test
-setTimeout(() => {
-  console.log('BOOT OK');
-  process.exit(0);
-}, 4000);
+if (process.env.TSN_SMOKE_EXIT !== '0') {
+  setTimeout(() => {
+    console.log('BOOT OK');
+    process.exit(0);
+  }, 4000);
+}

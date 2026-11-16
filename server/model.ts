@@ -105,6 +105,8 @@ export interface AppConfig {
     clickThrough: boolean;
     autostart: boolean;
     visible: boolean;
+    /** First run already greeted the user with the settings window. */
+    seen: boolean;
   };
 }
 
@@ -141,7 +143,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
-  desktop: { clickThrough: true, autostart: false, visible: true },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: false },
 };
 
 export function emptyState(source: SourceKind, status: StatusCode, detail = ''): OverlayState {

@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck & protocol tests
+      - name: Typecheck & tests
         run: |
           npm run typecheck
           npm test
@@ -33,6 +33,15 @@ jobs:
 
       - name: Render icons
         run: npm run icons
+
+      - name: Verify packaged file layout
+        shell: pwsh
+        run: |
+          npm run test:packaged
+          if ($LASTEXITCODE -ne 0) {
+            echo "::error title=packaged layout check failed::see log above"
+            exit 1
+          }
 
       - name: Build Windows app (installer)
         shell: pwsh
@@ -61,9 +70,9 @@ jobs:
             dist/*.exe
           generate_release_notes: true
           body: |
-            ## TS3-TS6 Notifier v${{ github.ref_name }}
+            ## TS3-TS6 Notifier ${{ github.ref_name }}
 
-            **TS3-TS6-Notifier-Setup-1.0.0.exe** — установщик Windows
+            Скачайте **TS3-TS6-Notifier-Setup-*.exe** — установщик Windows.
 
             ### Первый запуск
             1. Запустите exe (Windows может показать SmartScreen — «Подробнее» → «Всё равно запустить»).
