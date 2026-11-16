@@ -134,6 +134,9 @@ ts6Wss.on('connection', (ws) => {
         // chat messages (defensive name parsing)
         ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, msg: 'privet', invokerId: 101, invokerName: 'Elena', targetMode: 2 } }));
         ws.send(JSON.stringify({ type: 'proto.ServerEvent', payload: { connectionId: 7, chatMessage: { text: 'wrapped hi', senderName: 'Ruslan', senderId: 100, targetMode: 3 } } }));
+        // sender as a nested object with a decoy message `id` — the sender id must win
+        ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, message: { id: 205, sender: { id: 101, name: 'Sigma' }, text: 'from sender object' } } }));
+        ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, message: { id: 206, senderId: 100, text: 'decoy id beaten' } } }));
         ws.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, newChannelId: 5, oldChannelId: 9 } }));
         ws.send(JSON.stringify({ type: 'clientSelfPropertyUpdated', payload: { connectionId: 7, flag: 'inputMuted', newValue: true } }));
         ws.send(JSON.stringify({ type: 'clientPropertiesUpdated', payload: { connectionId: 7, clientId: 100, properties: { nickname: 'Ruslan2' } } }));
@@ -218,6 +221,14 @@ check('ts6: chat message parsed', (() => {
 check('ts6: wrapped chat parsed', (() => {
   const m = last6?.chat || [];
   return m.some((x) => x.text === 'wrapped hi' && x.nickname === 'Ruslan' && x.kind === 'server');
+})(), JSON.stringify(last6?.chat));
+check('ts6: sender-object chat resolved (message id must not leak)', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'from sender object' && x.nickname === 'Sigma' && x.userId === '101');
+})(), JSON.stringify(last6?.chat));
+check('ts6: senderId beats generic message id', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'decoy id beaten' && x.userId === '100');
 })(), JSON.stringify(last6?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
 

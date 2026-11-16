@@ -295,10 +295,12 @@
       // Server messages have no sender at all — label them instead of '…'
       const nick = eventName || sender?.nickname || (m.kind === 'server' ? t('chatServerBadge') : '');
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
-      el.querySelector('.chat-nick').textContent = nick
-        ? `${nick}${isSelf ? ` (${t('you')})` : ''}:`
+      // strip zero-width / bidi control chars — they render as garbage glyphs
+      const clean = (s) => String(s || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
+      el.querySelector('.chat-nick').textContent = clean(nick)
+        ? `${clean(nick)}${isSelf ? ` (${t('you')})` : ''}:`
         : '…:';
-      el.querySelector('.chat-text').textContent = m.text;
+      el.querySelector('.chat-text').textContent = clean(m.text);
       feed.appendChild(el);
       const rec = { el, timer: 0 };
       rec.timer = setTimeout(() => {
