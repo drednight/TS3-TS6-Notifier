@@ -24,9 +24,16 @@ jobs:
         run: npm ci
 
       - name: Typecheck & tests
+        shell: pwsh
         run: |
           npm run typecheck
-          npm test
+          npm test 2>&1 | Tee-Object -FilePath tests.log
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content tests.log -Tail 45) -join "`n"
+            $tail = $tail -replace "`r?`n", "%0A"
+            echo "::error title=tests failed::$tail"
+            exit 1
+          }
 
       - name: Bundle desktop main
         run: npm run bundle

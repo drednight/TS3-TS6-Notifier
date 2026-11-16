@@ -1,15 +1,17 @@
 /**
- * UI smoke test: loads the real overlay page (from the running dev server or a
- * file URL fallback), simulates the WebSocket state stream, and asserts that
+ * UI smoke test: loads the real overlay page (served by the real server,
+ * started in-process), simulates the WebSocket state stream, and asserts that
  * rows, header, labels and the settings drawer all actually render.
  *
- * Run: npm run test:ui   (requires the dev server on :3000 — started automatically)
+ * Run: npm run test:ui
  */
 import { JSDOM, VirtualConsole } from 'jsdom';
-import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { startServer } from '../server/app.js';
 
-const PORT = 3100;
-const BASE = `http://127.0.0.1:${PORT}`;
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const results = [];
 function check(name, cond, extra = '') {
@@ -37,7 +39,7 @@ const fakeConfig = {
   source: 'mock',
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
-  desktop: { clickThrough: true, autostart: false, visible: true },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: true },
   appearance: {
     theme: 'glass', accent: '#7c6cff', glow: 0.7, opacity: 0.72, blur: 18, radius: 16,
     scale: 1, fontSize: 13, corner: 'tr', margin: 18, language: 'ru',
@@ -106,15 +108,16 @@ function bootPage(url) {
   });
 }
 
-/* ---------------- start a dedicated server on :3100 ---------------- */
+/* ---------------- start a dedicated in-process server ---------------- */
 
-const serverProc = spawn('npx', ['tsx', 'server/index.ts'], {
-  cwd: new URL('..', import.meta.url).pathname,
-  env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' },
-  stdio: 'ignore',
+const handle = await startServer({
+  port: 0,
+  host: '127.0.0.1',
+  dataDir: join(tmpdir(), 'tsn-ui-test'),
+  publicDir: join(ROOT, 'public'),
+  log: () => {},
 });
-
-await new Promise((r) => setTimeout(r, 2500));
+const BASE = `http://127.0.0.1:${handle.port()}`;
 
 try {
   /* ---- 1. overlay page (clean mode, like the in-game overlay window) ---- */
@@ -126,7 +129,7 @@ try {
     check('overlay: channel name rendered', doc.getElementById('channelNameText')?.textContent === 'UI Test Channel', doc.getElementById('channelNameText')?.textContent);
     check('overlay: server name rendered', doc.getElementById('serverName')?.textContent === 'UI Test Server');
     check('overlay: user rows rendered', doc.querySelectorAll('#userList .row').length === 2, `rows=${doc.querySelectorAll('#userList .row').length}`);
-    check('overlay: query bot hidden', !doc.querySelector('#userList .row.self')?.nextSibling?.textContent?.includes?.('QueryBot') && ![...doc.querySelectorAll('.nick')].some((n) => n.textContent === 'QueryBot'));
+    check('overlay: query bot hidden', ![...doc.querySelectorAll('.nick')].some((n) => n.textContent === 'QueryBot'));
     check('overlay: talking row highlighted', !!doc.querySelector('#userList .row.talking'));
     check('overlay: self row marked', !!doc.querySelector('#userList .row.self'));
     check('overlay: muted badge shown', !!doc.querySelector('#userList .badge.mic-off'));
@@ -152,16 +155,16 @@ try {
     check('settings: connection status pill', !!doc.getElementById('statusPill').textContent, doc.getElementById('statusPill').textContent);
 
     // interaction: click a theme button and a toggle, expect CSS var change
-    const before = dom.window.document.documentElement.style.getPropertyValue('--accent');
+    const before = doc.documentElement.style.getPropertyValue('--accent');
     doc.querySelector('#accentSwatches .swatch[data-value="#22d3ee"]').click();
-    const after = dom.window.document.documentElement.style.getPropertyValue('--accent');
+    const after = doc.documentElement.style.getPropertyValue('--accent');
     check('settings: accent change applies live', after === '#22d3ee', `${before} → ${after}`);
     doc.querySelector('[data-toggle="compact"]').click();
     check('settings: compact toggle applies class', dom.window.document.body.classList.contains('compact'));
     dom.window.close();
   }
 } finally {
-  serverProc.kill('SIGTERM');
+  handle.close();
 }
 
 const failed = results.filter((r) => !r).length;
