@@ -65,7 +65,7 @@
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="appearance" data-i18n="tabAppearance"></button>
       <button class="tab" data-tab="elements" data-i18n="tabElements"></button>
-      <button class="tab" data-tab="sound" data-i18n="tabSound"></button>
+      <button class="tab" data-tab="sound" data-i18n="tabSound" hidden></button>
       <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
       <button class="tab" data-tab="about" data-i18n="tabAbout"></button>
     </nav>
@@ -206,7 +206,7 @@
       </section>
 
       <!-- ---------- Sound ---------- -->
-      <section class="tab-panel" data-panel="sound">
+      <section class="tab-panel" data-panel="sound" hidden>
         <div class="card sound-target">
           <div class="switch-list">
             <label class="switch-row"><span data-i18n="localSound"></span><input type="checkbox" id="localEnabled" /><i></i></label>
@@ -272,11 +272,6 @@
 
       <!-- ---------- Connection ---------- -->
       <section class="tab-panel" data-panel="connection">
-        <div class="card">
-          <div class="section-title" data-i18n="ts6GroupsTitle"></div>
-          <div class="hint block" data-i18n="ts6GroupsHint"></div>
-          <div id="ts6GroupMap" class="group-map"></div>
-        </div>
         <div class="conn-status card" id="connStatusCard">
           <span class="status-pill" id="statusPill">…</span>
           <div class="status-detail" id="statusDetail"></div>
@@ -317,12 +312,17 @@
         </div>
 
         <div class="hint block" data-i18n="connectionHelp"></div>
-      </section>
+              <details class="collapse-block" id="ts6GroupsBlock">
+          <summary data-i18n="ts6GroupsTitle"></summary>
+          <div class="hint block" data-i18n="ts6GroupsHint"></div>
+          <div id="ts6GroupMap" class="group-map"></div>
+        </details>
+</section>
 
       <!-- ---------- About ---------- -->
       <section class="tab-panel" data-panel="about">
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.5</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.6</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
 

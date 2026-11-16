@@ -165,6 +165,7 @@
     editMode = on;
     $('menuEdit').classList.toggle('on', on);
     $('boardGrid').classList.toggle('editing', on);
+    if (!deleteMode) $('boardHint').textContent = on ? t('editModeHint') : t('boardHint');
   }
 
   function wireEdit() {
@@ -234,9 +235,6 @@
   function wireUpload() {
     const upload = $('boardUpload');
     $('menuAdd').addEventListener('click', () => upload.click());
-    $('menuPresets').addEventListener('click', () => {
-      window.TSN?.addPresets?.();
-    });
     upload.addEventListener('change', async () => {
       const file = upload.files?.[0];
       if (!file || !config?.sounds) return;
@@ -338,6 +336,10 @@
       pop.hidden = !pop.hidden;
       $('menuAudio').classList.toggle('on', !pop.hidden);
       if (!pop.hidden) void fillDevices();
+    });
+    $('popClose').addEventListener('click', () => {
+      $('audioPop').hidden = true;
+      $('menuAudio').classList.remove('on');
     });
     $('popLocalEnabled').addEventListener('change', (e) => putSounds({ localEnabled: e.target.checked }));
     $('popChannelEnabled').addEventListener('change', (e) => putSounds({ enabled: e.target.checked }));

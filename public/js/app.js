@@ -291,7 +291,8 @@
       // Resolve the sender's nick robustly: the event may omit it — fall back
       // to the live user list by id.
       const sender = (state.users || []).find((u) => String(u.id) === String(m.userId));
-      const nick = (m.nickname && m.nickname !== '?') ? m.nickname : (sender?.nickname || '');
+      const eventName = m.nickname && m.nickname !== '?' ? m.nickname : (m.senderName || m.name || '');
+      const nick = eventName || sender?.nickname || '';
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
       el.querySelector('.chat-nick').textContent = nick
         ? `${nick}${isSelf ? ` (${t('you')})` : ''}:`

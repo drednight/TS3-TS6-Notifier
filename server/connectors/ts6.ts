@@ -435,25 +435,58 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   private handleChatEvent(payload: JObj): void {
-    const inner = asObj(payload['message']) ?? asObj(payload['properties']) ?? asObj(payload['data']) ?? payload;
-    const body =
-      jStr(payload, 'msg') ||
-      jStr(payload, 'message') ||
-      jStr(payload, 'text') ||
-      jStr(payload, 'content') ||
-      jStr(inner, 'msg') ||
-      jStr(inner, 'message') ||
-      jStr(inner, 'text') ||
-      jStr(inner, 'content');
+    // The event shape differs between TS6 builds — scan every nested object
+    // for known field names instead of trusting one fixed path.
+    const pools: JObj[] = [payload];
+    for (const key of ['message', 'properties', 'data', 'sender', 'author', 'chat']) {
+      const obj = asObj(payload[key]);
+      if (obj) {
+        pools.push(obj);
+        for (const key2 of ['properties', 'data', 'message']) {
+          const deep = asObj(obj[key2]);
+          if (deep) pools.push(deep);
+        }
+      }
+    }
+    const pickStr = (keys: string[]): string => {
+      for (const pool of pools) {
+        for (const k of keys) {
+          const v = pool[k];
+          if (typeof v === 'string' && v.trim()) return v;
+        }
+      }
+      return '';
+    };
+    const pickInt = (keys: string[]): number => {
+      for (const pool of pools) {
+        for (const k of keys) {
+          const v = pool[k];
+          const n = typeof v === 'number' ? v : typeof v === 'string' ? parseInt(v, 10) : NaN;
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+      }
+      return 0;
+    };
+    const body = pickStr(['msg', 'message', 'text', 'content', 'body', 'richtext']);
     if (!body) return;
-    const userId = String(jInt(payload, 'invokerId') || jInt(payload, 'senderId') || jInt(payload, 'clientId') || jInt(payload, 'clid'));
+    const uid = pickInt(['invokerId', 'invokerid', 'senderId', 'senderid', 'clientId', 'clid', 'userId', 'userid', 'id', 'from']);
+    const userId = String(uid);
     const nickname =
-      jStr(payload, 'invokerName') ||
-      jStr(payload, 'senderName') ||
-      jStr(inner, 'nickname') ||
-      this.clients.get(Number(userId))?.nickname ||
-      '?';
-    const mode = jInt(payload, 'targetMode') || jInt(payload, 'targetmode');
+      pickStr([
+        'invokerName',
+        'invokername',
+        'senderName',
+        'sendername',
+        'displayName',
+        'displayname',
+        'nickname',
+        'userName',
+        'username',
+        'name',
+      ]) ||
+      this.clients.get(uid)?.nickname ||
+      '';
+    const mode = pickInt(['targetMode', 'targetmode']);
     this.pushChat({
       userId,
       nickname,
@@ -683,7 +716,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
 function applyProperties(client: UserState, props: JObj): UserState {
   const patch: Partial<UserState> = {};
 
-  const nickname = hasKey(props, 'nickname') ? jStr(props, 'nickname') : hasKey(props, 'name') ? jStr(props, 'name') : '';
+  const nickname =
+    jStr(props, 'nickname') || jStr(props, 'displayName') || jStr(props, 'displayname') || jStr(props, 'userName') || jStr(props, 'name');
   if (nickname) patch.nickname = nickname;
 
   if (hasKey(props, 'inputMuted') || hasKey(props, 'inputDeactivated') || hasKey(props, 'isMuted')) {

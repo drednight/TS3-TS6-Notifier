@@ -319,8 +319,15 @@ function applyAutostart(): void {
 
 /* ---------------- soundboard hotkeys ---------------- */
 
+/**
+ * Soundboard + sound settings are parked (hidden in the UI) for now at the
+ * user's request — flip this to false together with unhiding the Sound tab
+ * in public/index.html to bring the feature back.
+ */
+const SOUNDS_UI_HIDDEN = true;
+
 function registerSoundHotkeys(): void {
-  if (!handle) return;
+  if (!handle || SOUNDS_UI_HIDDEN) return;
   try {
     globalShortcut.unregisterAll();
     const { items, enabled, hotkeysEnabled } = handle.store.get().sounds;
@@ -346,10 +353,15 @@ function buildTrayMenu(): void {
       label: 'Settings…',
       click: () => openSettings(),
     },
-    {
-      label: 'Soundboard',
-      click: () => openBoard(),
-    },
+    // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
+    ...(SOUNDS_UI_HIDDEN
+      ? []
+      : [
+          {
+            label: 'Soundboard',
+            click: () => openBoard(),
+          } as Electron.MenuItemConstructorOptions,
+        ]),
     { type: 'separator' },
     {
       label: 'Data source',
