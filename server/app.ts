@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { extname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ConfigStore } from './config.js';
 import { OverlayState, emptyState } from './model.js';
@@ -111,8 +111,12 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   }
 
   function serveStatic(res: ServerResponse, urlPath: string, publicDir: string): void {
-    const clean = normalize(decodeURIComponent(urlPath.split('?')[0] ?? '/')).replace(/^(\.\.[/\\])+/, '');
-    const filePath = join(publicDir, clean === '/' ? 'index.html' : clean);
+    // NOTE: path.normalize turns '/' into '\' on Windows, which used to break
+    // the root page (404 → empty windows). Split manually instead.
+    const rawPath = decodeURIComponent(urlPath.split('?')[0] ?? '/');
+    const segments = rawPath.split(/[/\\]+/).filter((s) => s && s !== '.' && s !== '..');
+    const rel = segments.join('/');
+    const filePath = join(publicDir, rel === '' ? 'index.html' : rel);
     if (!filePath.startsWith(publicDir)) {
       res.writeHead(403).end('Forbidden');
       return;
