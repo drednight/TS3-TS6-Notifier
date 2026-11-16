@@ -135,6 +135,12 @@
     if (q.get('compact') !== null) out.compact = q.get('compact') === '1';
     if (q.get('anim') !== null) out.animations = q.get('anim') !== '0';
     if (q.get('clean') === '1') clean = true;
+    if (q.get('bare') === '1') {
+      // Desktop settings window: settings UI only, no overlay page behind it.
+      document.body.classList.add('bare');
+      const stage = document.getElementById('stage');
+      if (stage) stage.style.display = 'none';
+    }
     return out;
   }
 

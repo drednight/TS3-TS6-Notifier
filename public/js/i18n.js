@@ -111,6 +111,20 @@
     showChat: 'Сообщения чата',
     chatDelay: 'Задержка исчезновения',
     chatPrivate: 'Показывать личные сообщения',
+    outputDeviceHint: 'Звук панели воспроизводится на выбранное устройство.',
+    soundGuideTitle: 'Как звучать в канале «от вас»',
+    guideNoCable: 'Способ 1 — Стерео микшер (без установки)',
+    guideNoCableSteps:
+      '1) ПКМ по значку 🔊 → «Звуки» → «Запись» → включите «Стерео микшер» (ПКМ → «Показать отключённые устройства»). 2) В TeamSpeak выберите его как микрофон. 3) В оверлее вывод звука оставьте на «Устройство по умолчанию» — звук панели пойдёт в канал. Хотите говорить голосом одновременно: в свойствах реального микрофона включите «Слушать это устройство» (вывод — динамики), тогда Стерео микшер захватит и голос, и звуки панели.',
+    guideCable: 'Способ 2 — Виртуальный кабель (надёжно)',
+    guideCableSteps:
+      'VB-Cable или VoiceMeeter: вывод звука панели — на кабель, микрофон в TeamSpeak — кабель. Голос не смешивается с системными звуками, качество выше. Рекомендуется, если Стерео микшера нет или нужен чистый звук.',
+    guideLimit:
+      'Windows не даёт программе писать прямо в микрофон — нужен петлевой вход (Стерео микшер или виртуальный кабель). Это ограничение системы.',
+    loopbackSearching: 'Ищем Стерео микшер…',
+    loopbackFound: 'Найден петлевой вход: {name} — можно без кабеля!',
+    loopbackMissing:
+      'Петлевой вход не найден. Включите «Стерео микшер» в настройках звука Windows (ПКМ → «Показать отключённые устройства») и нажмите «Обновить».',
   };
 
   const EN = {
@@ -222,6 +236,20 @@
     showChat: 'Chat messages',
     chatDelay: 'Hide delay',
     chatPrivate: 'Show private messages',
+    outputDeviceHint: 'Board sounds are played to the selected device.',
+    soundGuideTitle: 'How to be heard in the channel',
+    guideNoCable: 'Method 1 — Stereo Mix (no install)',
+    guideNoCableSteps:
+      '1) Right-click the 🔊 icon → Sounds → Recording → enable “Stereo Mix” (right-click → “Show Disabled Devices”). 2) Select it as the microphone in TeamSpeak. 3) Leave the overlay output on “Default device” — board sounds go into the channel. To speak with your voice at the same time: enable “Listen to this device” on your real microphone (playback → speakers), then Stereo Mix captures voice and board together.',
+    guideCable: 'Method 2 — Virtual cable (reliable)',
+    guideCableSteps:
+      'VB-Cable or VoiceMeeter: route the board output to the cable and set the cable as the TeamSpeak microphone. Your voice stays clean, no system sounds leak. Recommended when Stereo Mix is missing or you want better quality.',
+    guideLimit:
+      'Windows does not let an app write straight into a microphone — a loopback input (Stereo Mix or a virtual cable) is required. This is an OS limitation.',
+    loopbackSearching: 'Looking for Stereo Mix…',
+    loopbackFound: 'Loopback input found: {name} — no cable needed!',
+    loopbackMissing:
+      'No loopback input found. Enable “Stereo Mix” in Windows sound settings (right-click → “Show Disabled Devices”) and press Refresh.',
   };
 
   const dict = { ru: RU, en: EN };

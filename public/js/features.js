@@ -379,6 +379,32 @@
     } catch {
       /* no permission / unsupported */
     }
+    await detectLoopback();
+  }
+
+  /** Look for a loopback input (Stereo Mix / What U Hear) — soundboard without a virtual cable. */
+  async function detectLoopback() {
+    const el = document.getElementById('loopbackStatus');
+    if (!el) return;
+    el.className = 'guide-status searching';
+    el.textContent = t('loopbackSearching');
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === 'audioinput' && d.label);
+      const loop = inputs.find((d) =>
+        /stereo\s*mix|stereo\s*микшер|стерео\s*микшер|стереомикшер|what\s*u\s*hear|wave\s*out|loopback|mono\s*mix|петлев|смеш/i.test(d.label),
+      );
+      if (loop) {
+        el.className = 'guide-status found';
+        el.textContent = t('loopbackFound').replace('{name}', loop.label);
+      } else {
+        el.className = 'guide-status missing';
+        el.textContent = t('loopbackMissing');
+      }
+    } catch {
+      el.className = 'guide-status missing';
+      el.textContent = t('loopbackMissing');
+    }
   }
 
   function wireSoundTab() {
@@ -421,6 +447,7 @@
     }
     const refresh = document.getElementById('refreshDevices');
     if (refresh) refresh.addEventListener('click', () => void refreshDevices());
+    void detectLoopback();
 
     const uploadBtn = document.getElementById('soundUploadBtn');
     const upload = document.getElementById('soundUpload');

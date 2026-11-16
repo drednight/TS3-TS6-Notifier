@@ -77,7 +77,8 @@ function overlayUrl(): string {
 }
 
 function settingsUrl(): string {
-  return `http://127.0.0.1:${handle?.port() ?? 0}/?open=settings`;
+  // bare=1 → the settings window shows the settings UI only (no overlay page).
+  return `http://127.0.0.1:${handle?.port() ?? 0}/?open=settings&bare=1`;
 }
 
 function fitOverlay(): void {
@@ -104,6 +105,9 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
     }, 1200);
   });
 }
+
+/** Settings window is open — keep the overlay panel hidden behind it. */
+let hiddenForSettings = false;
 
 function createOverlay(): void {
   const workArea = screen.getPrimaryDisplay().workArea;
@@ -142,7 +146,7 @@ function createOverlay(): void {
   const show = () => {
     if (shown || !overlayWin || overlayWin.isDestroyed()) return;
     shown = true;
-    if (overlayVisible) overlayWin.showInactive();
+    if (overlayVisible && !hiddenForSettings) overlayWin.showInactive();
     applyClickThrough();
     log('[app] overlay shown');
   };
@@ -161,6 +165,10 @@ function openSettings(): void {
     settingsWin.focus();
     return;
   }
+  // Open settings alone: hide the overlay panel while the settings window is
+  // up (visibility intent is not persisted — the overlay comes back on close).
+  hiddenForSettings = true;
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
   settingsWin = new BrowserWindow({
     width: 392,
     height: 780,
@@ -180,6 +188,10 @@ function openSettings(): void {
   settingsWin.loadURL(settingsUrl());
   settingsWin.on('closed', () => {
     settingsWin = null;
+    hiddenForSettings = false;
+    // Restore the overlay per the user's visibility preference.
+    if (overlayVisible && overlayWin && !overlayWin.isDestroyed()) overlayWin.showInactive();
+    log('[app] settings closed → overlay restored');
   });
   log('[app] settings window opened');
 }
@@ -189,7 +201,7 @@ function openSettings(): void {
 function setOverlayVisible(visible: boolean): void {
   overlayVisible = visible;
   if (!overlayWin) return;
-  if (visible) {
+  if (visible && !hiddenForSettings) {
     overlayWin.showInactive();
   } else {
     overlayWin.hide();
@@ -331,15 +343,20 @@ async function boot(): Promise<void> {
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
+
+  // First run: open the settings window so the UI is immediately visible —
+  // hide the overlay panel from the start to avoid a flash behind settings.
+  const cfg = handle.store.get();
+  const firstRun = !cfg.desktop.seen;
+  if (firstRun) hiddenForSettings = true;
+
   createOverlay();
   createTray();
   applyAutostart();
   registerSoundHotkeys();
   handle.events.on('config', () => registerSoundHotkeys());
 
-  // First run: open the settings window so the UI is immediately visible.
-  const cfg = handle.store.get();
-  if (!cfg.desktop.seen) {
+  if (firstRun) {
     handle.store.update({ desktop: { seen: true } });
     setTimeout(() => openSettings(), 600);
     log('[app] first run → opening settings');

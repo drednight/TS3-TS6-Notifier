@@ -171,6 +171,17 @@ try {
     check('settings: classes legend rendered', doc.querySelectorAll('#classLegend .legend-item').length === 17, 'count=' + doc.querySelectorAll('#classLegend .legend-item').length);
     check('settings: classes tab wired', !!doc.getElementById('classesEnabled') && !!doc.getElementById('mapAddBtn') && !!doc.getElementById('mapKeyInput'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('addPresetsBtn') && !!doc.getElementById('soundUploadBtn'));
+    check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
+    dom.window.close();
+  }
+
+  /* ---- 3. bare settings window (desktop settings URL) ---- */
+  {
+    const { dom, errors } = await bootPage(`${BASE}/?open=settings&bare=1`);
+    const doc = dom.window.document;
+    check('bare: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
+    check('bare: overlay stage hidden', doc.body.classList.contains('bare') && doc.getElementById('stage').style.display === 'none');
+    check('bare: settings drawer open', doc.getElementById('settingsDrawer').hidden === false);
     dom.window.close();
   }
 } finally {

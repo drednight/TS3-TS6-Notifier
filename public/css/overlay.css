@@ -917,3 +917,31 @@ body.no-anim .chat-toast { animation: none; }
 .sound-row .vol { width: 74px; flex: none; }
 .sound-row .icon-btn { width: 28px; height: 28px; flex: none; }
 .hint.mono { font-family: var(--mono, monospace); font-size: 10px; }
+
+/* ===================== bare settings window ===================== */
+
+body.bare #stage { display: none; }
+body.bare #drawerBackdrop { background: #0c0e18; }
+body.bare #settingsDrawer {
+  top: 0; right: 0; bottom: 0; left: 0;
+  width: 100%; border-radius: 0; border: none;
+}
+
+/* ===================== sound guide card ===================== */
+
+.guide-card {
+  display: flex; flex-direction: column; gap: 9px;
+  margin: 6px 0 10px; padding: 13px 14px;
+  border-radius: 14px; background: rgba(255 255 255 / 0.05);
+  border: 1px solid rgba(255 255 255 / 0.09);
+}
+.guide-title { font-size: 13px; font-weight: 700; }
+.guide-status {
+  font-size: 11px; font-weight: 600; line-height: 1.45;
+  padding: 7px 10px; border-radius: 9px;
+}
+.guide-status.searching { background: rgba(255 255 255 / 0.07); color: #9aa3b8; }
+.guide-status.found { background: rgba(52 211 153 / 0.14); color: #34d399; }
+.guide-status.missing { background: rgba(251 191 36 / 0.14); color: #fbbf24; }
+.guide-mode { display: flex; flex-direction: column; gap: 3px; }
+.guide-mode-name { font-size: 12px; font-weight: 700; color: var(--accent); }
