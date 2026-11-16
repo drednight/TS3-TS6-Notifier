@@ -6,12 +6,21 @@
  * Run: npm run test:packaged
  */
 import { cp, mkdir, rm, writeFile, access } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = join(ROOT, '.tmp-pkg');
+
+// The bundle must exist — build it if the caller hasn't.
+try {
+  await access(join(ROOT, 'app', 'dist', 'main.cjs'));
+} catch {
+  console.log('bundle missing — running npm run bundle first');
+  const r = spawnSync('npm', ['run', 'bundle'], { cwd: ROOT, shell: true, stdio: 'inherit' });
+  if (r.status !== 0) process.exit(1);
+}
 
 const results = [];
 function check(name, cond, extra = '') {
