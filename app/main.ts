@@ -290,8 +290,8 @@ function registerSoundHotkeys(): void {
   if (!handle) return;
   try {
     globalShortcut.unregisterAll();
-    const { items, enabled } = handle.store.get().sounds;
-    if (!enabled) return;
+    const { items, enabled, hotkeysEnabled } = handle.store.get().sounds;
+    if (!enabled || !hotkeysEnabled) return;
     for (const item of items) {
       if (!item.hotkey) continue;
       const ok = globalShortcut.register(item.hotkey, () => {

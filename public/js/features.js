@@ -1,4 +1,4 @@
-/* Soundboard + group icons + display target (shared by overlay and settings). */
+/* Soundboard (dual output), group icons, display target, range painting. */
 (function () {
   const t = (key) => window.I18N.t(key);
 
@@ -8,93 +8,213 @@
   TSN.config = TSN.config || null;
   TSN.state = TSN.state || null;
 
-  /* ---------------- group icon (replaces avatar art) ---------------- */
+  /* ---------------- class group / group icon ---------------- */
 
-  /**
-   * URL of the user's server-group icon (TS3 reads it from the client cache),
-   * or null when no group icon is available.
-   */
-  function groupIconUrl(user) {
-    if (!user) return null;
-    const ids = String(user.serverGroups || '')
+  function userGroupIds(user) {
+    return String(user.serverGroups || '')
       .split(',')
       .map((x) => parseInt(x.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
+  }
+
+  /** Find the user's class group: a group whose NAME matches one of the classes. */
+  function classGroupFor(user) {
+    if (!user) return null;
     const groups = TSN.state?.groups || [];
+    const ids = userGroupIds(user);
+    const labels = [];
+    for (const key of window.TSIcons.CLASSES) {
+      labels.push([key, window.TSIcons.classLabel(key, 'ru').toLowerCase()]);
+      labels.push([key, window.TSIcons.classLabel(key, 'en').toLowerCase()]);
+    }
+    labels.sort((a, b) => b[1].length - a[1].length); // longest names first
     for (const gid of ids) {
       const g = groups.find((x) => x.id === gid);
-      if (g && g.iconId > 0) return `/api/tsicon/${g.iconId}`;
+      if (!g || !g.name) continue;
+      const name = String(g.name).toLowerCase();
+      const hit = labels.find(([, label]) => label && name.includes(label));
+      if (hit) return { group: g, classKey: hit[0] };
+    }
+    // Fallback: first group carrying an icon.
+    for (const gid of ids) {
+      const g = groups.find((x) => x.id === gid);
+      if (g && g.iconId > 0) return { group: g, classKey: null };
     }
     return null;
   }
 
-  /* ---------------- soundboard playback ---------------- */
+  /** URL of the class group's icon (from the TS client cache), or null. */
+  function groupIconUrl(user) {
+    const hit = classGroupFor(user);
+    return hit && hit.group.iconId > 0 ? `/api/tsicon/${hit.group.iconId}` : null;
+  }
 
-  let audioCtx = null;
-  let outputDevice = '';
-  let masterVolume = 0.8;
-  const buffers = new Map(); // file -> AudioBuffer
+  /** Class key for the SVG glyph fallback (Лучник, Прист, …). */
+  function classKeyFor(user) {
+    return classGroupFor(user)?.classKey ?? null;
+  }
 
-  async function ensureCtx() {
-    if (!audioCtx) {
+  /* ---------------- dual audio playback (local + channel) ---------------- */
+
+  const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta', 'OS', 'AltGraph', 'CapsLock'];
+
+  function makePlayer() {
+    return { ctx: null, sources: new Set(), buffers: new Map() };
+  }
+  const players = { local: makePlayer(), channel: makePlayer() };
+
+  async function playerCtx(kind) {
+    const p = players[kind];
+    if (!p.ctx) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return null;
-      audioCtx = new Ctx();
-      if (audioCtx.setSinkId && outputDevice) {
+      p.ctx = new Ctx();
+      const device = deviceFor(kind);
+      if (p.ctx.setSinkId && device) {
         try {
-          await audioCtx.setSinkId(outputDevice);
+          await p.ctx.setSinkId(device);
         } catch {
           /* device may be gone */
         }
       }
     }
-    if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
-    return audioCtx;
+    if (p.ctx.state === 'suspended') await p.ctx.resume().catch(() => {});
+    return p.ctx;
   }
 
-  async function setOutputDevice(id) {
-    outputDevice = id || '';
-    if (audioCtx && audioCtx.setSinkId) {
+  function deviceFor(kind) {
+    const s = TSN.config?.sounds ?? {};
+    return kind === 'local' ? s.localDevice || '' : s.outputDevice || '';
+  }
+
+  function volumeFor(kind) {
+    const s = TSN.config?.sounds ?? {};
+    return Number(kind === 'local' ? (s.localVolume ?? 0.8) : (s.volume ?? 0.8));
+  }
+
+  function enabledFor(kind) {
+    const s = TSN.config?.sounds ?? {};
+    return kind === 'local' ? s.localEnabled !== false : s.enabled !== false;
+  }
+
+  async function setOutputDevice(kind, id) {
+    const p = players[kind];
+    if (p.ctx && p.ctx.setSinkId) {
       try {
-        await audioCtx.setSinkId(outputDevice);
+        await p.ctx.setSinkId(id || '');
       } catch {
         /* ignore */
       }
     }
-    buffers.clear();
+    p.buffers.clear();
   }
 
-  async function playFile(file, volume = 1) {
+  async function playOn(kind, file, itemVolume = 1, itemId = null) {
     try {
-      const ctx = await ensureCtx();
+      const ctx = await playerCtx(kind);
+      const p = players[kind];
+      const vol = Math.max(0, Math.min(1, volumeFor(kind) * itemVolume));
       if (!ctx) {
         const el = new Audio(file);
-        el.volume = Math.min(1, masterVolume * volume);
-        if (el.setSinkId && outputDevice) await el.setSinkId(outputDevice).catch(() => {});
+        el.volume = vol;
+        el.__item = itemId;
+        const device = deviceFor(kind);
+        if (el.setSinkId && device) await el.setSinkId(device).catch(() => {});
         await el.play().catch(() => {});
         return;
       }
-      let buf = buffers.get(file);
+      let buf = p.buffers.get(file);
       if (!buf) {
         const res = await fetch(file);
         const arr = await res.arrayBuffer();
         buf = await ctx.decodeAudioData(arr);
-        buffers.set(file, buf);
+        p.buffers.set(file, buf);
       }
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.__item = itemId;
       const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, Math.min(1, masterVolume * volume));
+      gain.gain.value = vol;
       src.connect(gain).connect(ctx.destination);
+      p.sources.add(src);
+      src.onended = () => p.sources.delete(src);
       src.start();
     } catch (err) {
-      console.warn('[soundboard] play failed:', err);
+      console.warn(`[soundboard] ${kind} play failed:`, err);
     }
+  }
+
+  /** Play to every enabled target ("мне" and "в канал"). */
+  async function playFile(file, itemVolume = 1, itemId = null) {
+    const jobs = [];
+    if (enabledFor('local')) jobs.push(playOn('local', file, itemVolume, itemId));
+    if (enabledFor('channel')) jobs.push(playOn('channel', file, itemVolume, itemId));
+    await Promise.all(jobs);
+    updateStopButtons();
+  }
+
+  function isPlaying(id) {
+    for (const kind of ['local', 'channel']) {
+      for (const src of players[kind].sources) {
+        if (src.__item === id) return true;
+      }
+    }
+    return false;
+  }
+
+  function stopAll() {
+    for (const kind of ['local', 'channel']) {
+      const p = players[kind];
+      for (const src of p.sources) {
+        try {
+          src.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      p.sources.clear();
+    }
+    updateStopButtons();
+  }
+
+  function stopItem(id) {
+    for (const kind of ['local', 'channel']) {
+      const p = players[kind];
+      for (const src of [...p.sources]) {
+        if (src.__item === id) {
+          try {
+            src.stop();
+          } catch {
+            /* ignore */
+          }
+          p.sources.delete(src);
+        }
+      }
+    }
+    updateStopButtons();
   }
 
   function playById(id) {
     const item = (TSN.config?.sounds?.items || []).find((s) => s.id === id);
-    if (item && TSN.config?.sounds?.enabled !== false) void playFile(item.file, item.volume ?? 1);
+    if (!item) return;
+    void playFile(item.file, item.volume ?? 1, item.id);
+  }
+
+  /* ---------------- range fill painting ---------------- */
+
+  function paintRange(input) {
+    const min = Number(input.min || 0);
+    const max = Number(input.max || 100);
+    const val = Number(input.value);
+    const pct = max > min ? ((val - min) / (max - min)) * 100 : 0;
+    input.style.setProperty('--fill', `${pct}%`);
+  }
+
+  function wireRanges(root) {
+    (root || document).querySelectorAll('input[type="range"]').forEach((input) => {
+      paintRange(input);
+      input.addEventListener('input', () => paintRange(input));
+    });
   }
 
   /* ---------------- settings helpers ---------------- */
@@ -116,25 +236,31 @@
   function captureHotkey(btn, item) {
     btn.classList.add('capturing');
     btn.textContent = t('hotkeyCapture');
+    const cleanup = () => {
+      btn.classList.remove('capturing');
+      window.removeEventListener('keydown', onKey, true);
+    };
     const onKey = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (MODIFIERS.includes(e.key)) return; // keep waiting for the real key
+      if (e.key === 'Escape') {
+        cleanup();
+        renderSoundItems();
+        return;
+      }
       const parts = [];
       if (e.ctrlKey) parts.push('Ctrl');
       if (e.altKey) parts.push('Alt');
       if (e.shiftKey) parts.push('Shift');
       if (e.metaKey) parts.push('Super');
-      let key = e.code || e.key || '';
-      key = key.replace(/^Key/, '').replace(/^Digit/, '');
-      if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-        if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
-      }
-      if (parts.length && !['Ctrl', 'Alt', 'Shift', 'Super'].includes(parts[parts.length - 1])) {
+      let key = (e.code || e.key || '').replace(/^Key/, '').replace(/^Digit/, '');
+      if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
+      if (parts.length) {
         item.hotkey = parts.join('+');
         saveSounds();
       }
-      btn.classList.remove('capturing');
-      window.removeEventListener('keydown', onKey, true);
+      cleanup();
       renderSoundItems();
     };
     window.addEventListener('keydown', onKey, true);
@@ -143,6 +269,16 @@
   function saveSounds() {
     if (!TSN.config?.sounds) return;
     putConfig({ sounds: { items: TSN.config.sounds.items } });
+  }
+
+  function updateStopButtons() {
+    document.querySelectorAll('.sound-row').forEach((row) => {
+      const btn = row.querySelector('.sound-play');
+      if (!btn) return;
+      const active = isPlaying(row.dataset.id);
+      btn.textContent = active ? '■' : '▶';
+      btn.classList.toggle('playing', active);
+    });
   }
 
   function renderSoundItems() {
@@ -162,7 +298,8 @@
         (item) => `<div class="sound-row" data-id="${item.id}">
           <button class="icon-btn sound-play" title="${t('testPlay')}">▶</button>
           <input class="sound-name" value="${String(item.name).replace(/"/g, '&quot;')}" />
-          <button class="hotkey-btn" title="${t('hotkeyLabel')}">${item.hotkey || t('hotkeyNone')}</button>
+          <span class="hotkey-cap" title="${t('hotkeyLabel')}">${item.hotkey || t('hotkeyNone')}</span>
+          <button class="icon-btn hotkey-edit" title="${t('hotkeyLabel')}">⌨</button>
           <input class="vol" type="range" min="0" max="1" step="0.05" value="${item.volume ?? 1}" title="${t('soundsVolume')}" />
           <button class="icon-btn sound-del" title="${t('deleteSound')}">✕</button>
         </div>`,
@@ -171,18 +308,26 @@
     list.querySelectorAll('.sound-row').forEach((row) => {
       const item = items.find((x) => x.id === row.dataset.id);
       if (!item) return;
-      row.querySelector('.sound-play').addEventListener('click', () => void playFile(item.file, item.volume ?? 1));
+      row.querySelector('.sound-play').addEventListener('click', () => {
+        if (isPlaying(item.id)) {
+          stopItem(item.id);
+        } else {
+          void playFile(item.file, item.volume ?? 1, item.id);
+        }
+      });
       row.querySelector('.sound-name').addEventListener('change', (e) => {
         item.name = e.target.value.trim() || item.name;
         saveSounds();
       });
-      const hk = row.querySelector('.hotkey-btn');
-      hk.addEventListener('click', () => captureHotkey(hk, item));
+      const edit = row.querySelector('.hotkey-edit');
+      const cap = row.querySelector('.hotkey-cap');
+      edit.addEventListener('click', () => captureHotkey(edit, item, cap));
       row.querySelector('.vol').addEventListener('input', (e) => {
         item.volume = Number(e.target.value);
         saveSounds();
       });
       row.querySelector('.sound-del').addEventListener('click', () => {
+        stopItem(item.id);
         const file = String(item.file || '').replace(/^\/sounds\//, '');
         if (item.file && item.file.startsWith('/sounds/')) {
           fetch(`/api/sounds/${encodeURIComponent(file)}`, { method: 'DELETE' }).catch(() => {});
@@ -192,6 +337,8 @@
         renderSoundItems();
       });
     });
+    wireRanges(list);
+    updateStopButtons();
   }
 
   const PRESETS = [
@@ -225,17 +372,25 @@
   }
 
   async function refreshDevices() {
-    const sel = document.getElementById('audioOutput');
-    if (!sel) return;
+    const selects = [
+      document.getElementById('audioOutput'),
+      document.getElementById('audioOutputLocal'),
+    ].filter(Boolean);
+    if (!selects.length) return;
     try {
       const list = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audiooutput');
-      sel.innerHTML =
-        `<option value="">${t('outputDeviceDefault')}</option>` +
-        list
-          .filter((d) => d.deviceId && d.deviceId !== 'default')
-          .map((d) => `<option value="${d.deviceId}">${d.label || d.deviceId.slice(0, 12)}</option>`)
-          .join('');
-      sel.value = TSN.config?.sounds?.outputDevice || '';
+      for (const sel of selects) {
+        sel.innerHTML =
+          `<option value="">${t('outputDeviceDefault')}</option>` +
+          list
+            .filter((d) => d.deviceId && d.deviceId !== 'default')
+            .map((d) => `<option value="${d.deviceId}">${d.label || d.deviceId.slice(0, 12)}</option>`)
+            .join('');
+      }
+      const out = document.getElementById('audioOutput');
+      const loc = document.getElementById('audioOutputLocal');
+      if (out) out.value = TSN.config?.sounds?.outputDevice || '';
+      if (loc) loc.value = TSN.config?.sounds?.localDevice || '';
     } catch {
       /* no permission / unsupported */
     }
@@ -269,37 +424,55 @@
 
   function wireSoundTab() {
     const enabled = document.getElementById('soundsEnabled');
+    const localEnabled = document.getElementById('localEnabled');
     const volume = document.getElementById('soundVolume');
+    const localVolume = document.getElementById('localVolume');
     const outSel = document.getElementById('audioOutput');
+    const locSel = document.getElementById('audioOutputLocal');
+    const hotkeysToggle = document.getElementById('hotkeysEnabled');
+
     const sync = () => {
       const s = TSN.config?.sounds;
       if (!s) return;
-      if (enabled) enabled.checked = !!s.enabled;
+      if (enabled) enabled.checked = s.enabled !== false;
+      if (localEnabled) localEnabled.checked = s.localEnabled !== false;
       if (volume) volume.value = String(s.volume ?? 0.8);
+      if (localVolume) localVolume.value = String(s.localVolume ?? 0.8);
+      if (hotkeysToggle) hotkeysToggle.checked = s.hotkeysEnabled !== false;
+      document.querySelectorAll('[data-sound-range]').forEach(paintRange);
     };
-    if (enabled) {
-      enabled.addEventListener('change', () => {
-        TSN.config.sounds = { ...TSN.config.sounds, enabled: enabled.checked };
-        putConfig({ sounds: { enabled: enabled.checked } });
-      });
-    }
-    if (volume) {
-      volume.addEventListener('input', () => {
-        masterVolume = Number(volume.value);
-        TSN.config.sounds = { ...TSN.config.sounds, volume: masterVolume };
-        putConfig({ sounds: { volume: masterVolume } });
-      });
-    }
+
+    const patch = (fields) => {
+      if (!TSN.config?.sounds) return;
+      TSN.config.sounds = { ...TSN.config.sounds, ...fields };
+      putConfig({ sounds: fields });
+      sync();
+    };
+
+    if (enabled) enabled.addEventListener('change', () => patch({ enabled: enabled.checked }));
+    if (localEnabled) localEnabled.addEventListener('change', () => patch({ localEnabled: localEnabled.checked }));
+    if (volume) volume.addEventListener('input', () => patch({ volume: Number(volume.value) }));
+    if (localVolume) localVolume.addEventListener('input', () => patch({ localVolume: Number(localVolume.value) }));
+    if (hotkeysToggle) hotkeysToggle.addEventListener('change', () => patch({ hotkeysEnabled: hotkeysToggle.checked }));
     if (outSel) {
       outSel.addEventListener('change', () => {
-        TSN.config.sounds = { ...TSN.config.sounds, outputDevice: outSel.value };
-        putConfig({ sounds: { outputDevice: outSel.value } });
-        void setOutputDevice(outSel.value);
+        patch({ outputDevice: outSel.value });
+        void setOutputDevice('channel', outSel.value);
       });
     }
+    if (locSel) {
+      locSel.addEventListener('change', () => {
+        patch({ localDevice: locSel.value });
+        void setOutputDevice('local', locSel.value);
+      });
+    }
+
     const refresh = document.getElementById('refreshDevices');
     if (refresh) refresh.addEventListener('click', () => void refreshDevices());
     void detectLoopback();
+
+    const stopAllBtn = document.getElementById('stopAllBtn');
+    if (stopAllBtn) stopAllBtn.addEventListener('click', stopAll);
 
     const uploadBtn = document.getElementById('soundUploadBtn');
     const upload = document.getElementById('soundUpload');
@@ -356,11 +529,11 @@
     document.addEventListener('tsn:config', () => {
       sync();
       renderSoundItems();
-      masterVolume = Number(TSN.config?.sounds?.volume ?? 0.8);
-      void setOutputDevice(TSN.config?.sounds?.outputDevice || '');
+      void setOutputDevice('local', TSN.config?.sounds?.localDevice || '');
+      void setOutputDevice('channel', TSN.config?.sounds?.outputDevice || '');
     });
-    window.addEventListener('click', () => void ensureCtx(), { once: true });
-    window.addEventListener('keydown', () => void ensureCtx(), { once: true });
+    window.addEventListener('click', () => void playerCtx('local'), { once: true });
+    window.addEventListener('keydown', () => void playerCtx('local'), { once: true });
   }
 
   /* ---------------- display target (desktop, multi-monitor) ---------------- */
@@ -403,19 +576,24 @@
   function initFeatures() {
     wireSoundTab();
     void wireDisplaySelect();
-    masterVolume = Number(TSN.config?.sounds?.volume ?? 0.8);
-    outputDevice = TSN.config?.sounds?.outputDevice || '';
+    wireRanges(document);
     document.dispatchEvent(new CustomEvent('tsn:features-ready'));
   }
 
   TSN.groupIconUrl = groupIconUrl;
-  TSN.Soundboard = { playFile, playById, setOutputDevice, ensureCtx };
+  TSN.classKeyFor = classKeyFor;
+  TSN.Soundboard = {
+    playFile,
+    playById,
+    stopAll,
+    setOutputDevice: (id) => setOutputDevice('channel', id),
+    ensureCtx: () => playerCtx('local'),
+  };
   TSN.initFeatures = initFeatures;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initFeatures);
   } else {
-    // Defer so app.js has delivered the first config snapshot via WS when possible.
     setTimeout(initFeatures, 0);
   }
 })();

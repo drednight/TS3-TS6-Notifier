@@ -207,25 +207,42 @@
 
       <!-- ---------- Sound ---------- -->
       <section class="tab-panel" data-panel="sound">
-        <div class="switch-list">
-          <label class="switch-row"><span data-i18n="soundsEnabled"></span><input type="checkbox" id="soundsEnabled" /><i></i></label>
-        </div>
-
-        <div class="field">
-          <label data-i18n="soundsVolume"></label>
-          <input type="range" id="soundVolume" min="0" max="1" step="0.05" value="0.8" />
-        </div>
-
-        <div class="field">
-          <label data-i18n="outputDevice"></label>
-          <div class="btn-row">
-            <select id="audioOutput"><option value="" data-i18n="outputDeviceDefault"></option></select>
-            <button class="btn" id="refreshDevices" data-i18n="refreshDevices"></button>
+        <div class="card sound-target">
+          <div class="switch-list">
+            <label class="switch-row"><span data-i18n="localSound"></span><input type="checkbox" id="localEnabled" /><i></i></label>
           </div>
-          <div class="hint" data-i18n="outputDeviceHint"></div>
+          <div class="field">
+            <label data-i18n="outputDevice"></label>
+            <select id="audioOutputLocal"><option value="" data-i18n="outputDeviceDefault"></option></select>
+          </div>
+          <div class="field">
+            <label data-i18n="localVolume"></label>
+            <input type="range" id="localVolume" min="0" max="1" step="0.05" value="0.8" data-sound-range />
+          </div>
         </div>
 
-        <div class="card guide-card">
+        <div class="card sound-target">
+          <div class="switch-list">
+            <label class="switch-row"><span data-i18n="channelSound"></span><input type="checkbox" id="soundsEnabled" /><i></i></label>
+          </div>
+          <div class="field">
+            <label data-i18n="outputDevice"></label>
+            <div class="btn-row">
+              <select id="audioOutput"><option value="" data-i18n="outputDeviceDefault"></option></select>
+              <button class="btn" id="refreshDevices" data-i18n="refreshDevices"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label data-i18n="soundsVolume"></label>
+            <input type="range" id="soundVolume" min="0" max="1" step="0.05" value="0.8" data-sound-range />
+          </div>
+        </div>
+
+        <div class="switch-list">
+          <label class="switch-row"><span data-i18n="hotkeysEnabled"></span><input type="checkbox" id="hotkeysEnabled" /><i></i></label>
+        </div>
+
+        <div class="guide-card">
           <div class="guide-title" data-i18n="soundGuideTitle"></div>
           <div class="guide-status searching" id="loopbackStatus" data-i18n="loopbackSearching"></div>
           <div class="guide-mode">
@@ -247,6 +264,7 @@
         <div class="btn-row">
           <button class="btn" id="soundUploadBtn"><span class="btn-ico" data-ico="upload"></span><span data-i18n="uploadSound"></span></button>
           <button class="btn" id="addPresetsBtn" data-i18n="addPresets"></button>
+          <button class="btn" id="stopAllBtn" data-i18n="stopSound"></button>
           <button class="btn primary" id="openBoardBtn" data-i18n="openBoard"></button>
           <input type="file" id="soundUpload" accept="audio/*" hidden />
         </div>
@@ -301,7 +319,7 @@
       <!-- ---------- About ---------- -->
       <section class="tab-panel" data-panel="about">
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.0</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.1</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
 

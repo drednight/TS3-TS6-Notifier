@@ -111,10 +111,11 @@
   function updateRow(pack, u) {
     const a = Settings.appearance;
     const iconUrl = window.TSN && window.TSN.groupIconUrl ? window.TSN.groupIconUrl(u) : null;
+    const classKey = !iconUrl && window.TSN && window.TSN.classKeyFor ? window.TSN.classKeyFor(u) : null;
     const sig = [
       u.talking, u.whispering, u.inputMuted, u.outputMuted, u.away, u.awayMessage,
       u.channelCommander, u.prioritySpeaker, u.isSelf, u.nickname,
-      u.avatarHash, u.serverGroups, iconUrl, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
+      u.avatarHash, u.serverGroups, iconUrl, classKey, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
     ].join('|');
     if (sig === pack.sig) return;
     pack.sig = sig;
@@ -139,6 +140,9 @@
         pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
       };
       pack.ini.appendChild(img);
+    } else if (classKey) {
+      pack.avatar.style.background = 'rgba(255,255,255,0.06)';
+      pack.ini.innerHTML = window.TSIcons.classGlyph(classKey, a.compact ? 15 : 19);
     } else {
       pack.avatar.style.background = avatarGradient(u.avatarHash || u.id, u.nickname);
       pack.ini.textContent = initials(u.nickname);
@@ -254,7 +258,7 @@
     const a = Settings.appearance;
     const feed = $('chatFeed');
     if (!feed) return;
-    const show = a.showChat && !Settings.clean && state.status === 'live';
+    const show = a.showChat && state.status === 'live';
     feed.hidden = !show;
     if (!show) {
       for (const [, rec] of chatRows) {
@@ -284,7 +288,8 @@
         m.kind === 'private' ? `<span class="chat-kind">${t('chatPrivateBadge')}</span>` :
         m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` : '';
       el.innerHTML = `${badge}<span class="chat-nick"></span><span class="chat-text"></span>`;
-      el.querySelector('.chat-nick').textContent = m.nickname;
+      const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
+      el.querySelector('.chat-nick').textContent = isSelf ? `${m.nickname} (${t('you')})` : m.nickname;
       el.querySelector('.chat-text').textContent = m.text;
       feed.appendChild(el);
       const rec = { el, timer: 0 };

@@ -40,6 +40,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
   private clients = new Map<number, UserState>();
   private channels = new Map<number, ChannelInfo>();
   private ownByConnection = new Map<number, number>();
+  private groupInfos = new Map<number, ServerGroup>();
+  private tracedProps = false;
   private chat: ChatMessage[] = [];
   private chatSeq = 0;
   private connectionId = 0;
@@ -516,6 +518,7 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
     const channelInfos = asObj(conn['channelInfos']);
     if (channelInfos) this.parseChannelInfos(channelInfos);
+    this.ingestGroupInfos(conn);
 
     for (const raw of jArr(conn, 'clientInfos')) {
       const info = asObj(raw);
@@ -523,6 +526,14 @@ export class Ts6Connector extends EventEmitter implements Connector {
       const id = jInt(info, 'id');
       const props = asObj(info['properties']);
       if (id <= 0 || !props) continue;
+      if (!this.tracedProps) {
+        this.tracedProps = true;
+        console.log(`[ts6] client property keys: ${Object.keys(props).join(', ')}`);
+        for (const [k, v] of Object.entries(conn)) {
+          if (/group/i.test(k)) console.log(`[ts6] connection group field "${k}": ${JSON.stringify(v)?.slice(0, 400)}`);
+        }
+      }
+      this.ingestGroupInfos(props);
       const client = applyProperties(
         {
           ...makeUser(String(id), ''),
@@ -536,6 +547,36 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
     const me = this.clients.get(this.ownClientId);
     this.ownChannelId = me?.channelId ?? 0;
+  }
+
+  /**
+   * Collect group id/name/icon info when a TS6 build provides it
+   * (serverGroups as objects, serverGroupInfos arrays etc.). Best-effort —
+   * most builds expose only an id list per client.
+   */
+  private ingestGroupInfos(source: JObj): void {
+    for (const [key, value] of Object.entries(source)) {
+      if (!/group/i.test(key) || !Array.isArray(value)) continue;
+      for (const raw of value) {
+        if (typeof raw === 'number' || typeof raw === 'string') {
+          const id = parseInt(String(raw), 10);
+          if (Number.isFinite(id) && id > 0 && !this.groupInfos.has(id)) {
+            this.groupInfos.set(id, { id, name: '', iconId: 0 });
+          }
+          continue;
+        }
+        const obj = asObj(raw);
+        if (!obj) continue;
+        const id = jInt(obj, 'id') || jInt(obj, 'sgid') || jInt(obj, 'groupId');
+        if (id <= 0) continue;
+        const prev = this.groupInfos.get(id);
+        this.groupInfos.set(id, {
+          id,
+          name: jStr(obj, 'name') || prev?.name || '',
+          iconId: jInt(obj, 'iconId') || jInt(obj, 'iconid') || prev?.iconId || 0,
+        });
+      }
+    }
   }
 
   private parseChannelInfos(info: JObj): void {
@@ -588,7 +629,7 @@ export class Ts6Connector extends EventEmitter implements Connector {
   /* -------------------------------------------------- publish */
 
   private buildState(): OverlayState {
-    const groupMap = new Map<number, ServerGroup>();
+    const groupMap = new Map<number, ServerGroup>(this.groupInfos);
     for (const c of this.clients.values()) {
       for (const id of String(c.serverGroups ?? '')
         .split(',')

@@ -138,6 +138,21 @@ try {
     check('overlay: drawer hidden initially', doc.getElementById('settingsDrawer').hidden === true);
     check('overlay: whisper/chat containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed'));
     check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 17);
+
+    // v1.1.1: chat must be visible even in clean mode (the overlay window)
+    FakeWS.last._emit({
+      type: 'state',
+      state: { ...fakeState, chat: [{ id: 'c1', mode: 2, userId: 'u2', nickname: 'Мария', message: 'привет', at: Date.now() }] },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: chat shows in clean mode', doc.getElementById('chatFeed')?.children.length > 0, `msgs=${doc.getElementById('chatFeed')?.children.length}`);
+
+    // v1.1.1: class group icon selection — match the CLASS group by name
+    const TSN = dom.window.TSN;
+    TSN.state = { ...fakeState, groups: [{ id: 4, name: 'Служители света', iconId: 10 }, { id: 5, name: 'Лучники Ордена', iconId: 777 }] };
+    check('class icon: picks the class-named group icon', TSN.groupIconUrl({ serverGroups: '4,5' }) === '/api/tsicon/777', TSN.groupIconUrl({ serverGroups: '4,5' }));
+    check('class icon: classKeyFor matches by name', TSN.classKeyFor({ serverGroups: '4,5' }) === 'archer', String(TSN.classKeyFor({ serverGroups: '4,5' })));
+    check('class icon: falls back to icon group without class name', TSN.groupIconUrl({ serverGroups: '4' }) === '/api/tsicon/10');
     dom.window.close();
   }
 
@@ -170,6 +185,21 @@ try {
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('addPresetsBtn') && !!doc.getElementById('soundUploadBtn'));
     check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
+
+    // v1.1.1: dual output + hotkey toggle + visible hotkeys + range fill
+    check('settings: dual sound targets (мне/в канал)', !!doc.getElementById('localEnabled') && !!doc.getElementById('audioOutputLocal') && !!doc.getElementById('localVolume') && !!doc.getElementById('soundsEnabled'));
+    check('settings: hotkeys enable toggle', !!doc.getElementById('hotkeysEnabled'));
+    const rangeFill = doc.getElementById('localVolume')?.style.getPropertyValue('--fill');
+    check('settings: range fill painted (not stuck at 50%)', !!rangeFill && rangeFill !== '50%', `fill=${rangeFill}`);
+    // hotkey visible in the sound list
+    dom.window.TSN.config = {
+      ...fakeConfig,
+      sounds: { enabled: true, volume: 0.8, outputDevice: '', hotkeysEnabled: true, localEnabled: true, localVolume: 0.8, localDevice: '', items: [{ id: 's1', name: 'Монета', file: '/presets/coin.wav', hotkey: 'Ctrl+Alt+1', volume: 1 }] },
+    };
+    doc.dispatchEvent(new dom.window.CustomEvent('tsn:config'));
+    await new Promise((r) => setTimeout(r, 60));
+    const cap = doc.querySelector('.sound-row .hotkey-cap');
+    check('settings: sound row shows assigned hotkey', cap?.textContent.includes('Ctrl+Alt+1'), cap?.textContent);
     dom.window.close();
   }
 
@@ -189,6 +219,7 @@ try {
     const doc = dom.window.document;
     check('board: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
     check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('boardStop') && !!doc.getElementById('boardGear'));
+    check('board: mix sliders + hotkey toggle present', !!doc.getElementById('boardLocalVol') && !!doc.getElementById('boardChannelVol') && !!doc.getElementById('boardHotkeys'));
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
   }

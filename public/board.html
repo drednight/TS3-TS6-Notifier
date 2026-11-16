@@ -22,11 +22,21 @@
       <div class="empty-sub" data-i18n="boardEmptySub"></div>
     </div>
     <footer class="board-foot">
-      <span class="board-hint" data-i18n="boardHint"></span>
+      <div class="board-mix">
+        <span class="mix-label" data-i18n="localSound"></span>
+        <input type="range" id="boardLocalVol" min="0" max="1" step="0.05" value="0.8" />
+        <span class="mix-label" data-i18n="channelSound"></span>
+        <input type="range" id="boardChannelVol" min="0" max="1" step="0.05" value="0.8" />
+      </div>
+      <div class="board-foot-row">
+        <button id="boardHotkeys" class="hotkey-toggle" data-i18n="hotkeysEnabled"></button>
+        <span class="board-hint" data-i18n="boardHint"></span>
+      </div>
     </footer>
   </div>
   <script src="js/icons.js"></script>
   <script src="js/i18n.js"></script>
+  <script src="js/features.js"></script>
   <script src="js/board.js"></script>
 </body>
 </html>

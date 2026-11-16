@@ -148,11 +148,18 @@ export interface AppConfig {
   /** Soundboard. */
   sounds: {
     enabled: boolean;
+    /** Volume for the channel ("from me") playback. */
     volume: number;
-    /** Audio output device id ('' = default). */
+    /** Audio output device for channel playback ('' = default). */
     outputDevice: string;
     /** Show the board inside the overlay panel. */
     boardVisible: boolean;
+    /** Global hotkeys active (they can steal keystrokes while typing). */
+    hotkeysEnabled: boolean;
+    /** Local audition ("sound to me") — separate device/volume. */
+    localEnabled: boolean;
+    localVolume: number;
+    localDevice: string;
     items: SoundItem[];
   };
 }
@@ -207,7 +214,17 @@ export const DEFAULT_CONFIG: AppConfig = {
   appearance: DEFAULT_APPEARANCE,
   desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary' },
   classes: { enabled: false, map: {} },
-  sounds: { enabled: false, volume: 0.8, outputDevice: '', boardVisible: true, items: [] },
+  sounds: {
+    enabled: true,
+    volume: 0.8,
+    outputDevice: '',
+    boardVisible: true,
+    hotkeysEnabled: true,
+    localEnabled: true,
+    localVolume: 0.8,
+    localDevice: '',
+    items: [],
+  },
 };
 
 export function emptyState(source: SourceKind, status: StatusCode, detail = ''): OverlayState {

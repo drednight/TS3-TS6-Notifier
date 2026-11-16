@@ -1,8 +1,8 @@
 /* Standalone soundboard panel (RP-Soundboard style): grid of sound buttons.
  *
- * Click → play locally (through the configured output device).
+ * Click → play locally + to the channel (per the "мне" / "в канал" settings).
  * Hotkeys (desktop) broadcast {type:'sound'} — the overlay page plays those;
- * this panel just flashes the matching button.
+ * this panel flashes the matching button.
  */
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -10,77 +10,6 @@
 
   let config = null;
   let gridSig = null;
-
-  /* ---------------- audio ---------------- */
-
-  let audioCtx = null;
-  const activeSources = new Set();
-
-  async function ensureCtx() {
-    if (!audioCtx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return null;
-      audioCtx = new Ctx();
-      const device = config?.sounds?.outputDevice || '';
-      if (audioCtx.setSinkId && device) {
-        try {
-          await audioCtx.setSinkId(device);
-        } catch {
-          /* device may be gone */
-        }
-      }
-    }
-    if (audioCtx.state === 'suspended') await audioCtx.resume().catch(() => {});
-    return audioCtx;
-  }
-
-  const buffers = new Map();
-
-  async function playFile(file, volume = 1) {
-    try {
-      const ctx = await ensureCtx();
-      const master = Number(config?.sounds?.volume ?? 0.8);
-      if (!ctx) {
-        const el = new Audio(file);
-        el.volume = Math.min(1, master * volume);
-        if (el.setSinkId && config?.sounds?.outputDevice) {
-          await el.setSinkId(config.sounds.outputDevice).catch(() => {});
-        }
-        await el.play().catch(() => {});
-        return;
-      }
-      let buf = buffers.get(file);
-      if (!buf) {
-        const res = await fetch(file);
-        const arr = await res.arrayBuffer();
-        buf = await ctx.decodeAudioData(arr);
-        buffers.set(file, buf);
-      }
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, Math.min(1, master * volume));
-      src.connect(gain).connect(ctx.destination);
-      activeSources.add(src);
-      src.onended = () => activeSources.delete(src);
-      src.start();
-    } catch (err) {
-      console.warn('[board] play failed:', err);
-    }
-  }
-
-  function stopAll() {
-    for (const src of activeSources) {
-      try {
-        src.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
-    activeSources.clear();
-    if (audioCtx && audioCtx.state === 'running') audioCtx.suspend().catch(() => {});
-    if (audioCtx) audioCtx.resume().catch(() => {});
-  }
 
   /* ---------------- grid ---------------- */
 
@@ -107,20 +36,62 @@
         const item = (config?.sounds?.items || []).find((x) => x.id === btn.dataset.id);
         if (!item) return;
         flash(btn);
-        void playFile(item.file, item.volume ?? 1);
+        if (window.TSN?.Soundboard) void window.TSN.Soundboard.playFile(item.file, item.volume ?? 1);
       });
       btn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        stopAll();
+        window.TSN?.Soundboard?.stopAll();
       });
     });
   }
 
   function flash(btn) {
     btn.classList.remove('flash');
-    // reflow to restart the animation
     void btn.offsetWidth;
     btn.classList.add('flash');
+  }
+
+  /* ---------------- mix footer ---------------- */
+
+  function syncMix() {
+    const s = config?.sounds || {};
+    const lv = $('boardLocalVol');
+    const cv = $('boardChannelVol');
+    if (lv) {
+      lv.value = String(s.localVolume ?? 0.8);
+      lv.disabled = s.localEnabled === false;
+    }
+    if (cv) {
+      cv.value = String(s.volume ?? 0.8);
+      cv.disabled = s.enabled === false;
+    }
+    const hk = $('boardHotkeys');
+    if (hk) hk.classList.toggle('on', s.hotkeysEnabled !== false);
+  }
+
+  function putSounds(fields) {
+    if (!config?.sounds) return;
+    config.sounds = { ...config.sounds, ...fields };
+    fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sounds: fields }),
+    }).catch(() => {});
+    syncMix();
+  }
+
+  function wireMix() {
+    const lv = $('boardLocalVol');
+    const cv = $('boardChannelVol');
+    const hk = $('boardHotkeys');
+    if (lv) lv.addEventListener('input', () => putSounds({ localVolume: Number(lv.value) }));
+    if (cv) cv.addEventListener('input', () => putSounds({ volume: Number(cv.value) }));
+    if (hk) {
+      hk.addEventListener('click', () => {
+        const on = config?.sounds?.hotkeysEnabled !== false;
+        putSounds({ hotkeysEnabled: !on });
+      });
+    }
   }
 
   /* ---------------- wiring ---------------- */
@@ -139,6 +110,7 @@
         .join(', ') || '124, 108, 255',
     );
     renderGrid();
+    syncMix();
   }
 
   function connectWS() {
@@ -167,24 +139,17 @@
     window.I18N.applyDom?.();
     $('boardStop').innerHTML = window.TSIcons.icon('x', 15);
     $('boardGear').innerHTML = window.TSIcons.icon('gear', 15);
-    $('boardStop').addEventListener('click', stopAll);
+    $('boardStop').addEventListener('click', () => window.TSN?.Soundboard?.stopAll());
     $('boardGear').addEventListener('click', () => {
       window.open('/?open=settings&bare=1', '_blank', 'width=420,height=800');
     });
-    window.addEventListener('click', () => void ensureCtx(), { once: true });
-    window.addEventListener('keydown', () => void ensureCtx(), { once: true });
+    wireMix();
     renderGrid(); // show the empty state right away
     fetch('/api/config')
       .then((r) => r.json())
       .then(applyConfig)
       .catch(() => applyConfig(null));
     connectWS();
-    // language comes from config; re-apply labels after first config
-    const obs = () => {
-      const lang = config?.appearance?.language;
-      if (lang && lang !== 'auto') window.I18N.setLanguage(lang);
-    };
-    setInterval(obs, 2000);
   }
 
   if (document.readyState === 'loading') {

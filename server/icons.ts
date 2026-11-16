@@ -23,10 +23,13 @@ function ts3CacheRoots(): string[] {
   const roots: string[] = [];
   if (platform() === 'win32') {
     roots.push(join(process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming'), 'TS3Client', 'cache'));
+    // TS6/TS5 cache icons under LocalAppData\TeamSpeak\Cache\<profile>\<server>\
+    roots.push(join(process.env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local'), 'TeamSpeak', 'Cache'));
   } else {
     roots.push(join(homedir(), '.ts3client', 'cache'));
     roots.push(join(homedir(), 'snap', 'teamspeak3', 'current', '.ts3client', 'cache'));
     roots.push(join(homedir(), '.var', 'app', 'com.teamspeak.TeamSpeak3', 'config', 'ts3client', 'cache'));
+    roots.push(join(homedir(), '.cache', 'TeamSpeak'));
   }
   return roots.filter((r) => existsSync(r));
 }
@@ -34,35 +37,48 @@ function ts3CacheRoots(): string[] {
 function iconDirs(): string[] {
   if (cacheDirs) return cacheDirs;
   cacheDirs = [];
-  for (const root of ts3CacheRoots()) {
-    cacheDirs.push(join(root, 'icons'));
+  const addTree = (root: string, depth: number) => {
+    cacheDirs!.push(root);
+    if (depth <= 0) return;
     try {
       for (const entry of readdirSync(root)) {
-        const sub = join(root, entry, 'icons');
-        if (existsSync(sub)) cacheDirs.push(sub);
+        const sub = join(root, entry);
+        try {
+          if (statSync(sub).isDirectory()) addTree(sub, depth - 1);
+        } catch {
+          /* ignore */
+        }
       }
     } catch {
       /* ignore */
     }
+  };
+  for (const root of ts3CacheRoots()) {
+    // TS3: <cache>/icons + <cache>/<server>/icons ; TS6: <Cache>/<profile>/<server>/…
+    addTree(root, 3);
   }
   return cacheDirs;
 }
 
-/** Look up a cached server icon; returns PNG/WebP bytes or null. */
+/** Look up a cached server icon (TS3 or TS6 client cache); PNG/WebP/TGA. */
 export function findTs3Icon(iconId: number): IconFile | null {
   if (memoryCache.has(iconId)) return memoryCache.get(iconId) ?? null;
   let result: IconFile | null = null;
+  const names = [`icon_${iconId}`, String(iconId)];
   for (const dir of iconDirs()) {
-    const path = join(dir, `icon_${iconId}`);
-    try {
-      if (!statSync(path).isFile()) continue;
-      const raw = readFileSync(path);
-      if (raw.length < 12) continue;
-      result = classify(raw);
-      if (result) break;
-    } catch {
-      /* try next */
+    for (const name of names) {
+      const path = join(dir, name);
+      try {
+        if (!statSync(path).isFile()) continue;
+        const raw = readFileSync(path);
+        if (raw.length < 12) continue;
+        result = classify(raw);
+        if (result) break;
+      } catch {
+        /* try next */
+      }
     }
+    if (result) break;
   }
   memoryCache.set(iconId, result);
   return result;
