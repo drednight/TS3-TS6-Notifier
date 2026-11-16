@@ -98,7 +98,61 @@
     $('editVol').value = String(item.volume ?? 1);
     $('editStart').value = String(item.start ?? 0);
     $('editEnd').value = String(item.end ?? 0);
+    $('editKey').textContent = item.hotkey || '—';
     $('boardEdit').hidden = false;
+  }
+
+  const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta', 'OS', 'AltGraph', 'CapsLock'];
+
+  function captureEditHotkey() {
+    const btn = $('editKeySet');
+    const cap = $('editKey');
+    if (!editing) return;
+    btn.classList.add('capturing');
+    cap.classList.add('capturing');
+    cap.textContent = t('hotkeyCapture');
+    const banner = document.createElement('div');
+    banner.className = 'capture-banner';
+    banner.innerHTML = `<span class="capture-dot"></span><span>${t('hotkeyRecording')}</span>`;
+    document.body.appendChild(banner);
+    const cleanup = () => {
+      btn.classList.remove('capturing');
+      cap.classList.remove('capturing');
+      banner.remove();
+      window.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (MODIFIERS.includes(e.key)) {
+        const pending = [];
+        if (e.ctrlKey) pending.push('Ctrl');
+        if (e.altKey) pending.push('Alt');
+        if (e.shiftKey) pending.push('Shift');
+        if (e.metaKey) pending.push('Super');
+        cap.textContent = pending.length ? `${pending.join('+')}+…` : t('hotkeyCapture');
+        return;
+      }
+      if (e.key === 'Escape') {
+        cleanup();
+        cap.textContent = editing.hotkey || '—';
+        return;
+      }
+      const parts = [];
+      if (e.ctrlKey) parts.push('Ctrl');
+      if (e.altKey) parts.push('Alt');
+      if (e.shiftKey) parts.push('Shift');
+      if (e.metaKey) parts.push('Super');
+      let key = (e.code || e.key || '').replace(/^Key/, '').replace(/^Digit/, '');
+      if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
+      if (parts.length && editing) {
+        editing.hotkey = parts.join('+');
+        saveItems([...(config?.sounds?.items || [])]);
+      }
+      cleanup();
+      cap.textContent = editing?.hotkey || '—';
+    };
+    window.addEventListener('keydown', onKey, true);
   }
 
   function closeEdit() {
@@ -122,6 +176,13 @@
         setDeleteMode(false);
         setEditMode(true);
       }
+    });
+    $('editKeySet').addEventListener('click', captureEditHotkey);
+    $('editKeyClear').addEventListener('click', () => {
+      if (!editing) return;
+      editing.hotkey = '';
+      $('editKey').textContent = '—';
+      saveItems([...(config?.sounds?.items || [])]);
     });
     $('editCancel').addEventListener('click', closeEdit);
     $('editSave').addEventListener('click', () => {
@@ -173,6 +234,9 @@
   function wireUpload() {
     const upload = $('boardUpload');
     $('menuAdd').addEventListener('click', () => upload.click());
+    $('menuPresets').addEventListener('click', () => {
+      window.TSN?.addPresets?.();
+    });
     upload.addEventListener('change', async () => {
       const file = upload.files?.[0];
       if (!file || !config?.sounds) return;
@@ -298,6 +362,7 @@
 
   function applyConfig(cfg) {
     config = cfg;
+    if (window.TSN) window.TSN.config = cfg;
     document.body.dataset.theme = cfg?.appearance?.theme || 'glass';
     const accent = cfg?.appearance?.accent || '#7c6cff';
     document.documentElement.style.setProperty('--accent', accent);

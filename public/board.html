@@ -18,6 +18,7 @@
 
     <nav class="board-menu">
       <button id="menuAdd" class="board-menu-btn primary" data-i18n="boardMenuAdd"></button>
+      <button id="menuPresets" class="board-menu-btn" data-i18n="addPresets"></button>
       <button id="menuDelete" class="board-menu-btn danger" data-i18n="boardMenuDelete"></button>
       <button id="menuStop" class="board-menu-btn" data-i18n="stopSound"></button>
       <button id="menuHotkeys" class="board-menu-btn" data-i18n="hotkeysEnabled"></button>
@@ -71,6 +72,14 @@
       <div class="pop-row">
         <span class="pop-label" data-i18n="soundsVolume"></span>
         <input type="range" id="editVol" min="0" max="1" step="0.05" value="1" />
+      </div>
+      <div class="pop-row">
+        <span class="pop-label" data-i18n="hotkeyLabel"></span>
+        <div class="edit-key-row">
+          <span id="editKey" class="hotkey-cap"></span>
+          <button id="editKeySet" class="icon-btn" title="Hotkey">⌨</button>
+          <button id="editKeyClear" class="icon-btn" title="Clear">×</button>
+        </div>
       </div>
       <div class="pop-row">
         <span class="pop-label" data-i18n="soundStart"></span>

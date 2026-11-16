@@ -188,7 +188,8 @@ try {
     check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
-    check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('addPresetsBtn') && !!doc.getElementById('soundUploadBtn'));
+    check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
+    check('settings: adding sounds lives in the board menu only', !doc.getElementById('soundUploadBtn') && !doc.getElementById('addPresetsBtn'));
     check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
 
     // v1.1.1: dual output + hotkey toggle + visible hotkeys + range fill
@@ -205,6 +206,7 @@ try {
     await new Promise((r) => setTimeout(r, 60));
     const cap = doc.querySelector('.sound-row .hotkey-cap');
     check('settings: sound row shows assigned hotkey', cap?.textContent.includes('Ctrl+Alt+1'), cap?.textContent);
+    check('settings: hotkey can be cleared', !!doc.querySelector('.sound-row .hotkey-clear'));
     check('settings: sound item editor (group/trim)', !!doc.querySelector('.sound-item .sound-details') && !!doc.querySelector('.sound-item .d-group') && !!doc.querySelector('.sound-item .d-start') && !!doc.querySelector('.sound-item .d-end'));
 
     // TS6 group → class mapping UI
@@ -236,6 +238,8 @@ try {
     check('board: top menu present (add/delete/stop/hotkeys/audio)', !!doc.getElementById('menuAdd') && !!doc.getElementById('menuDelete') && !!doc.getElementById('menuStop') && !!doc.getElementById('menuHotkeys') && !!doc.getElementById('menuAudio'));
     check('board: audio popover with dual outputs', !!doc.getElementById('audioPop') && !!doc.getElementById('popLocalVol') && !!doc.getElementById('popChannelVol') && !!doc.getElementById('popLocalEnabled') && !!doc.getElementById('popChannelEnabled'));
     check('board: edit popover (group/trim/volume)', !!doc.getElementById('boardEdit') && !!doc.getElementById('editGroup') && !!doc.getElementById('editStart') && !!doc.getElementById('editEnd') && !!doc.getElementById('editVol'));
+    check('board: hotkey assignment in the edit popover', !!doc.getElementById('editKey') && !!doc.getElementById('editKeySet') && !!doc.getElementById('editKeyClear'));
+    check('board: presets add in the menu', !!doc.getElementById('menuPresets'));
     check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();

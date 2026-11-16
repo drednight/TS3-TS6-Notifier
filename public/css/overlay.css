@@ -1439,3 +1439,23 @@ body.no-anim .board-btn { transition: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.hotkey-clear {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+}
+.hotkey-clear:hover { color: var(--danger); }
+
+.edit-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.edit-key-row .hotkey-cap { flex: 1; }
+.edit-key-row .icon-btn.capturing {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: whisperPulse 1s ease-in-out infinite;
+}

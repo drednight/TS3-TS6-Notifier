@@ -215,9 +215,13 @@
     }
   }
 
-  /** Play to every enabled target ("мне" and "в канал"). Re-press restarts — never stacks. */
+  /**
+   * Play to every enabled target ("мне" and "в канал").
+   * Exclusive playback: starting any sound stops whatever is playing;
+   * re-pressing the same sound restarts it from the (trimmed) start.
+   */
   async function playFile(file, itemVolume = 1, itemId = null, trim = null) {
-    if (itemId) stopItem(itemId); // one sound = one track: restart instead of stacking
+    stopAll(); // one track at a time — a new sound (or a re-press) replaces it
     const jobs = [];
     if (enabledFor('local')) jobs.push(playOn('local', file, itemVolume, itemId, trim));
     if (enabledFor('channel')) jobs.push(playOn('channel', file, itemVolume, itemId, trim));
@@ -400,6 +404,7 @@
           <input class="sound-name" value="${String(item.name).replace(/"/g, '&quot;')}" />
           ${item.group ? `<span class="group-chip">${String(item.group).replace(/</g, '&lt;')}</span>` : ''}
           <span class="hotkey-cap" title="${t('hotkeyLabel')}">${item.hotkey || t('hotkeyNone')}</span>
+          ${item.hotkey ? `<button class="icon-btn hotkey-clear" title="${t('clearHotkey')}">×<span></span></button>` : ''}
           <button class="icon-btn hotkey-edit" title="${t('hotkeyLabel')}">⌨</button>
           <input class="vol" type="range" min="0" max="1" step="0.05" value="${item.volume ?? 1}" title="${t('soundsVolume')}" />
           <button class="icon-btn sound-edit" title="${t('editSound')}">✎</button>
@@ -463,6 +468,14 @@
       const edit = row.querySelector('.hotkey-edit');
       const cap = row.querySelector('.hotkey-cap');
       edit.addEventListener('click', () => captureHotkey(edit, item, cap));
+      const clearBtn = row.querySelector('.hotkey-clear');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          item.hotkey = '';
+          saveSounds();
+          renderSoundItems();
+        });
+      }
       row.querySelector('.vol').addEventListener('input', (e) => {
         item.volume = Number(e.target.value);
         saveSounds();
@@ -614,48 +627,15 @@
 
     const stopAllBtn = document.getElementById('stopAllBtn');
     if (stopAllBtn) stopAllBtn.addEventListener('click', stopAll);
-
-    const uploadBtn = document.getElementById('soundUploadBtn');
-    const upload = document.getElementById('soundUpload');
-    if (uploadBtn && upload) {
-      uploadBtn.addEventListener('click', () => upload.click());
-      upload.addEventListener('change', async () => {
-        const file = upload.files?.[0];
-        if (!file || !TSN.config?.sounds) return;
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const data = String(reader.result).split(',')[1] || '';
-          try {
-            const res = await fetch('/api/sounds', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: file.name, data }),
-            });
-            const out = await res.json();
-            if (out.ok && out.file) {
-              const items = [...(TSN.config.sounds.items || [])];
-              items.push({
-                id: `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-                name: out.name || file.name,
-                file: out.file,
-                hotkey: '',
-                volume: 1,
-              });
-              TSN.config.sounds.items = items;
-              saveSounds();
-              renderSoundItems();
-            }
-          } catch (err) {
-            console.warn('[soundboard] upload failed:', err);
-          }
-        };
-        reader.readAsDataURL(file);
-        upload.value = '';
+    const clearAllBtn = document.getElementById('clearHotkeysBtn');
+    if (clearAllBtn) {
+      clearAllBtn.addEventListener('click', () => {
+        for (const item of TSN.config?.sounds?.items || []) item.hotkey = '';
+        saveSounds();
+        renderSoundItems();
       });
     }
 
-    const presetsBtn = document.getElementById('addPresetsBtn');
-    if (presetsBtn) presetsBtn.addEventListener('click', addPresets);
 
     const openBoard = document.getElementById('openBoardBtn');
     if (openBoard) {
@@ -767,6 +747,8 @@
     setLocalDevice: (id) => setOutputDevice('local', id),
     ensureCtx: () => playerCtx('local'),
   };
+  TSN.captureHotkey = captureHotkey;
+  TSN.addPresets = addPresets;
   TSN.initFeatures = initFeatures;
 
   if (document.readyState === 'loading') {
