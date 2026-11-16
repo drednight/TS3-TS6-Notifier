@@ -292,7 +292,8 @@
       // to the live user list by id.
       const sender = (state.users || []).find((u) => String(u.id) === String(m.userId));
       const eventName = m.nickname && m.nickname !== '?' ? m.nickname : (m.senderName || m.name || '');
-      const nick = eventName || sender?.nickname || '';
+      // Server messages have no sender at all — label them instead of '…'
+      const nick = eventName || sender?.nickname || (m.kind === 'server' ? t('chatServerBadge') : '');
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
       el.querySelector('.chat-nick').textContent = nick
         ? `${nick}${isSelf ? ` (${t('you')})` : ''}:`

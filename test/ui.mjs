@@ -156,6 +156,14 @@ try {
     check('overlay: chat shows the sender nick', nick1.includes('Мария'), nick1);
     const nicks = [...doc.querySelectorAll('#chatFeed .chat-nick')].map((n) => n.textContent);
     check('overlay: empty nick resolved from the user list', nicks.some((n) => n.includes('Tester One')), JSON.stringify(nicks));
+    // server messages have no sender — must be labeled, not left blank
+    FakeWS.last._emit({
+      type: 'state',
+      state: { ...fakeState, chat: [{ id: 'c3', userId: '0', nickname: '', text: 'добро пожаловать', kind: 'server', at: Date.now() }] },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const serverNicks = [...doc.querySelectorAll('#chatFeed .chat-nick')].map((n) => n.textContent);
+    check('overlay: server message labeled', serverNicks.some((n) => /сервер|server/i.test(n)), JSON.stringify(serverNicks));
 
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;
