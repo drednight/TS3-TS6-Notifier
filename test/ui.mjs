@@ -165,6 +165,43 @@ try {
     const serverNicks = [...doc.querySelectorAll('#chatFeed .chat-nick')].map((n) => n.textContent);
     check('overlay: server message labeled', serverNicks.some((n) => /сервер|server/i.test(n)), JSON.stringify(serverNicks));
 
+    // v1.1.10: the unread badge is explicit — it clears only on "read" (click)
+    const badge = doc.getElementById('chatUnread');
+    badge.hidden = false;
+    badge.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    check('overlay: unread badge clears on click (mark as read)', badge.hidden === true);
+
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'c90', userId: 'u2', nickname: 'Мария', text: 'новое', kind: 'channel', at: Date.now() },
+          { id: 'c91', userId: 'u1', nickname: '', text: 'моё', kind: 'channel', at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: unread counts foreign messages only', badge.hidden === false && doc.getElementById('chatUnreadCount').textContent === '1', doc.getElementById('chatUnreadCount').textContent);
+
+    // hovering the badge must take mouse input so the click can land
+    // (the desktop overlay is click-through by default)
+    const hoverCalls = [];
+    dom.window.fetch = (input, init) => {
+      hoverCalls.push({ u: String(input), b: init?.body ? JSON.parse(init.body) : null });
+      return Promise.resolve(new dom.window.Response('{}'));
+    };
+    badge.dispatchEvent(new dom.window.MouseEvent('mouseenter'));
+    badge.dispatchEvent(new dom.window.MouseEvent('mouseleave'));
+    check('overlay: badge hover toggles overlay click-through', (() => {
+      return hoverCalls.length === 2 &&
+        hoverCalls[0].u.includes('/api/overlay/clickthrough') &&
+        hoverCalls[0].b?.ignore === false &&
+        hoverCalls[1].b?.ignore === true;
+    })(), JSON.stringify(hoverCalls));
+    badge.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    check('overlay: badge stays cleared after read', badge.hidden === true);
+
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;
     TSN.state = { ...fakeState, groups: [{ id: 4, name: 'Служители света', iconId: 10 }, { id: 5, name: 'Лучники Ордена', iconId: 777 }] };
@@ -176,6 +213,12 @@ try {
     check('class icon: Канглонг mapped', TSN.classIconFor({ serverGroups: '7' }) === '/img/classes/canglong.webp', String(TSN.classIconFor({ serverGroups: '7' })));
     TSN.state = { ...fakeState, groups: [{ id: 8, name: 'Духи Крови', iconId: 0 }] };
     check('class icon: Дух Крови matched loosely', TSN.classIconFor({ serverGroups: '8' }) === '/img/classes/dk.webp', String(TSN.classIconFor({ serverGroups: '8' })));
+    const savedCfg = TSN.config;
+    TSN.config = { ...fakeConfig, classes: { enabled: true, map: { '442': 'archer', '444': 'priest', '444': 'priest' } } };
+    TSN.state = { ...fakeState, groups: [] };
+    check('class icon: id map works without server-group list', TSN.classIconFor({ serverGroups: '442,999' }) === '/img/classes/luk.webp', String(TSN.classIconFor({ serverGroups: '442,999' })));
+    check('class icon: second mapped id works without groups', TSN.classKeyFor({ serverGroups: '444' }) === 'priest', String(TSN.classKeyFor({ serverGroups: '444' })));
+    TSN.config = savedCfg;
     dom.window.close();
   }
 
@@ -271,6 +314,16 @@ try {
     check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
+  }
+  /* ---- 5. overlay click-through endpoint (desktop hook contract) ---- */
+  {
+    const res = await fetch(`${BASE}/api/overlay/clickthrough`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ignore: true }),
+    });
+    const body = await res.json();
+    check('server: overlay clickthrough endpoint answers', res.ok && body.ok === true && body.applied === false, JSON.stringify(body));
   }
 } finally {
   handle.close();

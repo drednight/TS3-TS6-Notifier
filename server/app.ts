@@ -19,6 +19,8 @@ export interface AppOptions {
   log?: (msg: string) => void;
   /** Desktop only: enumerate connected displays for the overlay target setting. */
   listDisplays?: () => Array<{ id: string; label: string; primary: boolean }>;
+  /** Desktop only: temporarily take/release mouse input on the overlay window. */
+  setOverlayClickThrough?: (ignore: boolean) => void;
 }
 
 export interface AppHandle {
@@ -196,6 +198,22 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url.startsWith('/api/reconnect') && method === 'POST') {
       startConnector();
       json(res, 200, { ok: true });
+      return;
+    }
+
+    // Hovering/clicking overlay widgets (the unread badge) needs real mouse
+    // input even while the overlay is click-through — the desktop shell
+    // provides the hook; in the plain web version this is a no-op.
+    if (url.startsWith('/api/overlay/clickthrough') && method === 'POST') {
+      void readBody(req).then((body) => {
+        const ignore = !!(body as { ignore?: boolean })?.ignore;
+        try {
+          opts.setOverlayClickThrough?.(ignore);
+        } catch (err) {
+          log(`[server] clickthrough hook failed: ${err}`);
+        }
+        json(res, 200, { ok: true, applied: !!opts.setOverlayClickThrough });
+      });
       return;
     }
 

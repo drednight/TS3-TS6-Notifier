@@ -257,14 +257,36 @@
 
   const seenChatIds = new Set();
   let unreadCount = 0;
-  let unreadTimer = 0;
+  let badgeHovering = false;
+
+  function clickThroughWanted() {
+    return config?.desktop?.clickThrough !== false;
+  }
+
+  function setBadgeHover(on) {
+    // The overlay is click-through so games keep the mouse — take real input
+    // only while the cursor is on the badge, which makes the "mark as read"
+    // click possible; released again on leave.
+    if (badgeHovering === on) return;
+    badgeHovering = on;
+    try {
+      fetch('/api/overlay/clickthrough', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ignore: on ? false : clickThroughWanted() }),
+      }).catch(() => {});
+    } catch {
+      /* plain web / no fetch available — the badge stays informational */
+    }
+  }
 
   function clearUnread() {
+    // "Read" is explicit only: the badge never fades on its own, it clears
+    // when the user clicks it.
     unreadCount = 0;
-    if (unreadTimer) clearTimeout(unreadTimer);
-    unreadTimer = 0;
     const el = $('chatUnread');
     if (el) el.hidden = true;
+    setBadgeHover(false);
   }
 
   function trackUnread() {
@@ -285,8 +307,6 @@
     el.classList.remove('bump');
     void el.offsetWidth; // restart the pulse animation
     el.classList.add('bump');
-    if (unreadTimer) clearTimeout(unreadTimer);
-    unreadTimer = setTimeout(clearUnread, 45000);
   }
 
   function renderChat() {
@@ -478,6 +498,8 @@
   Settings.init();
   wireConnectionTab();
   $('chatUnread').addEventListener('click', clearUnread);
+  $('chatUnread').addEventListener('mouseenter', () => setBadgeHover(true));
+  $('chatUnread').addEventListener('mouseleave', () => setBadgeHover(false));
 
   if (Settings.clean) {
     $('settingsBtn').style.display = 'none';

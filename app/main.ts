@@ -486,6 +486,11 @@ async function boot(): Promise<void> {
         label: d.label || `${d.size.width}×${d.size.height}`,
         primary: d.id === screen.getPrimaryDisplay().id,
       })),
+    setOverlayClickThrough: (ignore: boolean) => {
+      if (overlayWin && !overlayWin.isDestroyed()) {
+        overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
+      }
+    },
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
