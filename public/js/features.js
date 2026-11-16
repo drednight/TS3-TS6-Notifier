@@ -10,6 +10,50 @@
 
   /* ---------------- class group / group icon ---------------- */
 
+  /**
+   * Class set: server-group-name label → bundled icon (the very icons the
+   * server uses). Matched against group names, e.g. «Лучники Ордена» → Лучник.
+   * No «Братья и сёстры» by request.
+   */
+  const CLASS_META = [
+    { key: 'kanglong', ru: 'Канглонг', en: 'Kanglong', icon: '/img/classes/canglong.webp' },
+    { key: 'blood', ru: 'Дух Крови', en: 'Blood Spirit', icon: '/img/classes/dk.webp' },
+    { key: 'werewolf', ru: 'Оборотень', en: 'Werewolf', icon: '/img/classes/tank.webp' },
+    { key: 'warrior', ru: 'Воин', en: 'Warrior', icon: '/img/classes/var.webp' },
+    { key: 'assassin', ru: 'Убийца', en: 'Assassin', icon: '/img/classes/sin.webp' },
+    { key: 'gunslinger', ru: 'Стрелок', en: 'Gunner', icon: '/img/classes/gan.webp' },
+    { key: 'guardian', ru: 'Страж', en: 'Guardian', icon: '/img/classes/sik.webp' },
+    { key: 'priest', ru: 'Прист', en: 'Priest', icon: '/img/classes/prist.webp' },
+    { key: 'archer', ru: 'Лучник', en: 'Archer', icon: '/img/classes/luk.webp' },
+    { key: 'paladin', ru: 'Паладин', en: 'Paladin', icon: '/img/classes/pal.webp' },
+    { key: 'shaman', ru: 'Шаман', en: 'Shaman', icon: '/img/classes/sham.webp' },
+    { key: 'bard', ru: 'Бард', en: 'Bard', icon: '/img/classes/bard.webp' },
+    { key: 'mystic', ru: 'Мистик', en: 'Mystic', icon: '/img/classes/mist.webp' },
+    { key: 'druid', ru: 'Друид', en: 'Druid', icon: '/img/classes/dru.webp' },
+    { key: 'monkey', ru: 'Обезьяна', en: 'Monkey', icon: '/img/classes/mk.webp' },
+    { key: 'mage', ru: 'Маг', en: 'Mage', icon: '/img/classes/mag.webp' },
+    { key: 'reaper', ru: 'Жнец', en: 'Reaper', icon: '/img/classes/kosa.webp' },
+    { key: 'ghost', ru: 'Призрак', en: 'Ghost', icon: '/img/classes/gost.webp' },
+  ];
+  TSN.CLASS_META = CLASS_META;
+
+  function normName(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/[^a-zа-я0-9 ]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** Word-prefix name match: «Духи Крови» matches «Дух Крови», «Лучники» → «Лучник». */
+  function nameMatches(name, label) {
+    const nWords = normName(name).split(' ').filter(Boolean);
+    const lWords = normName(label).split(' ').filter(Boolean);
+    if (!lWords.length || !nWords.length) return false;
+    return lWords.every((lw) => nWords.some((nw) => nw.startsWith(lw) || lw.startsWith(nw)));
+  }
+
   function userGroupIds(user) {
     return String(user.serverGroups || '')
       .split(',')
@@ -22,36 +66,42 @@
     if (!user) return null;
     const groups = TSN.state?.groups || [];
     const ids = userGroupIds(user);
+    // labels sorted longest-first so «Дух Крови» wins over shorter names
     const labels = [];
-    for (const key of window.TSIcons.CLASSES) {
-      labels.push([key, window.TSIcons.classLabel(key, 'ru').toLowerCase()]);
-      labels.push([key, window.TSIcons.classLabel(key, 'en').toLowerCase()]);
+    for (const meta of CLASS_META) {
+      labels.push([meta, meta.ru]);
+      labels.push([meta, meta.en]);
     }
-    labels.sort((a, b) => b[1].length - a[1].length); // longest names first
+    labels.sort((a, b) => b[1].length - a[1].length);
     for (const gid of ids) {
       const g = groups.find((x) => x.id === gid);
       if (!g || !g.name) continue;
-      const name = String(g.name).toLowerCase();
-      const hit = labels.find(([, label]) => label && name.includes(label));
-      if (hit) return { group: g, classKey: hit[0] };
+      const hit = labels.find(([, label]) => nameMatches(g.name, label));
+      if (hit) return { group: g, meta: hit[0] };
     }
     // Fallback: first group carrying an icon.
     for (const gid of ids) {
       const g = groups.find((x) => x.id === gid);
-      if (g && g.iconId > 0) return { group: g, classKey: null };
+      if (g && g.iconId > 0) return { group: g, meta: null };
     }
     return null;
   }
 
-  /** URL of the class group's icon (from the TS client cache), or null. */
+  /** Bundled class icon (the server's own icon art) or null. */
+  function classIconFor(user) {
+    return classGroupFor(user)?.meta?.icon ?? null;
+  }
+
+  /** Avatar icon URL: class icon first, then the group's server icon from the client cache. */
   function groupIconUrl(user) {
     const hit = classGroupFor(user);
+    if (hit?.meta) return hit.meta.icon;
     return hit && hit.group.iconId > 0 ? `/api/tsicon/${hit.group.iconId}` : null;
   }
 
   /** Class key for the SVG glyph fallback (Лучник, Прист, …). */
   function classKeyFor(user) {
-    return classGroupFor(user)?.classKey ?? null;
+    return classGroupFor(user)?.meta?.key ?? null;
   }
 
   /* ---------------- dual audio playback (local + channel) ---------------- */
@@ -233,17 +283,43 @@
 
   /* ---------------- sound tab ---------------- */
 
-  function captureHotkey(btn, item) {
+  function captureHotkey(btn, item, cap) {
     btn.classList.add('capturing');
-    btn.textContent = t('hotkeyCapture');
+    btn.textContent = '●';
+    const row = btn.closest('.sound-row');
+    if (row) row.classList.add('capturing');
+    if (cap) {
+      cap.classList.add('capturing');
+      cap.textContent = t('hotkeyCapture');
+    }
+    // Big obvious banner — the recording state must be unmissable.
+    const banner = document.createElement('div');
+    banner.className = 'capture-banner';
+    banner.innerHTML = `<span class="capture-dot"></span><span>${t('hotkeyRecording')}</span>`;
+    document.body.appendChild(banner);
+
     const cleanup = () => {
       btn.classList.remove('capturing');
+      if (row) row.classList.remove('capturing');
+      if (cap) cap.classList.remove('capturing');
+      banner.remove();
       window.removeEventListener('keydown', onKey, true);
     };
     const onKey = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (MODIFIERS.includes(e.key)) return; // keep waiting for the real key
+      if (MODIFIERS.includes(e.key)) {
+        // live preview of the pending combo, e.g. "Ctrl+Shift+…"
+        if (cap) {
+          const pending = [];
+          if (e.ctrlKey) pending.push('Ctrl');
+          if (e.altKey) pending.push('Alt');
+          if (e.shiftKey) pending.push('Shift');
+          if (e.metaKey) pending.push('Super');
+          cap.textContent = pending.length ? `${pending.join('+')}+…` : t('hotkeyCapture');
+        }
+        return; // keep waiting for the real key
+      }
       if (e.key === 'Escape') {
         cleanup();
         renderSoundItems();
@@ -581,12 +657,14 @@
   }
 
   TSN.groupIconUrl = groupIconUrl;
+  TSN.classIconFor = classIconFor;
   TSN.classKeyFor = classKeyFor;
   TSN.Soundboard = {
     playFile,
     playById,
     stopAll,
     setOutputDevice: (id) => setOutputDevice('channel', id),
+    setLocalDevice: (id) => setOutputDevice('local', id),
     ensureCtx: () => playerCtx('local'),
   };
   TSN.initFeatures = initFeatures;

@@ -25,6 +25,9 @@
     alert:
       '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+    keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10"/><line x1="10" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="14" y2="10"/><line x1="18" y1="10" x2="18" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/>',
+    speaker: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
     logo:
       '<rect x="3" y="3" width="18" height="18" rx="5" stroke="none" fill="rgba(255,255,255,0.28)"/><path d="M8 10v4"/><path d="M12 7v10"/><path d="M16 10v4"/>',
   };
@@ -87,6 +90,7 @@
     bard: 'M9 18V6l10-2v12M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM19 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z',
     blood: 'M12 2c4 6 7 9 7 13a7 7 0 0 1-14 0c0-4 3-7 7-13zM9 15c1-2 2-3.5 3-5 1 1.8 2 3 3 5',
     monkey: 'M12 4a6 6 0 0 0-6 6v2a6 6 0 0 0 12 0v-2a6 6 0 0 0-6-6zM6 9a2.5 2.5 0 1 0 0 5M18 9a2.5 2.5 0 1 1 0 5M9 11h.01M15 11h.01M10 14.5c1 1 1 2 2 2s1-1 2-2',
+    kanglong: 'M3 12c3-5 7-8 10-8 4 0 6 3 5 6-1 3-4 4-6 3M4 20c2-3 5-5 8-5 2 0 3 .6 4 1.6M17 15l3 3-3 3',
   };
   const LABELS = {
     archer: ['Лучник', 'Archer'], priest: ['Прист', 'Priest'], warrior: ['Воин', 'Warrior'],
@@ -94,7 +98,7 @@
     assassin: ['Убийца', 'Assassin'], shaman: ['Шаман', 'Shaman'], ghost: ['Призрак', 'Ghost'],
     reaper: ['Жнец', 'Reaper'], paladin: ['Паладин', 'Paladin'], gunslinger: ['Стрелок', 'Gunslinger'],
     guardian: ['Страж', 'Guardian'], mystic: ['Мистик', 'Mystic'], bard: ['Бард', 'Bard'],
-    blood: ['Дух крови', 'Blood Spirit'], monkey: ['Обезьяна', 'Monkey'],
+    blood: ['Дух крови', 'Blood Spirit'], monkey: ['Обезьяна', 'Monkey'], kanglong: ['Канглонг', 'Kanglong'],
   };
   function classGlyph(key, size) {
     const d = C[key];

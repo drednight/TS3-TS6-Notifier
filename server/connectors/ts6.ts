@@ -417,6 +417,14 @@ export class Ts6Connector extends EventEmitter implements Connector {
         return;
 
       default: {
+        // Server-group tables (name/icon per group) — collect best-effort so
+        // class icons can resolve in TS6 too, if a build exposes them.
+        if (/group/i.test(type)) {
+          this.ingestGroupInfos(payload);
+          this.ingestGroupInfos(asObj(payload['properties']) ?? {});
+          this.emitState();
+          return;
+        }
         // Chat messages (names differ between TS6 builds — extract defensively).
         if (/message|chat/i.test(type) && !/perm|status/i.test(type)) {
           this.handleChatEvent(payload);

@@ -137,7 +137,7 @@ try {
     check('overlay: settings button hidden in clean mode', doc.getElementById('settingsBtn').style.display === 'none');
     check('overlay: drawer hidden initially', doc.getElementById('settingsDrawer').hidden === true);
     check('overlay: whisper/chat containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed'));
-    check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 17);
+    check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 18);
 
     // v1.1.1: chat must be visible even in clean mode (the overlay window)
     FakeWS.last._emit({
@@ -150,9 +150,14 @@ try {
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;
     TSN.state = { ...fakeState, groups: [{ id: 4, name: 'Служители света', iconId: 10 }, { id: 5, name: 'Лучники Ордена', iconId: 777 }] };
-    check('class icon: picks the class-named group icon', TSN.groupIconUrl({ serverGroups: '4,5' }) === '/api/tsicon/777', TSN.groupIconUrl({ serverGroups: '4,5' }));
+    check('class icon: picks the bundled class icon by group name', TSN.groupIconUrl({ serverGroups: '4,5' }) === '/img/classes/luk.webp', TSN.groupIconUrl({ serverGroups: '4,5' }));
     check('class icon: classKeyFor matches by name', TSN.classKeyFor({ serverGroups: '4,5' }) === 'archer', String(TSN.classKeyFor({ serverGroups: '4,5' })));
-    check('class icon: falls back to icon group without class name', TSN.groupIconUrl({ serverGroups: '4' }) === '/api/tsicon/10');
+    check('class icon: falls back to server icon without class name', TSN.groupIconUrl({ serverGroups: '4' }) === '/api/tsicon/10');
+    check('class icon: classIconFor exposes the webp mapping', TSN.classIconFor({ serverGroups: '5' }) === '/img/classes/luk.webp');
+    TSN.state = { ...fakeState, groups: [{ id: 7, name: 'Канглонг', iconId: 0 }] };
+    check('class icon: Канглонг mapped', TSN.classIconFor({ serverGroups: '7' }) === '/img/classes/canglong.webp', String(TSN.classIconFor({ serverGroups: '7' })));
+    TSN.state = { ...fakeState, groups: [{ id: 8, name: 'Духи Крови', iconId: 0 }] };
+    check('class icon: Дух Крови matched loosely', TSN.classIconFor({ serverGroups: '8' }) === '/img/classes/dk.webp', String(TSN.classIconFor({ serverGroups: '8' })));
     dom.window.close();
   }
 
@@ -218,8 +223,10 @@ try {
     const { dom, errors } = await bootPage(`${BASE}/board.html`);
     const doc = dom.window.document;
     check('board: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
-    check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('boardStop') && !!doc.getElementById('boardGear'));
-    check('board: mix sliders + hotkey toggle present', !!doc.getElementById('boardLocalVol') && !!doc.getElementById('boardChannelVol') && !!doc.getElementById('boardHotkeys'));
+    check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('menuStop') && !!doc.getElementById('boardGear'));
+    check('board: top menu present (add/delete/stop/hotkeys/audio)', !!doc.getElementById('menuAdd') && !!doc.getElementById('menuDelete') && !!doc.getElementById('menuStop') && !!doc.getElementById('menuHotkeys') && !!doc.getElementById('menuAudio'));
+    check('board: audio popover with dual outputs', !!doc.getElementById('audioPop') && !!doc.getElementById('popLocalVol') && !!doc.getElementById('popChannelVol') && !!doc.getElementById('popLocalEnabled') && !!doc.getElementById('popChannelEnabled'));
+    check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
   }

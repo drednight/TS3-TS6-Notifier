@@ -1,37 +1,69 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TS3-TS6 Notifier — Soundboard</title>
-  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="css/overlay.css" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/overlay.css">
 </head>
 <body data-theme="glass" class="board-page">
   <div id="board">
     <header id="boardHeader">
       <div class="board-title" data-i18n="boardTitle"></div>
       <div class="board-actions">
-        <button id="boardStop" class="icon-btn" title="Stop" aria-label="Stop"></button>
         <button id="boardGear" class="icon-btn" title="Settings" aria-label="Settings"></button>
       </div>
     </header>
+
+    <nav class="board-menu">
+      <button id="menuAdd" class="board-menu-btn primary" data-i18n="boardMenuAdd"></button>
+      <button id="menuDelete" class="board-menu-btn danger" data-i18n="boardMenuDelete"></button>
+      <button id="menuStop" class="board-menu-btn" data-i18n="stopSound"></button>
+      <button id="menuHotkeys" class="board-menu-btn" data-i18n="hotkeysEnabled"></button>
+      <span class="board-menu-spacer"></span>
+      <button id="menuAudio" class="board-menu-btn" data-i18n="boardMenuAudio"></button>
+      <input type="file" id="boardUpload" accept="audio/*" hidden />
+    </nav>
+
+    <div id="audioPop" class="board-audio-pop" hidden>
+      <div class="pop-card">
+        <div class="pop-title">
+          <span data-i18n="localSound"></span>
+          <input type="checkbox" id="popLocalEnabled" />
+        </div>
+        <div class="pop-row">
+          <span class="pop-label" data-i18n="soundsVolume"></span>
+          <input type="range" id="popLocalVol" min="0" max="1" step="0.05" value="0.8" />
+        </div>
+        <div class="pop-row">
+          <span class="pop-label" data-i18n="outputDevice"></span>
+          <select id="popLocalDevice"><option value="" data-i18n="outputDeviceDefault"></option></select>
+        </div>
+      </div>
+      <div class="pop-card">
+        <div class="pop-title">
+          <span data-i18n="channelSound"></span>
+          <input type="checkbox" id="popChannelEnabled" />
+        </div>
+        <div class="pop-row">
+          <span class="pop-label" data-i18n="soundsVolume"></span>
+          <input type="range" id="popChannelVol" min="0" max="1" step="0.05" value="0.8" />
+        </div>
+        <div class="pop-row">
+          <span class="pop-label" data-i18n="outputDevice"></span>
+          <select id="popChannelDevice"><option value="" data-i18n="outputDeviceDefault"></option></select>
+        </div>
+      </div>
+    </div>
+
     <main id="boardGrid" class="board-grid"></main>
     <div id="boardEmpty" class="empty-state" hidden>
       <div class="empty-title" data-i18n="soundsEmpty"></div>
       <div class="empty-sub" data-i18n="boardEmptySub"></div>
     </div>
     <footer class="board-foot">
-      <div class="board-mix">
-        <span class="mix-label" data-i18n="localSound"></span>
-        <input type="range" id="boardLocalVol" min="0" max="1" step="0.05" value="0.8" />
-        <span class="mix-label" data-i18n="channelSound"></span>
-        <input type="range" id="boardChannelVol" min="0" max="1" step="0.05" value="0.8" />
-      </div>
-      <div class="board-foot-row">
-        <button id="boardHotkeys" class="hotkey-toggle" data-i18n="hotkeysEnabled"></button>
-        <span class="board-hint" data-i18n="boardHint"></span>
-      </div>
+      <span class="board-hint" data-i18n="boardHint"></span>
     </footer>
   </div>
   <script src="js/icons.js"></script>
