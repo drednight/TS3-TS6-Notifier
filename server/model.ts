@@ -219,7 +219,30 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
   desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary' },
-  classes: { enabled: false, map: {} },
+  classes: {
+    enabled: false,
+    // Default group-id → class mapping (the user's server). Override in
+    // settings → «Подключение» → «Группы сервера» ('none' unmaps an id).
+    map: {
+      '442': 'archer',
+      '444': 'priest',
+      '445': 'warrior',
+      '446': 'mage',
+      '447': 'werewolf',
+      '448': 'druid',
+      '449': 'assassin',
+      '450': 'shaman',
+      '451': 'ghost',
+      '452': 'reaper',
+      '453': 'paladin',
+      '454': 'gunslinger',
+      '455': 'guardian',
+      '456': 'mystic',
+      '502': 'bard',
+      '503': 'blood',
+      '506': 'monkey',
+    },
+  },
   sounds: {
     enabled: true,
     volume: 0.8,

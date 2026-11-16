@@ -142,10 +142,20 @@ try {
     // v1.1.1: chat must be visible even in clean mode (the overlay window)
     FakeWS.last._emit({
       type: 'state',
-      state: { ...fakeState, chat: [{ id: 'c1', mode: 2, userId: 'u2', nickname: 'Мария', message: 'привет', at: Date.now() }] },
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'c1', mode: 2, userId: 'u2', nickname: 'Мария', text: 'привет', kind: 'channel', at: Date.now() },
+          { id: 'c2', mode: 2, userId: 'u1', nickname: '', text: 'своё сообщение', kind: 'channel', at: Date.now() },
+        ],
+      },
     });
     await new Promise((r) => setTimeout(r, 60));
     check('overlay: chat shows in clean mode', doc.getElementById('chatFeed')?.children.length > 0, `msgs=${doc.getElementById('chatFeed')?.children.length}`);
+    const nick1 = doc.querySelector('#chatFeed .chat-toast .chat-nick')?.textContent || '';
+    check('overlay: chat shows the sender nick', nick1.includes('Мария'), nick1);
+    const nicks = [...doc.querySelectorAll('#chatFeed .chat-nick')].map((n) => n.textContent);
+    check('overlay: empty nick resolved from the user list', nicks.some((n) => n.includes('Tester One')), JSON.stringify(nicks));
 
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;

@@ -288,8 +288,14 @@
         m.kind === 'private' ? `<span class="chat-kind">${t('chatPrivateBadge')}</span>` :
         m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` : '';
       el.innerHTML = `${badge}<span class="chat-nick"></span><span class="chat-text"></span>`;
+      // Resolve the sender's nick robustly: the event may omit it — fall back
+      // to the live user list by id.
+      const sender = (state.users || []).find((u) => String(u.id) === String(m.userId));
+      const nick = (m.nickname && m.nickname !== '?') ? m.nickname : (sender?.nickname || '');
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
-      el.querySelector('.chat-nick').textContent = isSelf ? `${m.nickname} (${t('you')})` : m.nickname;
+      el.querySelector('.chat-nick').textContent = nick
+        ? `${nick}${isSelf ? ` (${t('you')})` : ''}:`
+        : '…:';
       el.querySelector('.chat-text').textContent = m.text;
       feed.appendChild(el);
       const rec = { el, timer: 0 };
