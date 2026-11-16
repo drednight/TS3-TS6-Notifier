@@ -435,32 +435,38 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   private handleChatEvent(payload: JObj): void {
-    // The event shape differs between TS6 builds — scan every nested object
-    // for known field names instead of trusting one fixed path.
-    const pools: JObj[] = [payload];
-    for (const key of ['message', 'properties', 'data', 'sender', 'author', 'chat']) {
-      const obj = asObj(payload[key]);
-      if (obj) {
-        pools.push(obj);
-        for (const key2 of ['properties', 'data', 'message']) {
-          const deep = asObj(obj[key2]);
-          if (deep) pools.push(deep);
-        }
+    // The event shape differs between TS6 builds — walk every nested object
+    // and search known field names anywhere. Generic keys (id/name) are only
+    // trusted inside sender/author objects: a message's own `id` must never
+    // be mistaken for the sender's client id.
+    const pools: { obj: JObj; senderish: boolean }[] = [{ obj: payload, senderish: false }];
+    const walk = (obj: JObj, senderish: boolean, depth: number): void => {
+      if (depth > 3) return;
+      for (const [key, value] of Object.entries(obj)) {
+        if (!value || typeof value !== 'object') continue;
+        const child = asObj(value as JObj);
+        if (!child || pools.some((x) => x.obj === child)) continue;
+        const childSenderish = senderish || /sender|author|from|invoker/i.test(key);
+        pools.push({ obj: child, senderish: childSenderish });
+        walk(child, childSenderish, depth + 1);
       }
-    }
-    const pickStr = (keys: string[]): string => {
-      for (const pool of pools) {
-        for (const k of keys) {
-          const v = pool[k];
+    };
+    walk(payload, false, 0);
+    const pickStr = (keys: string[], senderOnly = false): string => {
+      for (const k of keys) {
+        for (const p of pools) {
+          if (senderOnly && !p.senderish) continue;
+          const v = p.obj[k];
           if (typeof v === 'string' && v.trim()) return v;
         }
       }
       return '';
     };
-    const pickInt = (keys: string[]): number => {
-      for (const pool of pools) {
-        for (const k of keys) {
-          const v = pool[k];
+    const pickInt = (keys: string[], senderOnly = false): number => {
+      for (const k of keys) {
+        for (const p of pools) {
+          if (senderOnly && !p.senderish) continue;
+          const v = p.obj[k];
           const n = typeof v === 'number' ? v : typeof v === 'string' ? parseInt(v, 10) : NaN;
           if (Number.isFinite(n) && n > 0) return n;
         }
@@ -469,8 +475,12 @@ export class Ts6Connector extends EventEmitter implements Connector {
     };
     const body = pickStr(['msg', 'message', 'text', 'content', 'body', 'richtext']);
     if (!body) return;
-    const uid = pickInt(['invokerId', 'invokerid', 'senderId', 'senderid', 'clientId', 'clid', 'userId', 'userid', 'id', 'from']);
+    // sender id: unambiguous keys everywhere first; generic `id` only in sender objects
+    const uid =
+      pickInt(['invokerId', 'invokerid', 'senderId', 'senderid', 'clientId', 'clid', 'userId', 'userid']) ||
+      pickInt(['id', 'from'], true);
     const userId = String(uid);
+    // sender name: same strategy
     const nickname =
       pickStr([
         'invokerName',
@@ -482,8 +492,11 @@ export class Ts6Connector extends EventEmitter implements Connector {
         'nickname',
         'userName',
         'username',
-        'name',
+        'sender',
+        'author',
+        'from',
       ]) ||
+      pickStr(['name', 'nick'], true) ||
       this.clients.get(uid)?.nickname ||
       '';
     const mode = pickInt(['targetMode', 'targetmode']);
@@ -496,7 +509,19 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
-    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: Date.now() });
+    const now = Date.now();
+    const last = this.chat[this.chat.length - 1];
+    // Own-message echo arrives twice (second copy loses the target mode) —
+    // merge instead of showing a twin.
+    if (last && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
+      const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
+      const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
+      const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;
+      this.chat[this.chat.length - 1] = { ...last, kind, nickname };
+      this.emitState();
+      return;
+    }
+    this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: now });
     if (this.chat.length > 20) this.chat = this.chat.slice(-20);
     this.emitState();
   }

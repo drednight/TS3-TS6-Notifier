@@ -75,8 +75,9 @@
     labels.sort((a, b) => b[1].length - a[1].length);
     const map = TSN.config?.classes?.map || {};
     for (const gid of ids) {
-      const g = groups.find((x) => x.id === gid);
-      if (!g) continue;
+      // The group list may be empty (TS6 never sends names; TS3 may deny
+      // servergrouplist) — synthesise a stub so the id → class map still works.
+      const g = groups.find((x) => x.id === gid) ?? { id: gid, name: '', iconId: 0 };
       // 1) manual mapping (group id → class) — needed for TS6 (no names there)
       const mapped = map[String(g.id)];
       if (mapped && mapped !== 'none') {

@@ -138,6 +138,8 @@ export interface AppConfig {
     seen: boolean;
     /** Display for the overlay window: 'primary' or an Electron display id. */
     display: string;
+    /** Relaunch as administrator (Windows only, UAC prompt at startup). */
+    elevate: boolean;
   };
   /** Game class icons: map TS server groups / icon ids to class keys. */
   classes: {
@@ -218,7 +220,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
-  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary' },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true },
   classes: {
     enabled: false,
     // Default group-id → class mapping (the user's server). Override in

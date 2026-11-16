@@ -134,6 +134,9 @@ ts6Wss.on('connection', (ws) => {
         // chat messages (defensive name parsing)
         ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, msg: 'privet', invokerId: 101, invokerName: 'Elena', targetMode: 2 } }));
         ws.send(JSON.stringify({ type: 'proto.ServerEvent', payload: { connectionId: 7, chatMessage: { text: 'wrapped hi', senderName: 'Ruslan', senderId: 100, targetMode: 3 } } }));
+        // sender as a nested object with a decoy message `id` — the sender id must win
+        ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, message: { id: 205, sender: { id: 101, name: 'Sigma' }, text: 'from sender object' } } }));
+        ws.send(JSON.stringify({ type: 'message', payload: { connectionId: 7, message: { id: 206, senderId: 100, text: 'decoy id beaten' } } }));
         ws.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, newChannelId: 5, oldChannelId: 9 } }));
         ws.send(JSON.stringify({ type: 'clientSelfPropertyUpdated', payload: { connectionId: 7, flag: 'inputMuted', newValue: true } }));
         ws.send(JSON.stringify({ type: 'clientPropertiesUpdated', payload: { connectionId: 7, clientId: 100, properties: { nickname: 'Ruslan2' } } }));
@@ -194,6 +197,29 @@ check('ts3: chat message captured', (() => {
 })(), JSON.stringify(last3b?.chat));
 check('ts3: whisper detected from targetmode', last3b?.users.find((u) => u.nickname === 'Борис')?.whispering === true);
 
+/* duplicate delivery (own-message echo) must collapse into one entry */
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
+await new Promise((r) => setTimeout(r, 400));
+const last3c = ts3States[ts3States.length - 1];
+check('ts3: duplicate delivery merged into one message', (() => {
+  const m = (last3c?.chat || []).filter((x) => x.text === 'dup test');
+  return m.length === 1 && m[0].nickname === 'Vasya' && m[0].kind === 'server';
+})(), JSON.stringify(last3c?.chat));
+
+/* chat from another server tab must not be dropped */
+globalThis.ts3LastSocket?.write('notifytextmessage targetmode=2 msg=other\\stab schandlerid=2 invokerid=4 invokername=Oleg\n');
+await new Promise((r) => setTimeout(r, 400));
+const last3d = ts3States[ts3States.length - 1];
+check('ts3: chat from another server tab accepted', (last3d?.chat || []).some((x) => x.text === 'other tab' && x.nickname === 'Oleg'),
+  JSON.stringify(last3d?.chat));
+
+/* GUI server-tab switch must move the tracked handler */
+globalThis.ts3LastSocket?.write('notifycurrentserverconnectionchanged schandlerid=2\n');
+await new Promise((r) => setTimeout(r, 800));
+check('ts3: follows notifycurrentserverconnectionchanged', c3.activeSchandlerId === 2, `active=${c3.activeSchandlerId}`);
+check('ts3: still live after tab switch', ts3States[ts3States.length - 1]?.status === 'live', ts3States[ts3States.length - 1]?.status);
+
 /* ---- TS6 assertions ---- */
 const last6 = ts6States[ts6States.length - 1];
 check('ts6: reached live state', last6?.status === 'live', `status=${last6?.status}`);
@@ -218,6 +244,14 @@ check('ts6: chat message parsed', (() => {
 check('ts6: wrapped chat parsed', (() => {
   const m = last6?.chat || [];
   return m.some((x) => x.text === 'wrapped hi' && x.nickname === 'Ruslan' && x.kind === 'server');
+})(), JSON.stringify(last6?.chat));
+check('ts6: sender-object chat resolved (message id must not leak)', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'from sender object' && x.nickname === 'Sigma' && x.userId === '101');
+})(), JSON.stringify(last6?.chat));
+check('ts6: senderId beats generic message id', (() => {
+  const m = last6?.chat || [];
+  return m.some((x) => x.text === 'decoy id beaten' && x.userId === '100');
 })(), JSON.stringify(last6?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
 

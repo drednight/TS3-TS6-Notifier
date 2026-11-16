@@ -3,6 +3,9 @@
   const RU = {
     // overlay
     noChannel: 'Нет подключения',
+    elevateLabel: 'Запуск от имени администратора',
+    elevateHint: 'Приложение перезапустится с правами администратора (запрос UAC) при следующем запуске. Нужно для стабильного подключения к TS3.',
+    unreadTitle: 'Непрочитанные сообщения',
     whisperSection: 'Шёпот',
     chatPrivateBadge: 'ЛС',
     chatServerBadge: 'Сервер',
@@ -166,6 +169,9 @@
 
   const EN = {
     noChannel: 'Not connected',
+    elevateLabel: 'Run as administrator',
+    elevateHint: 'The app relaunches with administrator rights (UAC prompt) on next start. Helps with stable TS3 connectivity.',
+    unreadTitle: 'Unread messages',
     whisperSection: 'Whisper',
     chatPrivateBadge: 'PM',
     chatServerBadge: 'Server',

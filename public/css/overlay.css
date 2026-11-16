@@ -34,7 +34,7 @@
   --bg-in: rgba(127, 135, 158, 0.16);
   --border: rgba(127, 135, 158, 0.3);
 
-  --font: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
@@ -926,7 +926,42 @@ body.no-anim .whisper-list .row { animation: none; }
 }
 .chat-toast.fading { animation: chatOut .6s ease both; }
 .chat-toast .chat-nick { font-weight: 700; color: var(--accent); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-toast .chat-text { opacity: .92; }
+.chat-toast .chat-text { opacity: .92; font-family: inherit; }
+.chat-toast .chat-nick, .chat-toast .chat-text { font-variant-emoji: emoji; }
+
+/* unread-message badge */
+.chat-unread {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .35);
+  z-index: 30;
+  cursor: pointer;
+}
+.chat-unread .cu-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+}
+.chat-unread.bump {
+  animation: unread-bump .45s ease;
+}
+@keyframes unread-bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
 .chat-toast .chat-kind {
   flex: none; font-size: 8.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
   padding: 1px 5px; border-radius: 6px; background: rgba(var(--accent-rgb), .18); color: var(--accent);

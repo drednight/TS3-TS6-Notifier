@@ -5,7 +5,8 @@
  * tray icon and a separate settings window. The embedded HTTP/WS server and
  * TeamSpeak connectors are the exact same code as the standalone web version.
  */
-import { appendFileSync, mkdirSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   app,
@@ -62,6 +63,56 @@ let tray: Tray | null = null;
 let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
+
+/* ---------------- elevation (Windows) ---------------- */
+
+const ELEVATED_ARG = '--elevated';
+
+/**
+ * "Run as administrator" (desktop.elevate, default ON): before grabbing the
+ * single-instance lock, relaunch ourselves through the UAC runas verb. The
+ * elevated copy carries --elevated so it never loops. If the user cancels the
+ * UAC prompt or elevation fails, we simply keep running unprivileged.
+ */
+function tryRelaunchElevated(): boolean {
+  if (!app.isPackaged || process.platform !== 'win32') return false;
+  if (process.argv.includes(ELEVATED_ARG)) return false;
+  try {
+    const raw = JSON.parse(readFileSync(join(DATA_DIR, 'config.json'), 'utf8')) as {
+      desktop?: { elevate?: boolean };
+    };
+    if (raw?.desktop?.elevate === false) return false;
+  } catch {
+    /* no config yet → the default (on) applies */
+  }
+  try {
+    // `net session` only succeeds with an elevated administrator token.
+    if (spawnSync('net', ['session'], { stdio: 'ignore', windowsHide: true }).status === 0) return false;
+  } catch {
+    return false;
+  }
+  try {
+    const exe = process.execPath.replace(/'/g, "''");
+    const res = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Start-Process -FilePath '${exe}' -ArgumentList @('${ELEVATED_ARG}') -Verb RunAs`,
+      ],
+      { stdio: 'ignore', windowsHide: true, timeout: 60000 },
+    );
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+if (tryRelaunchElevated()) {
+  // Exit BEFORE taking the single-instance lock so the elevated copy can grab it.
+  app.exit(0);
+}
 
 /* ---------------- single instance ---------------- */
 
@@ -435,6 +486,11 @@ async function boot(): Promise<void> {
         label: d.label || `${d.size.width}×${d.size.height}`,
         primary: d.id === screen.getPrimaryDisplay().id,
       })),
+    setOverlayClickThrough: (ignore: boolean) => {
+      if (overlayWin && !overlayWin.isDestroyed()) {
+        overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
+      }
+    },
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;

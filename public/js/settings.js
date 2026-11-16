@@ -335,7 +335,7 @@
       backdrop.hidden = true;
     };
     document.getElementById('settingsBtn').addEventListener('click', open);
-    document.getElementById('closeDrawer').addEventListener('click', close);
+    document.getElementById('closeDrawer')?.addEventListener('click', close);
     backdrop.addEventListener('click', close);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') close();
