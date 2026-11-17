@@ -136,14 +136,40 @@ fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
     }
 }
 
+/// Root folder holding `public/` + `data/`. TSN_ROOT wins; otherwise prefer
+/// the exe's own folder (installed to Program Files) and fall back to CWD
+/// (development runs).
+fn detect_root() -> PathBuf {
+    if let Ok(v) = std::env::var("TSN_ROOT") {
+        return PathBuf::from(v);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("public").is_dir() {
+                return dir.to_path_buf();
+            }
+        }
+    }
+    PathBuf::from(".")
+}
+
 fn main() {
     let port_env: u16 = std::env::var("PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(3000);
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
-    let root = PathBuf::from(std::env::var("TSN_ROOT").unwrap_or_else(|_| ".".into()));
+    let root = detect_root();
     let data_dir = root.join("data");
     let public_dir = root.join("public");
 
     let store = Arc::new(Mutex::new(ConfigStore::load(&data_dir)));
+
+    // Run-as-administrator (desktop.elevate, default ON): relaunch elevated.
+    // A declined UAC prompt keeps running un-elevated.
+    #[cfg(windows)]
+    {
+        let cfg = store.lock().unwrap().get().clone();
+        overlay::win32::maybe_elevate(&cfg);
+    }
+
     let handle_slot: Arc<Mutex<Handle>> = Arc::new(Mutex::new(Handle::Stub));
 
     let plugin_dll = root.join("dist").join("ts3plugin_tsn_win64.dll");

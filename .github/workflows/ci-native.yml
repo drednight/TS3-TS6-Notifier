@@ -1,9 +1,9 @@
 # Build + test the native Rust core on every push. CI validation only —
-# releases are built separately from tags.
+# releases are built separately from tags (no releases until approved).
 name: ci-native
 on:
   push:
-    paths: ['native/**', '.github/workflows/ci-native.yml', '.github/workflows/native-toolchain.yml']
+    paths: ['native/**', 'public/**', '.github/workflows/ci-native.yml', '.github/workflows/native-toolchain.yml']
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,3 +14,31 @@ jobs:
         working-directory: native
       - run: cargo test --locked
         working-directory: native
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Building AND testing on windows links the real win32 import libs —
+      # full compile validation of the overlay/settings/tray backends.
+      - run: cargo build --release --locked
+        working-directory: native
+      - run: cargo test --release --locked
+        working-directory: native
+      - run: pwsh native/tools/package-win.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsn-native-win64
+          path: dist-win/tsn-native-win64.zip
+      - name: Inno Setup installer (optional)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" native/installer/tsn-native.iss
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: tsn-native-setup
+          path: dist-win/TS3-TS6-Notifier-Setup.exe

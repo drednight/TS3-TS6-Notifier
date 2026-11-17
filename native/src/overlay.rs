@@ -371,7 +371,8 @@ impl Overlay {
 
         // input
         let events = host.pump();
-        let interactive_wanted = move_mode || self.dragging;
+        let click_through = self.app.store.lock().unwrap().get().desktop.click_through;
+        let interactive_wanted = move_mode || self.dragging || !click_through;
         host.set_interactive(interactive_wanted);
         for ev in events {
             match ev {
@@ -492,7 +493,7 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
 
 /// win32 backend — always compiled so it type-checks on every platform;
 /// the windows import libs are only linked when targeting windows.
-mod win32 {
+pub(crate) mod win32 {
     use super::*;
     use crate::render::Buf;
     use std::ffi::c_void;
@@ -636,6 +637,72 @@ mod win32 {
     }
 
     const HWND_MESSAGE: *mut c_void = -3isize as *mut c_void;
+
+    #[cfg_attr(windows, link(name = "kernel32"))]
+    extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn CloseHandle(h: *mut c_void) -> i32;
+        fn GetModuleFileNameW(h: *mut c_void, buf: *mut u16, size: u32) -> u32;
+    }
+
+    #[cfg_attr(windows, link(name = "advapi32"))]
+    extern "system" {
+        fn OpenProcessToken(proc: *mut c_void, access: u32, token: *mut *mut c_void) -> i32;
+        fn GetTokenInformation(token: *mut c_void, class: u32, info: *mut c_void, len: u32, out: *mut u32) -> i32;
+    }
+
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_ELEVATION_CLASS: u32 = 20;
+
+    /// True when the process already runs with administrator rights.
+    pub fn is_elevated() -> bool {
+        unsafe {
+            let mut token: *mut c_void = null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elev: u32 = 0;
+            let mut out: u32 = 0;
+            let ok = GetTokenInformation(
+                token,
+                TOKEN_ELEVATION_CLASS,
+                &mut elev as *mut u32 as *mut c_void,
+                4,
+                &mut out,
+            );
+            CloseHandle(token);
+            ok != 0 && elev != 0
+        }
+    }
+
+    /// Relaunch the current executable with the UAC "runas" verb.
+    pub fn relaunch_elevated() -> bool {
+        unsafe {
+            let mut buf = [0u16; 32768];
+            let n = GetModuleFileNameW(null_mut(), buf.as_mut_ptr(), buf.len() as u32);
+            if n == 0 {
+                return false;
+            }
+            let exe: Vec<u16> = buf[..n as usize]
+                .iter()
+                .copied()
+                .chain(std::iter::once(0))
+                .collect();
+            let ret = ShellExecuteW(null_mut(), wide("runas").as_ptr(), exe.as_ptr(), null(), null(), 1);
+            ret as isize > 32
+        }
+    }
+
+    /// Honor `desktop.elevate` (default ON): relaunch with admin rights unless
+    /// already elevated. A declined UAC prompt continues un-elevated («UAC ok»).
+    pub fn maybe_elevate(cfg: &crate::config::AppConfig) {
+        if !cfg.desktop.elevate || is_elevated() {
+            return;
+        }
+        if relaunch_elevated() {
+            std::process::exit(0);
+        }
+    }
 
     #[cfg_attr(windows, link(name = "shell32"))]
     extern "system" {
@@ -1214,7 +1281,7 @@ mod win32 {
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         let mut host = unsafe { WinHost::new() };
         let cfg = app.store.lock().unwrap().get().clone();
-        let mut m = crate::settings::SettingsModel::new(cfg.appearance.clone(), app.version.clone());
+        let mut m = crate::settings::SettingsModel::new_full(cfg.appearance.clone(), cfg.desktop.clone(), app.version.clone());
         let fonts = crate::font::Fonts::load();
         let icons = crate::assets::Icons::load();
         crate::settings::run_loop(&mut m, &app, &fonts, &icons, &mut host);

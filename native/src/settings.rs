@@ -2,7 +2,7 @@
 //! Pure cross-platform model/render/input; the window host lives in overlay.rs.
 
 use crate::assets::Icons;
-use crate::config::Appearance;
+use crate::config::{Appearance, DesktopPrefs};
 use crate::font::Fonts;
 use crate::layout::{render_frame, FeedItem, FrameInput};
 use crate::model::UserState;
@@ -71,6 +71,7 @@ pub struct Region {
 
 pub struct SettingsModel {
     pub app: Appearance,
+    pub desktop: DesktopPrefs,
     pub lang: String,
     pub scroll: f32,
     pub dragging: Option<(&'static str, crate::layout::Rect)>, // slider key + track rect
@@ -82,9 +83,14 @@ pub struct SettingsModel {
 
 impl SettingsModel {
     pub fn new(app: Appearance, version: String) -> SettingsModel {
+        Self::new_full(app, DesktopPrefs::default(), version)
+    }
+
+    pub fn new_full(app: Appearance, desktop: DesktopPrefs, version: String) -> SettingsModel {
         let lang = if app.language == "en" { "en".to_string() } else { "ru".to_string() };
         SettingsModel {
             app,
+            desktop,
             lang,
             scroll: 0.0,
             dragging: None,
@@ -122,11 +128,21 @@ impl SettingsModel {
                     self.touch();
                 }
             }
-            Ctrl::Toggle(key) => {
-                let v = toggle_mut(&mut self.app, key);
-                *v = !*v;
-                self.touch();
-            }
+            Ctrl::Toggle(key) => match key {
+                "elevate" => {
+                    self.desktop.elevate = !self.desktop.elevate;
+                    self.touch();
+                }
+                "click_through" => {
+                    self.desktop.click_through = !self.desktop.click_through;
+                    self.touch();
+                }
+                _ => {
+                    let v = toggle_mut(&mut self.app, key);
+                    *v = !*v;
+                    self.touch();
+                }
+            },
             Ctrl::Cycle(key) => {
                 cycle_advance(&mut self.app, key);
                 self.touch();
@@ -556,6 +572,27 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         });
         y += 30.0;
     }
+    // «Система» — desktop prefs (UAC + click-through)
+    y += 16.0;
+    {
+        let label = tr(&m.lang, "Система", "System");
+        c.fonts.draw(&mut buf, pane_x + 4.0, y, &label, 13.0, true, pal.accent);
+        y += 26.0;
+    }
+    let sys_rows: [(&str, &str, &str); 2] = [
+        ("elevate", "Запуск от имени администратора", "Run as administrator"),
+        ("click_through", "Мышь проходит сквозь оверлей", "Mouse passes through the overlay"),
+    ];
+    for (key, ru, en) in sys_rows {
+        let label = tr(&m.lang, ru, en);
+        let on = if key == "elevate" { m.desktop.elevate } else { m.desktop.click_through };
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
+    }
     let content_h = y + m.scroll - pane_y;
     buf.clear_clip();
     // scroll indicator
@@ -640,8 +677,17 @@ pub fn spawn_once(app: Arc<App>, port: u16) {
         .ok();
 }
 
-fn persist(app: &Arc<App>, a: &Appearance) {
-    let patch = crate::json::obj(vec![("appearance", crate::config::appearance_to_json(a))]);
+fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
+    let patch = crate::json::obj(vec![
+        ("appearance", crate::config::appearance_to_json(a)),
+        (
+            "desktop",
+            crate::json::obj(vec![
+                ("elevate", crate::json::Json::b(d.elevate)),
+                ("clickThrough", crate::json::Json::b(d.click_through)),
+            ]),
+        ),
+    ]);
     app.store.lock().unwrap().update(&patch);
     app.broadcast(&crate::json::obj(vec![
         ("type", crate::json::Json::s("config")),
@@ -689,7 +735,7 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
         }
         if m.changed {
             m.changed = false;
-            persist(app, &m.app);
+            persist(app, &m.app, &m.desktop);
         }
         if m.close_requested {
             return;
@@ -757,6 +803,20 @@ mod tests {
     }
 
     #[test]
+    fn desktop_toggles_persist_defaults() {
+        let mut m = model();
+        // Run-as-admin default ON (требование: по умолчанию включено)
+        assert!(m.desktop.elevate);
+        m.click(Ctrl::Toggle("elevate"), 0.0, 0.0);
+        assert!(!m.desktop.elevate);
+        assert!(m.changed);
+        m.click(Ctrl::Toggle("elevate"), 0.0, 0.0);
+        assert!(m.desktop.elevate);
+        m.click(Ctrl::Toggle("click_through"), 0.0, 0.0);
+        assert!(!m.desktop.click_through);
+    }
+
+    #[test]
     fn frame_renders_with_regions() {
         let m = model();
         let fonts = Fonts::load();
@@ -777,12 +837,16 @@ mod qa {
 
     #[test]
     fn qa_dump_settings() {
-        let m = SettingsModel::new(Appearance::default(), "0.1.0".into());
+        let mut m = SettingsModel::new(Appearance::default(), "0.1.0".into());
         let fonts = Fonts::load();
         let icons = Icons::load();
-        let (buf, _, _) = render(&m, &fonts, &icons);
+        let (buf, _, ch) = render(&m, &fonts, &icons);
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
         std::fs::create_dir_all(dir).unwrap();
         write_png(&format!("{dir}/settings.png"), &buf).unwrap();
+        // scrolled to the bottom — «Система» section
+        m.wheel(-100000.0, ch);
+        let (buf2, _, _) = render(&m, &fonts, &icons);
+        write_png(&format!("{dir}/settings-bottom.png"), &buf2).unwrap();
     }
 }

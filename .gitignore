@@ -5,3 +5,4 @@ dist/
 .DS_Store
 concepts/
 native/qa/
+dist-win/

@@ -135,6 +135,21 @@ pub struct DesktopPrefs {
     pub port: i64,
 }
 
+impl Default for DesktopPrefs {
+    fn default() -> DesktopPrefs {
+        DesktopPrefs {
+            click_through: true,
+            autostart: false,
+            visible: true,
+            seen: false,
+            display: "primary".into(),
+            elevate: true,
+            overlay_window: true,
+            port: 48911,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassesCfg {
     pub enabled: bool,
