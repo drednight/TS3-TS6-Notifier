@@ -9,6 +9,9 @@
   const DEFAULTS = {
     theme: 'glass',
     accent: '#7c6cff',
+    nickColor: '#e8ecff',
+    msgColor: '#b6b6bd',
+    talkOutline: '#57e389',
     glow: 0.7,
     opacity: 0.72,
     blur: 18,
@@ -54,6 +57,16 @@
     evScopeChat: 'all',
     eventsCount: 5,
     eventsDelay: 20,
+  };
+
+  /** v1.4.7: appearance presets — one-click bundles (theme + colors + feel). */
+  const PRESETS = {
+    glass: { theme: 'glass', accent: '#7c6cff', nickColor: '#e8ecff', msgColor: '#b6b6bd', talkOutline: '#57e389', blur: 18, opacity: 0.72, glow: 0.7 },
+    midnight: { theme: 'midnight', accent: '#4f7dff', nickColor: '#dfe6ff', msgColor: '#98a2c0', talkOutline: '#4f7dff', blur: 14, opacity: 0.85, glow: 0.4 },
+    frost: { theme: 'frost', accent: '#38bdf8', nickColor: '#0b2740', msgColor: '#2b5a7d', talkOutline: '#0ea5e9', blur: 10, opacity: 0.9, glow: 0.3 },
+    neon: { theme: 'neon', accent: '#ff2fd6', nickColor: '#39ff9c', msgColor: '#c9b8ff', talkOutline: '#39ff9c', blur: 22, opacity: 0.66, glow: 1 },
+    classic: { theme: 'glass', accent: '#6c7cff', nickColor: '#ffffff', msgColor: '#a7b0c8', talkOutline: '#f5c451', blur: 8, opacity: 0.92, glow: 0.2 },
+    soft: { theme: 'frost', accent: '#b78cff', nickColor: '#3b2f52', msgColor: '#6b5f88', talkOutline: '#b78cff', blur: 16, opacity: 0.8, glow: 0.5 },
   };
 
   const THEME_ACCENTS = {
@@ -136,7 +149,7 @@
         if (Number.isFinite(n)) out[k] = Math.min(max, Math.max(min, n));
       } else if (BOOLS.includes(k)) {
         out[k] = !!v;
-      } else if (k === 'accent') {
+      } else if (k === 'accent' || k === 'nickColor' || k === 'msgColor' || k === 'talkOutline') {
         if (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) out[k] = v;
       } else if (typeof v === 'string') {
         out[k] = v;
@@ -201,6 +214,9 @@
     const root = document.documentElement.style;
     root.setProperty('--accent', a.accent);
     root.setProperty('--accent-rgb', hexToRgb(a.accent));
+    root.setProperty('--nick-color', a.nickColor);
+    root.setProperty('--msg-color', a.msgColor);
+    root.setProperty('--talk-outline', a.talkOutline);
     root.setProperty('--glow', a.glow);
     root.setProperty('--panel-opacity', a.opacity);
     root.setProperty('--blur', `${a.blur}px`);
@@ -370,6 +386,11 @@
       btn.classList.toggle('active', btn.dataset.value === a.theme);
     });
 
+    document.querySelectorAll('[data-color]').forEach((inp) => {
+      const key = inp.getAttribute('data-color');
+      if (key in a) inp.value = a[key];
+    });
+
     document.querySelectorAll('#accentSwatches .swatch').forEach((sw) => {
       sw.classList.toggle('active', sw.dataset.value.toLowerCase() === String(a.accent).toLowerCase());
     });
@@ -389,6 +410,16 @@
     if (langSel) langSel.value = a.language;
     const eqSel = document.getElementById('eqStyleSelect');
     if (eqSel) eqSel.value = a.eqStyle;
+  }
+
+  /** Apply a preset bundle in one save (v1.4.7). */
+  function setMany(patchObj) {
+    const s = sanitize(patchObj);
+    for (const [k, v] of Object.entries(s)) local[k] = v;
+    if ('theme' in s && !('accent' in s) && THEME_ACCENTS[s.theme]) local.accent = THEME_ACCENTS[s.theme];
+    notifyChange(true);
+    paintControls();
+    if ('language' in s) I18N.setLanguage(appearance.language);
   }
 
   function set(key, value, immediate) {
@@ -417,6 +448,17 @@
 
     document.querySelectorAll('#themeSeg button').forEach((btn) => {
       btn.addEventListener('click', () => set('theme', btn.dataset.value));
+    });
+
+    document.querySelectorAll('#presetSeg button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = PRESETS[btn.dataset.value];
+        if (p) setMany({ ...p });
+      });
+    });
+
+    document.querySelectorAll('[data-color]').forEach((inp) => {
+      inp.addEventListener('input', () => set(inp.getAttribute('data-color'), inp.value));
     });
 
     document.querySelectorAll('#accentSwatches .swatch').forEach((sw) => {

@@ -92,9 +92,7 @@ export function diag(scope: string, line: string): void {
     /(apikey|api_key|token|password|passwd)(\s*[=:]\s*)\S+/gi,
     '$1$2***',
   );
-  // TODO: метки времени в UTC — перевести на локальное время пользователя
-  // (пользователь заметил расхождение; поправить следующим заходом).
-  DIAG.push(`${new Date().toISOString().slice(11, 19)} [${scope}] ${redacted}`);
+  DIAG.push(`${new Date().toTimeString().slice(0, 8)} [${scope}] ${redacted}`);
   if (DIAG.length > DIAG_LIMIT) DIAG.splice(0, DIAG.length - DIAG_LIMIT);
 }
 
@@ -115,6 +113,9 @@ export interface Ts6Config {
 export interface Appearance {
   theme: 'glass' | 'midnight' | 'frost' | 'neon';
   accent: string;
+  nickColor: string;
+  msgColor: string;
+  talkOutline: string;
   glow: number;
   opacity: number;
   blur: number;
@@ -231,6 +232,9 @@ export interface SoundItem {
 export const DEFAULT_APPEARANCE: Appearance = {
   theme: 'glass',
   accent: '#7c6cff',
+  nickColor: '#e8ecff',
+  msgColor: '#b6b6bd',
+  talkOutline: '#57e389',
   glow: 0.7,
   opacity: 0.72,
   blur: 18,

@@ -274,10 +274,18 @@
   const evSeen = new Set();
   let evTickTimer = 0;
 
+  function escHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function nickSpan(n) {
+    return `<span class="ev-nick">${escHtml(n)}</span>`;
+  }
+
   function evText(m) {
     const clean = cleanChat;
-    const name = clean(m.nickname || m.text || '…');
-    const detail = clean(m.detail || '');
+    const name = nickSpan(clean(m.nickname || m.text || '…'));
+    const detail = escHtml(clean(m.detail || ''));
     if (m.event === 'join') return detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
     if (m.event === 'leave') return detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
     if (m.event === 'move') return t('evMove').replace('{n}', name).replace('{c}', detail || '…');
@@ -333,9 +341,13 @@
       if (scopeKey && a[scopeKey] === 'own' && !ownFlag) continue;
       if (now - (m.at || 0) > delayMs) continue;
       const text = kind === 'sys'
-        ? cleanChat(m.text)
+        ? escHtml(cleanChat(m.text))
         : kind === 'chat' || kind === 'poke'
-          ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
+          ? (() => {
+              const raw = `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text);
+              const nick = cleanChat(m.nickname || m.senderName || '');
+              return nick && raw.startsWith(nick) ? nickSpan(nick) + escHtml(raw.slice(nick.length)) : escHtml(raw);
+            })()
           : evText(m);
       if (!text) continue;
       items.push({ id: m.id || `${kind}-${m.at}`, kind, text, at: m.at || now });
@@ -367,7 +379,8 @@
                     : 'evTagPoke',
       );
       const txt = document.createElement('span');
-      txt.textContent = item.text;
+      txt.className = 'ev-msg';
+      txt.innerHTML = item.text;
       el.appendChild(tag);
       el.appendChild(txt);
       // Newest first, inserted by timestamp — existing rows are never moved.

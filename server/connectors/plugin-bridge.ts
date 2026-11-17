@@ -284,7 +284,6 @@ export class PluginState {
   private channelNames = new Map<number, string>();
   private serverName = '';
   private groups: ServerGroup[] = [];
-  private announcedOnce = false;
   private flushTimer: NodeJS.Timeout | null = null;
   private lastEmit = 0;
   private curStatus: StatusCode = 'live';
@@ -318,20 +317,25 @@ export class PluginState {
         }
         this.channelNames = channelNames;
         this.ownChannelName = channelNames.get(this.ownCid) ?? str(msg['owncname']) ?? '';
-        // Diff-announce what the event stream missed while we were away.
-        if (this.announcedOnce) {
-          for (const [id, u] of this.clients) {
-            if (!prev.has(id) && !u.isSelf && !u.isQuery && u.nickname) {
+        // Diff-announce what the event stream missed while we were away —
+        // but a baseline jump is NOT real activity: empty → populated right
+        // after connect (or a mass resync) must stay silent (v1.4.7).
+        const addedIds = [...this.clients.keys()].filter((id) => !prev.has(id));
+        const removedIds = [...prev.keys()].filter((id) => !this.clients.has(id));
+        const mass = (n: number) => n > Math.max(5, prev.size * 0.3);
+        if (prev.size > 0 && this.clients.size > 0 && !mass(addedIds.length) && !mass(removedIds.length)) {
+          for (const id of addedIds) {
+            const u = this.clients.get(id)!;
+            if (!u.isSelf && !u.isQuery && u.nickname) {
               this.pushRow(u.nickname, u.id, 'join', u.channelId === this.ownCid);
             }
           }
-          for (const [id, u] of prev) {
-            if (!this.clients.has(id) && !u.isSelf && !u.isQuery && u.nickname) {
+          for (const id of removedIds) {
+            const u = prev.get(id)!;
+            if (!u.isSelf && !u.isQuery && u.nickname) {
               this.pushRow(u.nickname, u.id, 'leave', u.channelId === this.ownCid);
             }
           }
-        } else {
-          this.announcedOnce = true;
         }
         this.emitState();
         return;
@@ -463,7 +467,6 @@ export class PluginState {
         this.channelNames.clear();
         this.ownCid = 0;
         this.ownChannelName = '';
-        this.announcedOnce = false;
         this.emitState();
         return;
       }

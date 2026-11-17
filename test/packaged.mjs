@@ -53,6 +53,14 @@ await mkdir(join(PKG, 'appdata'), { recursive: true });
   // overlay window hugs the panel via the crop channel.
   const appJs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
   check('packaged: renderer memory tuning active', /max-old-space-size/.test(mainSrc) && /CalculateNativeWinOcclusion/.test(mainSrc));
+{
+  const modelSrc = await fs.readFile(new URL('../server/model.ts', import.meta.url), 'utf8');
+  const appSrc = await fs.readFile(new URL('../server/app.ts', import.meta.url), 'utf8');
+  const featSrc = await fs.readFile(new URL('../public/js/features.js', import.meta.url), 'utf8');
+  check('packaged: diagnostics timestamps are local time', /toTimeString/.test(modelSrc) && /toTimeString/.test(appSrc) && !/toISOString\(\)\.slice\(11, 19\)/.test(modelSrc));
+  check('packaged: memory report names windows in plain Russian', /окно «Оверлей»/.test(mainSrc) && /главный процесс/.test(appSrc));
+  check('packaged: no device probes while the sounds UI is hidden', /soundsUiVisible/.test(featSrc));
+}
   check('packaged: overlay window crops to the panel', /--crop-x/.test(css) && /api\/overlay\/bounds/.test(appJs));
 }
 
@@ -101,7 +109,7 @@ try {
     check('packaged: /api/plugin/status works', pst.status === 200 && typeof pstBody.active === 'boolean' && typeof pstBody.dll === 'boolean', JSON.stringify(pstBody));
     const diagRes = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagBody = await diagRes.text();
-    check('packaged: diagnostics has a memory section', /--- memory ---/.test(diagBody) && /main process: rss=/.test(diagBody));
+    check('packaged: diagnostics has a memory section', /--- memory ---/.test(diagBody) && /главный процесс .*rss=/.test(diagBody));
 check('packaged: only the active source is captured', /раздел выключен — активный источник/.test(diagBody));
     const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
     const pinsBody = await pins.json();

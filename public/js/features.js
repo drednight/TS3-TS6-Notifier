@@ -526,7 +526,15 @@
     renderSoundItems();
   }
 
+  /** v1.4.7: device probes spin up Chromium's Audio + Video-Capture services
+   * (~180 MB!). While the sounds UI is hidden, never enumerate devices. */
+  function soundsUiVisible() {
+    const tab = document.querySelector('.tab[data-tab="sound"]');
+    return !!tab && !tab.hidden;
+  }
+
   async function refreshDevices() {
+    if (!soundsUiVisible()) return;
     const selects = [
       document.getElementById('audioOutput'),
       document.getElementById('audioOutputLocal'),
@@ -554,6 +562,7 @@
 
   /** Look for a loopback input (Stereo Mix / What U Hear) — soundboard without a virtual cable. */
   async function detectLoopback() {
+    if (!soundsUiVisible()) return;
     const el = document.getElementById('loopbackStatus');
     if (!el) return;
     el.className = 'guide-status searching';

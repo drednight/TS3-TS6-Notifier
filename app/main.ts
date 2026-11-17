@@ -745,12 +745,34 @@ async function boot(): Promise<void> {
     },
     memReport: () => {
       try {
-        return typeof app.getAppMetrics === 'function'
-          ? app.getAppMetrics().map(
-              (pr) =>
-                `${pr.name || pr.type} (pid ${pr.pid}): rss=${Math.round((pr.memory?.workingSetSize ?? 0) / 1024)}MB`,
-            )
-          : [];
+        if (typeof app.getAppMetrics !== 'function') return [];
+        const pidOf = (w: BrowserWindow | null): number => {
+          try {
+            return w && !w.isDestroyed() ? w.webContents.getOSProcessId() : -1;
+          } catch {
+            return -1;
+          }
+        };
+        const windows = new Map<number, string>([
+          [pidOf(overlayWin), 'окно «Оверлей»'],
+          [pidOf(settingsWin), 'окно «Настройки»'],
+          [pidOf(boardWin), 'окно «Саундборд»'],
+        ]);
+        const RU: Record<string, string> = {
+          Browser: 'браузер (Chromium)',
+          GPU: 'GPU (композитор)',
+          'Network Service': 'сеть',
+          'Audio Service': 'звук',
+          'Video Capture': 'видеозахват',
+          Utility: 'служебный',
+          Tab: 'вкладка',
+          Zygote: 'загрузчик',
+          'Spare renderer': 'резервный рендерер',
+        };
+        return app.getAppMetrics().map((pr) => {
+          const label = windows.get(pr.pid) ?? RU[pr.name || pr.type] ?? (pr.name || pr.type);
+          return `${label} (pid ${pr.pid}): rss=${Math.round((pr.memory?.workingSetSize ?? 0) / 1024)}MB`;
+        });
       } catch {
         return [];
       }

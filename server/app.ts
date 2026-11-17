@@ -120,7 +120,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   function memoryRows(): string[] {
     const m = process.memoryUsage();
     const rows = [
-      `main process: rss=${(m.rss / 1048576).toFixed(1)}MB heapUsed=${(m.heapUsed / 1048576).toFixed(1)}MB`,
+      `главный процесс (Node/сервер): rss=${(m.rss / 1048576).toFixed(1)}MB heapUsed=${(m.heapUsed / 1048576).toFixed(1)}MB`,
     ];
     try {
       for (const line of opts.memReport?.() ?? []) rows.push(line);
@@ -408,17 +408,15 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
       const ts6Lines = DIAG.filter((l) => l.includes('[ts6]'));
       const otherLines = DIAG.filter((l) => !l.includes('[ts3]') && !l.includes('[plugin]') && !l.includes('[ts6]'));
       const report = [
-        `TS3-TS6 Notifier diagnostics — ${new Date().toISOString()}`,
+        `TS3-TS6 Notifier diagnostics — ${new Date().toLocaleString('ru-RU')}`,
         `version: ${opts.version ?? 'dev'}`,
         `source: ${cfg.source} (ts3 ${cfg.ts3.host}:${cfg.ts3.port}, ts6 ${cfg.ts6.host}:${cfg.ts6.port})`,
         `last status: ${latestState.status} — ${latestState.detail || ''}`,
         `users on channel: ${latestState.users.length}, chat/event rows kept: ${latestState.chat.length}`,
         '',
-        // TODO: время пишется в UTC (toISOString.slice) — пользователю нужно
-        // локальное; поправить следующим заходом (v1.4.6, заметка).
         '--- recent chat & events ---',
         ...latestState.chat.slice(-30).map(
-          (m) => `${new Date(m.at).toISOString().slice(11, 19)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
+          (m) => `${new Date(m.at).toTimeString().slice(0, 8)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
         ),
         '',
         '--- TS3 (ClientQuery / plugin) ---',

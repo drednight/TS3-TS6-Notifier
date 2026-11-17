@@ -423,6 +423,39 @@ check('plugin: query poller stops while the plugin is alive', autoConn.getQuery(
   lazyConn.stop();
 }
 
+// v1.4.7: connecting must NOT flood the feed with "everyone joined".
+{
+  const fl = new PluginState(() => {});
+  const rowsOf = () => fl.buildState().chat.filter((m) => m.kind === 'system');
+  // 1) empty baseline → populated (server connect) stays silent
+  fl.ingest({ e: 'snapshot', server: 'S', own: 0, owncid: 0, owncname: '', clients: [] });
+  fl.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'a', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'b', cid: 10, groups: '3', cname: 'A' },
+  ] });
+  check('flood: connect baseline is silent', rowsOf().length === 0, String(rowsOf().length));
+  // 2) one real join between populated snapshots is announced
+  fl.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'a', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'b', cid: 10, groups: '3', cname: 'A' },
+    { id: 8, name: 'c', cid: 10, groups: '4', cname: 'A' },
+  ] });
+  const one = rowsOf();
+  check('flood: a single join is still announced', one.length === 1 && one[0].event === 'join' && one[0].nickname === 'c', JSON.stringify(one));
+  // 3) a mass resync (everyone replaced) stays silent
+  fl.ingest({ e: 'snapshot', server: 'S', own: 9, owncid: 10, owncname: 'A', clients: [
+    { id: 9, name: 'me2', cid: 10, groups: '1', cname: 'A' },
+    { id: 10, name: 'x', cid: 10, groups: '2', cname: 'A' },
+    { id: 11, name: 'y', cid: 10, groups: '3', cname: 'A' },
+    { id: 12, name: 'z', cid: 10, groups: '4', cname: 'A' },
+    { id: 13, name: 'w', cid: 10, groups: '5', cname: 'A' },
+    { id: 14, name: 'v', cid: 10, groups: '6', cname: 'A' },
+  ] });
+  check('flood: mass resync is silent', rowsOf().length === 1, String(rowsOf().length));
+}
+
 // v1.4.4: an own move must switch the channel window (blank-overlay bug).
 {
   const mv = new PluginState(() => {});

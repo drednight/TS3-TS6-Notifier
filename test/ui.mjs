@@ -577,6 +577,22 @@ try {
 const failed = results.filter((r) => !r).length;
 console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
 
+// v1.4.7: appearance presets + user colors
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('../public/css/overlay.css', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const { DEFAULT_APPEARANCE } = await import('../server/model.ts');
+  check('colors: appearance keeps the three color keys', !!DEFAULT_APPEARANCE.nickColor && !!DEFAULT_APPEARANCE.msgColor && !!DEFAULT_APPEARANCE.talkOutline);
+  check('colors: settings has preset + color controls', !!/id="presetSeg"/.test(html) && (html.match(/data-color=/g) || []).length === 3);
+  check('colors: overlay paints nick/message/outline from vars', /--nick-color/.test(css) && /--msg-color/.test(css) && /--talk-outline/.test(css) && /ev-nick/.test(css));
+  const ru = i18n.indexOf('nickColorLabel');
+  const en = i18n.indexOf('nickColorLabel', ru + 1);
+  check('colors: labels exist in ru and en', ru > 0 && en > ru);
+  check('colors: event rows color the nickname', /nickSpan/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+}
+
 // v1.4.6: one data source at a time + tray ↔ Связь sync
 {
   const fs = await import('node:fs/promises');
