@@ -167,10 +167,82 @@ html, body {
   transition: border-radius 0.25s ease;
 }
 
+/* Move-mode drag handle: a grab strip at the panel top (works even when the
+ * header is hidden). Shown only while move mode is armed. */
+.move-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 22%, rgba(12, 14, 26, 0.92));
+  border: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  color: var(--text, #eef0ff);
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+}
+.move-handle .grip {
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--accent);
+}
+body.move-mode .move-handle { display: flex; }
+body.dragging .move-handle { cursor: grabbing; }
+
+.move-handle-text {
+  flex: 1 1 auto;
+  text-align: center;
+}
+.move-ico {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  color: #fff;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.move-ico:hover { transform: scale(1.08); filter: brightness(1.1); }
+.move-ico.save { background: #16a34a; border-color: #22c55e; }
+.move-ico.discard { background: #dc2626; border-color: #ef4444; }
+
 body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
 body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
-body[data-corner="bl"] #panel { bottom: var(--margin-y); left: var(--margin-x); transform-origin: bottom left; }
-body[data-corner="br"] #panel { bottom: var(--margin-y); right: var(--margin-x); transform-origin: bottom right; }
+body[data-corner="bl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
+body[data-corner="br"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
+
+/* move mode: armed by the "Переместить оверлей" hotkey */
+body.move-mode #panel {
+  outline: 2px dashed var(--accent, #4f8cff);
+  outline-offset: 3px;
+}
+body.move-mode #panelHeader { cursor: move; }
+#moveHint {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  z-index: 40;
+  pointer-events: none;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .35);
+}
 
 /* ============================ header ============================ */
 
@@ -927,6 +999,20 @@ body.no-anim .whisper-list .row { animation: none; }
 .chat-toast.fading { animation: chatOut .6s ease both; }
 .chat-toast .chat-nick { font-weight: 700; color: var(--accent); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-toast .chat-text { opacity: .92; font-family: inherit; }
+
+/* join/leave/move feed rows */
+.chat-toast.kind-system {
+  font-size: 11px;
+  opacity: .85;
+  font-style: italic;
+  justify-content: center;
+}
+.chat-toast.kind-system .chat-nick { display: none; }
+
+/* the panel header is the drag handle for saved placement */
+#panelHeader { cursor: grab; user-select: none; -webkit-user-select: none; }
+body.dragging { user-select: none; -webkit-user-select: none; }
+body.dragging #panelHeader { cursor: grabbing; }
 .chat-toast .chat-nick, .chat-toast .chat-text { font-variant-emoji: emoji; }
 
 /* unread-message badge */

@@ -84,6 +84,7 @@ class Tray {
 const electron = {
   app: {
     isPackaged: !!process.env.TSN_APP_PATH,
+    getLocale: () => 'en-US',
     getAppPath: () => APP_PATH,
     getPath: (name) => path.join(os.tmpdir(), 'tsn-stub', name),
     setAppUserModelId: noop,
@@ -105,6 +106,9 @@ const electron = {
   },
   nativeImage: { createFromPath: () => ({}) },
   globalShortcut: { register: () => true, unregisterAll: noop, isRegistered: () => false },
+  clipboard: { writeText: noop, readText: () => '' },
+  Notification: class { show() {} on() {} },
+  shell: { openExternal: async () => {} },
   screen: {
     getPrimaryDisplay: () => ({ workArea }),
     on: noop,

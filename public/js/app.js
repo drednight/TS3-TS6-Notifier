@@ -161,6 +161,19 @@
 
   /* ---------------- main render ---------------- */
 
+  // State events can arrive in bursts (talk flaps, big servers) — coalesce
+  // renders to at most one per animation frame so the DOM is not rebuilt
+  // dozens of times per second (CPU + garbage churn).
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      render();
+    });
+  }
+
   function render() {
     const a = Settings.appearance;
     if (!state) return;
@@ -292,11 +305,19 @@
   function trackUnread() {
     const el = $('chatUnread');
     if (!el) return;
+    if (seenChatIds.size > 500) {
+      let n = 0;
+      for (const id of seenChatIds) {
+        if (n++ < 250) seenChatIds.delete(id);
+        else break;
+      }
+    }
     for (const m of state.chat || []) {
       if (!m.id || seenChatIds.has(m.id)) continue;
       seenChatIds.add(m.id);
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
       if (isSelf) continue;
+      if (m.kind === 'system') continue;
       if (m.kind === 'private' && !Settings.appearance.chatPrivate) continue;
       unreadCount += 1;
     }
@@ -308,6 +329,9 @@
     void el.offsetWidth; // restart the pulse animation
     el.classList.add('bump');
   }
+
+  // strip zero-width / bidi control chars — they render as garbage glyphs
+  const cleanChat = (s) => String(s || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
 
   function renderChat() {
     const a = Settings.appearance;
@@ -335,6 +359,7 @@
         chatRows.delete(id);
       }
     }
+    const clean = cleanChat;
     for (const m of msgs) {
       if (m.kind === 'private' && !a.chatPrivate) continue;
       if (chatRows.has(m.id)) continue;
@@ -342,8 +367,31 @@
       el.className = `chat-toast kind-${m.kind}`;
       const badge =
         m.kind === 'private' ? `<span class="chat-kind">${t('chatPrivateBadge')}</span>` :
-        m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` : '';
+        m.kind === 'server' ? `<span class="chat-kind">${t('chatServerBadge')}</span>` :
+        m.kind === 'poke' ? `<span class="chat-kind">${t('pokeBadge')}</span>` : '';
       el.innerHTML = `${badge}<span class="chat-nick"></span><span class="chat-text"></span>`;
+      if (m.kind === 'system' || (m.kind === 'poke' && m.event === 'poke' && !m.text)) {
+        // Structured event row: localised here so connectors stay language-free.
+        const name = clean(m.nickname || m.text || '…');
+        const detail = clean(m.detail || '');
+        let s2 = '';
+        if (m.event === 'join') s2 = detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
+        else if (m.event === 'leave') s2 = detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
+        else if (m.event === 'move') s2 = t('evMove').replace('{n}', name).replace('{c}', detail || '…');
+        else s2 = name;
+        el.querySelector('.chat-text').textContent = s2;
+        feed.appendChild(el);
+        const rec = { el, timer: 0 };
+        rec.timer = setTimeout(() => {
+          el.classList.add('fading');
+          setTimeout(() => {
+            el.remove();
+            chatRows.delete(m.id);
+          }, 650);
+        }, delayMs);
+        chatRows.set(m.id, rec);
+        continue;
+      }
       // Resolve the sender's nick robustly: the event may omit it — fall back
       // to the live user list by id.
       const sender = (state.users || []).find((u) => String(u.id) === String(m.userId));
@@ -351,8 +399,6 @@
       // Server messages have no sender at all — label them instead of '…'
       const nick = eventName || sender?.nickname || (m.kind === 'server' ? t('chatServerBadge') : '');
       const isSelf = state.selfId != null && String(m.userId) === String(state.selfId);
-      // strip zero-width / bidi control chars — they render as garbage glyphs
-      const clean = (s) => String(s || '').replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
       el.querySelector('.chat-nick').textContent = clean(nick)
         ? `${clean(nick)}${isSelf ? ` (${t('you')})` : ''}:`
         : '…:';
@@ -396,6 +442,10 @@
     $('ts3Fields').classList.toggle('visible', config.source === 'ts3');
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
+    $('overlayWindowToggle').checked = config.desktop?.overlayWindow !== false;
+    const obsUrl = `${location.origin}/?clean=1`;
+    const obs = $('obsHint');
+    if (obs) obs.textContent = t('obsHint').replace('{url}', obsUrl);
   }
 
   function wireConnectionTab() {
@@ -435,6 +485,72 @@
     $('elevateToggle').addEventListener('change', () => {
       putConfig({ desktop: { elevate: $('elevateToggle').checked } });
     });
+
+    $('overlayWindowToggle').addEventListener('change', () => {
+      putConfig({ desktop: { overlayWindow: $('overlayWindowToggle').checked } });
+    });
+  }
+
+  function wireMoreTab() {
+    // version line
+    const ver = document.querySelector('.about-title .ver')?.textContent?.trim() || '';
+    $('updateVersion').textContent = ver;
+
+    $('checkUpdateBtn').addEventListener('click', () => {
+      $('updateStatus').textContent = t('updChecking');
+      fetch('/api/update/check', { method: 'POST' }).catch(() => {
+        $('updateStatus').textContent = t('updError');
+      });
+    });
+
+    $('copyObsUrlBtn').addEventListener('click', async () => {
+      const url = `${location.origin}/?clean=1`;
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        ok = true;
+      } catch {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = url;
+          document.body.appendChild(ta);
+          ta.select();
+          ok = document.execCommand('copy');
+          ta.remove();
+        } catch {
+          ok = false;
+        }
+      }
+      const btn = $('copyObsUrlBtn');
+      btn.textContent = ok ? '✓' : '!';
+      setTimeout(() => {
+        btn.textContent = t('copyObsUrlBtn');
+      }, 1500);
+    });
+
+    $('moveOverlayBtn').addEventListener('click', () => {
+      fetch('/api/overlay/move', { method: 'POST' }).catch(() => {});
+      const btn = $('moveOverlayBtn');
+      btn.textContent = '✓';
+      setTimeout(() => {
+        btn.textContent = t('moveOverlayBtn');
+      }, 1500);
+    });
+
+    $('restartNowBtn').addEventListener('click', () => {
+      fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
+    });
+
+    // Save/cancel of the dragged position live ON the overlay itself — the
+    // settings window may be behind the game or on another display.
+    $('moveSaveBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      fetch('/api/overlay/move-confirm', { method: 'POST' }).catch(() => {});
+    });
+    $('moveDiscardBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
+    });
   }
 
   /* ---------------- websocket ---------------- */
@@ -450,6 +566,8 @@
       /* ignore */
     }
   }
+
+  let lastConnSig = '';
 
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -467,20 +585,47 @@
         Settings.syncServer(config);
         fillConnectionTab();
         syncFeatures();
+        if (msg.moveMode) enterMoveMode();
         if (msg.state) {
           state = msg.state;
           syncFeatures();
-          render();
+          scheduleRender();
         }
       } else if (msg.type === 'state') {
         state = msg.state;
         syncFeatures();
-        render();
+        scheduleRender();
       } else if (msg.type === 'config') {
         config = msg.config;
         Settings.syncServer(config);
-        fillConnectionTab();
-        syncFeatures();
+        // Heavy tab refills only when non-appearance config changed — plain
+        // look tweaks must not re-render the whole settings surface.
+        const sig = JSON.stringify({ ...config, appearance: undefined });
+        if (sig !== lastConnSig) {
+          lastConnSig = sig;
+          fillConnectionTab();
+          syncFeatures();
+        }
+      } else if (msg.type === 'move-mode') {
+        const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
+        if (want) enterMoveMode();
+        else exitMoveMode();
+      } else if (msg.type === 'move-pending') {
+        // A drag finished somewhere — wait for the ✓/✗ buttons.
+        const hint = $('moveHint');
+        if (hint) hint.textContent = t('moveHintPending');
+      } else if (msg.type === 'move-confirm') {
+        applyPendingPosition(true);
+      } else if (msg.type === 'move-cancel') {
+        applyPendingPosition(false);
+      } else if (msg.type === 'update-status') {
+        const el = $('updateStatus');
+        if (el) {
+          const key = { checking: 'updChecking', available: 'updAvailable', latest: 'updLatest', downloaded: 'updDownloaded' }[msg.status] || 'updError';
+          el.textContent = t(key).replace('{v}', msg.version || '');
+        }
+        const restart = $('restartNowBtn');
+        if (restart) restart.hidden = msg.status !== 'downloaded';
       } else if (msg.type === 'sound') {
         // Only the overlay page (clean mode) plays hotkey triggers —
         // otherwise open windows would double-play.
@@ -497,6 +642,150 @@
   injectIcons();
   Settings.init();
   wireConnectionTab();
+  wireMoreTab();
+  /* ---------------- overlay move mode (drag with hotkey) ---------------- */
+
+  function postClickthrough(ignore) {
+    try {
+      fetch('/api/overlay/clickthrough', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ignore }),
+      }).catch(() => {});
+    } catch {
+      /* plain web — no desktop hook */
+    }
+  }
+
+  let moveMode = false;
+  let moveModeTimer = 0;
+  let pendingX = null;
+  let pendingY = null;
+
+  function exitMoveMode() {
+    if (!moveMode) return;
+    moveMode = false;
+    if (moveModeTimer) clearTimeout(moveModeTimer);
+    moveModeTimer = 0;
+    pendingX = null;
+    pendingY = null;
+    document.body.classList.remove('move-mode');
+    const handle = $('moveHandle');
+    if (handle) handle.hidden = true;
+    const hint = $('moveHint');
+    if (hint) hint.hidden = true;
+    postClickthrough(clickThroughWanted());
+  }
+
+  function enterMoveMode() {
+    moveMode = true;
+    document.body.classList.add('move-mode');
+    const handle = $('moveHandle');
+    if (handle) handle.hidden = false;
+    const hint = $('moveHint');
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = t('moveHint');
+    }
+    // Localized tooltips for the ✓/✗ overlay buttons (data-i18n-title is not
+    // processed by the i18n runtime — set titles via JS).
+    const saveBtn = $('moveSaveBtn');
+    if (saveBtn) saveBtn.title = t('moveSaveTip');
+    const discardBtn = $('moveDiscardBtn');
+    if (discardBtn) discardBtn.title = t('moveCancelTip');
+    // The overlay is click-through for gameplay — take the mouse only while
+    // move mode is armed so the handle (and buttons) can be used.
+    postClickthrough(false);
+    if (moveModeTimer) clearTimeout(moveModeTimer);
+    // Unconfirmed moves die on timeout — nothing is saved without consent.
+    moveModeTimer = setTimeout(() => {
+      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
+      applyPendingPosition(false);
+    }, 120000);
+  }
+
+  /** Confirm (save) or cancel (restore) the dragged position. */
+  function applyPendingPosition(save) {
+    const moved = pendingX !== null || pendingY !== null;
+    if (save && moved) {
+      Settings.appearance.marginX = pendingX;
+      Settings.appearance.marginY = pendingY;
+      putConfig({ appearance: { ...Settings.appearance, marginX: pendingX, marginY: pendingY } });
+    } else if (moved) {
+      // Snap back to the last saved position.
+      document.documentElement.style.setProperty('--margin-x', `${Number(Settings.appearance.marginX) || 0}px`);
+      document.documentElement.style.setProperty('--margin-y', `${Number(Settings.appearance.marginY) || 0}px`);
+    }
+    exitMoveMode();
+  }
+
+  function wireOverlayDrag() {
+    const handle = $('moveHandle');
+    const header = $('panelHeader');
+    if (!handle && !header) return;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let baseX = 0;
+    let baseY = 0;
+    let curX = 0;
+    let curY = 0;
+
+    const startDrag = (e) => {
+      // Dragging is ONLY possible in move mode so the game never loses the
+      // mouse by accident. The dedicated «⠿» handle works even when the
+      // header (channel name) is hidden by the user.
+      if (!moveMode || e.target.closest('button')) return;
+      e.preventDefault();
+      dragging = true;
+      document.body.classList.add('dragging');
+      startX = e.clientX;
+      startY = e.clientY;
+      baseX = curX = Number(Settings.appearance.marginX) || 0;
+      baseY = curY = Number(Settings.appearance.marginY) || 0;
+      const panel = $('panel');
+
+      const move = (ev) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        const corner = document.body.dataset.corner || 'tr';
+        const rightSide = corner === 'tr' || corner === 'br';
+        // The panel bumps into the screen edges and never leaves them — the
+        // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
+        const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
+        const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
+        curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
+        curY = Math.min(maxY, Math.max(0, baseY + dy));
+        document.documentElement.style.setProperty('--margin-x', `${curX}px`);
+        document.documentElement.style.setProperty('--margin-y', `${curY}px`);
+      };
+      const up = () => {
+        dragging = false;
+        document.body.classList.remove('dragging');
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        // Nothing is saved yet: the user confirms with the «Подтвердить»
+        // button («Отмена» snaps the panel back to the saved spot).
+        pendingX = curX;
+        pendingY = curY;
+        const hint = $('moveHint');
+        if (hint) hint.textContent = t('moveHintPending');
+        fetch('/api/overlay/moved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ marginX: curX, marginY: curY }),
+        }).catch(() => {});
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    };
+
+    if (handle) handle.addEventListener('mousedown', startDrag);
+    if (header) header.addEventListener('mousedown', startDrag);
+  }
+
+  wireOverlayDrag();
+
   $('chatUnread').addEventListener('click', clearUnread);
   $('chatUnread').addEventListener('mouseenter', () => setBadgeHover(true));
   $('chatUnread').addEventListener('mouseleave', () => setBadgeHover(false));

@@ -202,6 +202,81 @@ try {
     badge.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     check('overlay: badge stays cleared after read', badge.hidden === true);
 
+    // v1.1.11: system event feed (join/leave/move) — localised row, no '…:'
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'c92', userId: 'u2', nickname: 'Мария', text: 'Мария', kind: 'system', event: 'join', detail: 'UI Test Channel', at: Date.now() },
+          { id: 'c93', userId: 'u2', nickname: 'Мария', text: 'привет', kind: 'channel', at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const sysRow = [...doc.querySelectorAll('#chatFeed .chat-toast.kind-system')].map((el) => el.textContent).join(' | ');
+    check('overlay: system event row localised (join)', /Мария/.test(sysRow) && /UI Test Channel/.test(sysRow) && !/…:/.test(sysRow), sysRow);
+    check('overlay: system rows are not counted as unread', badge.hidden === false && doc.getElementById('chatUnreadCount').textContent === '1', doc.getElementById('chatUnreadCount').textContent);
+
+    // v1.1.12: dragging is gated behind the "move overlay" hotkey
+    const header = doc.getElementById('panelHeader');
+    const mxBefore = doc.documentElement.style.getPropertyValue('--margin-x');
+    header.dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 160, clientY: 120 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 160, clientY: 120 }));
+    check('overlay: drag inert without move mode', doc.documentElement.style.getPropertyValue('--margin-x') === mxBefore, `${mxBefore} → ${doc.documentElement.style.getPropertyValue('--margin-x')}`);
+
+    // v1.1.15: dedicated drag handle + explicit confirm to save
+    const moveHandle = doc.getElementById('moveHandle');
+    check('overlay: drag handle present', !!moveHandle && moveHandle.hidden === true);
+
+    FakeWS.last._emit({ type: 'move-mode', active: true });
+    await new Promise((r) => setTimeout(r, 30));
+    check('overlay: move mode armed by hotkey message', doc.body.classList.contains('move-mode'));
+    check('overlay: handle visible in move mode', moveHandle.hidden === false);
+    header.dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 160, clientY: 120 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 160, clientY: 120 }));
+    const mx = doc.documentElement.style.getPropertyValue('--margin-x');
+    const my = doc.documentElement.style.getPropertyValue('--margin-y');
+    // corner=tr: marginX from the right edge (drag left → grows), marginY from
+    // the top (drag down → grows). No 500px cap — only screen bounds.
+    check('overlay: drag in move mode updates offsets', mx === '58px' && my === '38px', `x=${mx} y=${my}`);
+    // v1.1.5→1.2.0: a drag alone does NOT end move mode — save/cancel are the
+    // ✓/✗ icon buttons on the overlay handle itself
+    check('overlay: move mode stays after the drag (await confirm)', doc.body.classList.contains('move-mode') === true);
+    check('overlay: ✓/✗ save-cancel buttons on the handle', !!doc.getElementById('moveSaveBtn') && !!doc.getElementById('moveDiscardBtn') && doc.getElementById('moveHandle').hidden === false);
+
+    // Cancel snaps the panel back to the saved position
+    FakeWS.last._emit({ type: 'move-cancel' });
+    await new Promise((r) => setTimeout(r, 30));
+    check('overlay: move-cancel restores position + exits', doc.body.classList.contains('move-mode') === false && doc.documentElement.style.getPropertyValue('--margin-x') === `${Number(dom.window.Settings.appearance.marginX) || 0}px`);
+
+    // Drag via the dedicated handle works too; confirm saves
+    FakeWS.last._emit({ type: 'move-mode', active: true });
+    await new Promise((r) => setTimeout(r, 30));
+    moveHandle.dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 140, clientY: 130 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 140, clientY: 130 }));
+    const hx = doc.documentElement.style.getPropertyValue('--margin-x');
+    check('overlay: handle drag updates offsets', hx === '78px', `x=${hx}`);
+    FakeWS.last._emit({ type: 'move-confirm' });
+    await new Promise((r) => setTimeout(r, 30));
+    check('overlay: move-confirm saves + exits', doc.body.classList.contains('move-mode') === false && Number(dom.window.Settings.appearance.marginX) === 78, String(dom.window.Settings.appearance.marginX));
+
+    // v1.1.12: the panel is top-anchored so it fills downward
+    let fillsDown = false;
+    try {
+      for (const sheet of doc.styleSheets) {
+        for (const rule of sheet.cssRules || []) {
+          if (rule.selectorText === 'body[data-corner="tr"] #panel' && rule.style.top) fillsDown = true;
+        }
+      }
+    } catch {
+      fillsDown = true;
+    }
+    check('overlay: panel is top-anchored (fills downward)', fillsDown);
+
     // v1.1.1: class group icon selection — match the CLASS group by name
     const TSN = dom.window.TSN;
     TSN.state = { ...fakeState, groups: [{ id: 4, name: 'Служители света', iconId: 10 }, { id: 5, name: 'Лучники Ордена', iconId: 777 }] };
@@ -247,6 +322,51 @@ try {
 
     // v1.0.2 feature round
     check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
+    check('settings: margin sliders bounded by screen minus panel', (() => {
+      const ix = doc.querySelector('[data-slider="marginX"] input[type="range"]');
+      const iy = doc.querySelector('[data-slider="marginY"] input[type="range"]');
+      const sw = Math.round(dom.window.screen.availWidth || 1920);
+      return Number(ix?.max) >= 500 && Number(ix.max) <= sw && Number(iy?.max) >= 500;
+    })(), `x=${doc.querySelector('[data-slider="marginX"] input')?.max} y=${doc.querySelector('[data-slider="marginY"] input')?.max}`);
+    // v1.1.14: the move hotkey was replaced by a button on the Appearance tab
+    check('settings: move-overlay button under the position controls', !!doc.getElementById('moveOverlayBtn') && !doc.getElementById('moveHotkey'));
+    // v1.2.0: confirm/cancel buttons removed from settings — ✓/✗ live on the overlay
+    check('settings: no confirm/cancel buttons (moved to overlay)', !doc.getElementById('moveConfirmBtn') && !doc.getElementById('moveConfirmRow'));
+    check('settings: restart button ready for downloaded update', !!doc.getElementById('restartNowBtn') && doc.getElementById('restartNowBtn').hidden === true);
+    // v1.1.15: «Ещё» is a single tab — About/profiles merged in
+    check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
+    check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
+    check('settings: version line shows 1.2.0', /1\.2\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
+    // v1.2.0: «Запустить вещание» removed — OBS Browser Source only needs the
+    // copied URL (the launch button was not required to show TS in OBS)
+    check('settings: no OBS launch button (URL is enough for OBS)', !doc.getElementById('obsLaunchBtn') && !!doc.getElementById('copyObsUrlBtn') && !!doc.getElementById('overlayWindowToggle'));
+    check('settings: OBS browser-source hint shows the URL', /\/\?clean=1/.test(doc.getElementById('obsHint')?.textContent || ''), doc.getElementById('obsHint')?.textContent);
+
+    // v1.1.14: placement is clamped so the panel never leaves the screen
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, marginX: 99999, marginY: 99999 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const clampedX = parseFloat(doc.documentElement.style.getPropertyValue('--margin-x'));
+    const clampedY = parseFloat(doc.documentElement.style.getPropertyValue('--margin-y'));
+    check('settings: margins clamp to the screen bounds', clampedX > 0 && clampedX < 99999 && clampedY > 0 && clampedY < 99999, `x=${clampedX} y=${clampedY}`);
+
+    // v1.1.15: server config wins over a stale local cache (no more "stuck
+    // until reconnect" panel states)
+    try {
+      dom.window.localStorage.setItem('tsnotifier:appearance', JSON.stringify({ marginX: 13, marginY: 13 }));
+    } catch {
+      /* ignore */
+    }
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, marginX: 500, marginY: 42 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const followX = doc.documentElement.style.getPropertyValue('--margin-x');
+    check('settings: server config applies instantly over stale cache', followX === '500px', followX);
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
@@ -315,7 +435,46 @@ try {
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
   }
-  /* ---- 5. overlay click-through endpoint (desktop hook contract) ---- */
+  /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
+  {
+    const h2 = await startServer({
+      port: 0,
+      preferredPort: handle.port(),
+      host: '127.0.0.1',
+      dataDir: join(tmpdir(), 'tsn-ui-test'),
+      publicDir: join(ROOT, 'public'),
+      log: () => {},
+    });
+    check('server: preferred port falls back when busy', h2.port() > 0 && h2.port() !== handle.port(), `main=${handle.port()} fallback=${h2.port()}`);
+    h2.close();
+  }
+
+  /* ---- 6. move-mode + update endpoints (desktop hook contracts) ---- */
+  {
+    const mv = await fetch(`${BASE}/api/overlay/move`, { method: 'POST' });
+    const mvBody = await mv.json();
+    check('server: overlay move endpoint answers', mv.ok && mvBody.ok === true, JSON.stringify(mvBody));
+    const up = await fetch(`${BASE}/api/update/check`, { method: 'POST' });
+    const upBody = await up.json();
+    check('server: update-check endpoint answers', up.ok && upBody.ok === true && upBody.applied === false, JSON.stringify(upBody));
+    for (const route of ['/api/overlay/moved', '/api/overlay/move-confirm', '/api/overlay/move-cancel', '/api/overlay/size']) {
+      const r = await fetch(`${BASE}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marginX: 1, marginY: 2, w: 292, h: 140 }),
+      });
+      const b = await r.json();
+      check(`server: ${route} answers`, r.ok && b.ok === true, JSON.stringify(b));
+    }
+    const rs = await fetch(`${BASE}/api/update/restart`, { method: 'POST' });
+    const rsBody = await rs.json();
+    check('server: update-restart endpoint answers', rs.ok && rsBody.ok === true && rsBody.applied === false, JSON.stringify(rsBody));
+    const dp = await fetch(`${BASE}/api/displays`);
+    const dpBody = await dp.json();
+    check('server: displays reports panel size', dp.ok && dpBody.panelSize?.w === 292 && dpBody.panelSize?.h === 140, JSON.stringify(dpBody.panelSize));
+  }
+
+  /* ---- 7. overlay click-through endpoint (desktop hook contract) ---- */
   {
     const res = await fetch(`${BASE}/api/overlay/clickthrough`, {
       method: 'POST',

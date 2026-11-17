@@ -271,8 +271,15 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
         const existing = this.clients.get(clientId);
         if (newChannel <= 0) {
+          if (existing) this.pushFeed(existing, 'leave', '');
           this.clients.delete(clientId);
         } else if (existing) {
+          if (
+            clientId !== this.ownClientId &&
+            (newChannel === this.ownChannelId || existing.channelId === this.ownChannelId)
+          ) {
+            this.pushFeed(existing, 'move', this.channels.get(newChannel)?.name ?? '');
+          }
           this.clients.set(clientId, { ...existing, channelId: newChannel });
           if (clientId === this.ownClientId) this.ownChannelId = newChannel;
         } else if (oldChannel <= 0) {
@@ -398,6 +405,28 @@ export class Ts6Connector extends EventEmitter implements Connector {
       }
 
       case 'clientJoined':
+      case 'clientConnected': {
+        if (!foreign) {
+          const clientId = jInt(payload, 'clientId') || jInt(payload, 'id');
+          const props = asObj(payload['properties']) ?? payload;
+          const nick = jStr(props, 'nickname') || jStr(props, 'name') || '';
+          const channelId = jInt(payload, 'channelId') || jInt(payload, 'newChannelId') || jInt(props, 'channelId');
+          if (clientId > 0 && nick && clientId !== this.ownClientId) {
+            const inOur = channelId === this.ownChannelId;
+            this.pushChat({
+              userId: String(clientId),
+              nickname: nick,
+              text: nick,
+              kind: 'system',
+              event: 'join',
+              detail: inOur ? (this.channels.get(channelId)?.name ?? '') : '',
+            });
+          }
+        }
+        this.resync(`event ${type}`);
+        return;
+      }
+
       case 'channelMoved':
       case 'serverEdited':
         this.resync(`event ${type}`);
@@ -408,7 +437,14 @@ export class Ts6Connector extends EventEmitter implements Connector {
       case 'clientDisconnected': {
         if (foreign) return;
         const clientId = jInt(payload, 'clientId') || jInt(payload, 'id');
-        if (clientId > 0 && this.clients.delete(clientId)) this.emitState();
+        const existing = this.clients.get(clientId);
+        if (existing) {
+          if (clientId !== this.ownClientId) {
+            this.pushFeed(existing, 'leave', existing.channelId === this.ownChannelId ? (this.channels.get(existing.channelId)?.name ?? '') : '');
+          }
+          this.clients.delete(clientId);
+          this.emitState();
+        }
         return;
       }
 
@@ -508,12 +544,18 @@ export class Ts6Connector extends EventEmitter implements Connector {
     });
   }
 
+  /** Join/leave/move feed row built from a known user. */
+  private pushFeed(user: UserState, event: 'join' | 'leave' | 'move', detail: string): void {
+    if (user.isQuery || !user.nickname) return;
+    this.pushChat({ userId: user.id, nickname: user.nickname, text: user.nickname, kind: 'system', event, detail });
+  }
+
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
     const now = Date.now();
     const last = this.chat[this.chat.length - 1];
     // Own-message echo arrives twice (second copy loses the target mode) —
     // merge instead of showing a twin.
-    if (last && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
+    if (last && !last.event && !msg.event && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
       const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
       const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
       const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;

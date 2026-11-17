@@ -18,9 +18,15 @@ export interface AppOptions {
   publicDir: string;
   log?: (msg: string) => void;
   /** Desktop only: enumerate connected displays for the overlay target setting. */
-  listDisplays?: () => Array<{ id: string; label: string; primary: boolean }>;
+  listDisplays?: () => Array<{ id: string; label: string; primary: boolean; width?: number; height?: number }>;
   /** Desktop only: temporarily take/release mouse input on the overlay window. */
   setOverlayClickThrough?: (ignore: boolean) => void;
+  /** Try this port first (stable URL for OBS browser sources); falls back to a random one. */
+  preferredPort?: number;
+  /** Desktop only: trigger an update check in the shell. */
+  checkUpdates?: () => void;
+  /** Desktop only: quit and install a downloaded update right now. */
+  restartToUpdate?: () => void;
 }
 
 export interface AppHandle {
@@ -81,7 +87,10 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
   /* ---------------- ws hub ---------------- */
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
+
+  let moveModeActive = false;
+  let panelSize: { w: number; h: number } | null = null;
 
   function broadcast(message: unknown): void {
     const raw = JSON.stringify(message);
@@ -191,13 +200,85 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     }
 
     if (url.startsWith('/api/displays') && method === 'GET') {
-      json(res, 200, { ok: true, displays: opts.listDisplays ? opts.listDisplays() : [] });
+      json(res, 200, {
+        ok: true,
+        displays: opts.listDisplays ? opts.listDisplays() : [],
+        panelSize,
+      });
       return;
     }
 
     if (url.startsWith('/api/reconnect') && method === 'POST') {
       startConnector();
       json(res, 200, { ok: true });
+      return;
+    }
+
+    // The settings window arms overlay move mode (same signal as the tray).
+    // NOTE: exact match — /move-confirm and friends are separate routes.
+    if (url === '/api/overlay/move' && method === 'POST') {
+      moveModeActive = !moveModeActive;
+      broadcast({ type: 'move-mode', active: moveModeActive });
+      json(res, 200, { ok: true, moveMode: moveModeActive });
+      return;
+    }
+
+    // The overlay finished a drag: position is pending until confirmed.
+    if (url === '/api/overlay/moved' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { marginX?: number; marginY?: number } | null;
+        broadcast({ type: 'move-pending', marginX: b?.marginX, marginY: b?.marginY });
+        json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    if (url === '/api/overlay/move-confirm' && method === 'POST') {
+      moveModeActive = false;
+      broadcast({ type: 'move-confirm' });
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (url === '/api/overlay/move-cancel' && method === 'POST') {
+      moveModeActive = false;
+      broadcast({ type: 'move-cancel' });
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    // The overlay reports its real panel size so the settings sliders can
+    // bound margins by "screen minus panel" exactly.
+    if (url === '/api/overlay/size' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { w?: number; h?: number } | null;
+        if (Number.isFinite(b?.w) && Number.isFinite(b?.h)) {
+          panelSize = { w: Math.round(Number(b?.w)), h: Math.round(Number(b?.h)) };
+        }
+        json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    // «Перезапустить сейчас»: install the downloaded update and relaunch.
+    if (url === '/api/update/restart' && method === 'POST') {
+      try {
+        opts.restartToUpdate?.();
+      } catch (err) {
+        log(`[server] restart-to-update failed: ${err}`);
+      }
+      json(res, 200, { ok: true, applied: !!opts.restartToUpdate });
+      return;
+    }
+
+    // Update check runs in the desktop shell (electron-updater).
+    if (url.startsWith('/api/update/check') && method === 'POST') {
+      try {
+        opts.checkUpdates?.();
+      } catch (err) {
+        log(`[server] update check failed: ${err}`);
+      }
+      json(res, 200, { ok: true, applied: !!opts.checkUpdates });
       return;
     }
 
@@ -297,17 +378,17 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   });
 
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState }));
+    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive }));
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(opts.port, opts.host, () => {
-      const addr = server.address();
-      const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
-      log(`[server] TS3-TS6 Notifier running at http://${opts.host}:${actualPort}`);
-      startConnector();
-      resolve({
+    const start = () => {
+      server.listen(currentPort, opts.host, () => {
+        const addr = server.address();
+        const actualPort = typeof addr === 'object' && addr ? addr.port : currentPort;
+        log(`[server] TS3-TS6 Notifier running at http://${opts.host}:${actualPort}`);
+        startConnector();
+        resolve({
         events,
         store,
         state: () => latestState,
@@ -317,12 +398,32 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           const addr = server.address();
           return typeof addr === 'object' && addr ? addr.port : opts.port;
         },
-        close: () => {
-          connector?.stop();
-          wss.close();
-          server.close();
-        },
+          close: () => {
+            connector?.stop();
+            wss.close();
+            server.close();
+          },
+        });
       });
-    });
+    };
+    // A stable port makes the overlay URL copyable into OBS browser sources;
+    // if it is busy we silently fall back to a random port.
+    let currentPort = opts.port;
+    if (opts.preferredPort) {
+      currentPort = opts.preferredPort;
+      server.once('error', (err) => {
+        if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          log(`[server] port ${opts.preferredPort} busy — falling back to a random port`);
+          currentPort = 0;
+          server.once('error', reject);
+          start();
+        } else {
+          reject(err);
+        }
+      });
+    } else {
+      server.once('error', reject);
+    }
+    start();
   });
 }

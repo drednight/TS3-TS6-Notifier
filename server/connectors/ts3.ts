@@ -57,6 +57,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private pending: PendingCommand[] = [];
   private stopped = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private disconnectWaiters: Array<() => void> = [];
+  private refreshFails = 0;
   private refreshTimer: NodeJS.Timeout | null = null;
   private periodicTimer: NodeJS.Timeout | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
@@ -96,31 +98,64 @@ export class Ts3Connector extends EventEmitter implements Connector {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
-    if (this.periodicTimer) clearInterval(this.periodicTimer);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.reconnectTimer = this.refreshTimer = this.flushTimer = null;
-    this.periodicTimer = null;
-    this.socket?.destroy();
-    this.socket = null;
+    this.signalDisconnect();
   }
 
   /* -------------------------------------------------- connection */
 
   private async connectLoop(): Promise<void> {
+    let attempt = 0;
     while (!this.stopped) {
       try {
         await this.connectOnce();
+        // The link is up — stay here until it ACTUALLY dies. Re-opening the
+        // socket on a timer (the old behaviour) made the status flap between
+        // "connecting" and "connected" every few seconds.
+        attempt = 0;
+        await this.waitDisconnected();
       } catch (err) {
         if (this.stopped) return;
         const msg = err instanceof Error ? err.message : String(err);
         this.publish(this.authFailed ? 'waiting-auth' : 'offline', msg);
       }
       if (this.stopped) return;
-      const delay = this.authFailed ? 15000 : 3000;
+      attempt += 1;
+      // Backoff: 3s, 6s, 12s, 24s, 30s cap — quick first retry, no hammering.
+      const delay = this.authFailed ? 15000 : Math.min(30000, 3000 * 2 ** Math.min(attempt - 1, 4));
       await new Promise((r) => {
         this.reconnectTimer = setTimeout(r, delay);
       });
     }
+  }
+
+  /** Mark the current connection dead and wake disconnect waiters. */
+  private signalDisconnect(socket?: net.Socket): void {
+    if (socket && this.socket && this.socket !== socket) return;
+    if (this.socket) {
+      try {
+        this.socket.destroy();
+      } catch {
+        /* already gone */
+      }
+      this.socket = null;
+    }
+    this.pending = [];
+    this.buffer = '';
+    if (this.periodicTimer) {
+      clearInterval(this.periodicTimer);
+      this.periodicTimer = null;
+    }
+    const waiters = this.disconnectWaiters.splice(0);
+    for (const wake of waiters) wake();
+  }
+
+  private waitDisconnected(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.socket) resolve();
+      else this.disconnectWaiters.push(resolve);
+    });
   }
 
   private connectOnce(): Promise<void> {
@@ -148,10 +183,18 @@ export class Ts3Connector extends EventEmitter implements Connector {
       // stretches, so an inactivity timeout would kill a healthy connection.
       const connectTimer = setTimeout(() => fail(new Error('ClientQuery connect timeout')), 5000);
 
-      socket.on('error', fail);
-      socket.on('close', () => fail(new Error('ClientQuery connection closed')));
+      socket.on('error', (err) => {
+        if (!settled) fail(err instanceof Error ? err : new Error(String(err)));
+        else this.signalDisconnect(socket);
+      });
+      socket.on('close', () => {
+        if (!settled) fail(new Error('ClientQuery connection closed'));
+        else this.signalDisconnect(socket);
+      });
       socket.on('data', (chunk: string) => {
         this.buffer += chunk;
+        // A line without terminators must never grow the buffer unbounded.
+        if (this.buffer.length > 1_000_000) this.buffer = '';
         let idx: number;
         while ((idx = this.buffer.indexOf('\n')) >= 0) {
           const line = this.buffer.slice(0, idx).replace(/\r$/, '');
@@ -232,7 +275,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
     await this.findActiveHandler();
     await this.fullRefresh();
 
+    if (this.periodicTimer) clearInterval(this.periodicTimer);
     this.periodicTimer = setInterval(() => void this.fullRefresh(), 45000);
+    this.refreshFails = 0;
   }
 
   /** Try `auth`; classify the outcome instead of throwing on timeout. */
@@ -446,9 +491,15 @@ export class Ts3Connector extends EventEmitter implements Connector {
         }));
       }
 
+      this.refreshFails = 0;
       this.publish('live', '');
     } catch (err) {
-      this.publish('offline', err instanceof Error ? err.message : String(err));
+      // One failed refresh is transient noise — only drop to 'offline' after
+      // repeated failures so the status pill does not flap.
+      this.refreshFails += 1;
+      if (this.refreshFails >= 2) {
+        this.publish('offline', err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
@@ -561,8 +612,21 @@ export class Ts3Connector extends EventEmitter implements Connector {
         if (!inScope) return;
         const clid = fInt(fields, 'clid');
         const user = this.clients.get(clid);
+        const to = fInt(fields, 'ctid');
         if (user?.isSelf) {
-          this.ownCid = fInt(fields, 'ctid');
+          this.ownCid = to;
+        } else if (user && !user.isQuery && clid !== this.ownClid) {
+          // Only announce moves that touch the user's own channel.
+          if (to === this.ownCid || user.channelId === this.ownCid) {
+            this.pushChat({
+              userId: String(clid),
+              nickname: user.nickname,
+              text: user.nickname,
+              kind: 'system',
+              event: 'move',
+              detail: this.channels.get(to)?.name ?? '',
+            });
+          }
         }
         this.scheduleRefresh();
         return;
@@ -570,12 +634,61 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
       case 'notifyclientleftview': {
         if (!inScope) return;
-        if (this.clients.delete(fInt(fields, 'clid'))) this.emitState();
+        const clid = fInt(fields, 'clid');
+        const user = this.clients.get(clid);
+        const nick = fStr(fields, 'client_nickname') || user?.nickname || '';
+        const wasOurs = !!user && user.channelId === this.ownCid;
+        if (nick && !user?.isQuery && clid !== this.ownClid) {
+          this.pushChat({
+            userId: String(clid),
+            nickname: nick,
+            text: nick,
+            kind: 'system',
+            event: 'leave',
+            detail: wasOurs ? (this.channels.get(user!.channelId)?.name ?? '') : '',
+          });
+        }
+        if (this.clients.delete(clid)) this.emitState();
         this.scheduleRefresh();
         return;
       }
 
-      case 'notifycliententerview':
+      case 'notifycliententerview': {
+        if (!inScope) return;
+        const clid = fInt(fields, 'clid');
+        const nick = fStr(fields, 'client_nickname');
+        const isQuery = fInt(fields, 'client_type') === 1;
+        if (nick && !isQuery && clid !== this.ownClid) {
+          const ctid = fInt(fields, 'ctid');
+          const inOur = ctid > 0 && ctid === this.ownCid;
+          this.pushChat({
+            userId: String(clid),
+            nickname: nick,
+            text: nick,
+            kind: 'system',
+            event: 'join',
+            detail: inOur ? (this.channels.get(ctid)?.name ?? '') : '',
+          });
+        }
+        this.scheduleRefresh();
+        return;
+      }
+
+      case 'notifyclientpoke': {
+        if (!inScope) return;
+        const nick = fStr(fields, 'invokername') || 'Кто-то';
+        const msg = fStr(fields, 'msg');
+        this.pushChat({
+          userId: String(fInt(fields, 'invokerid')),
+          nickname: nick,
+          text: msg || nick,
+          kind: 'poke',
+          event: 'poke',
+          detail: msg,
+        });
+        return;
+      }
+
       case 'notifychannelcreated':
       case 'notifychanneledited':
       case 'notifychanneldeleted':
@@ -609,7 +722,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
     const last = this.chat[this.chat.length - 1];
     // Own-message echo arrives twice with different metadata (e.g. target
     // mode missing on the second copy) — merge instead of showing a twin.
-    if (last && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
+    if (last && !last.event && !msg.event && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
       const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
       const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
       const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;

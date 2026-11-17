@@ -11,12 +11,15 @@ import { join } from 'node:path';
 import {
   app,
   BrowserWindow,
+  clipboard,
   globalShortcut,
   Menu,
   nativeImage,
+  Notification,
   screen,
   Tray,
 } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { startServer, type AppHandle } from '../server/app.js';
 
 const IS_PACKAGED = app.isPackaged;
@@ -60,9 +63,121 @@ let settingsWin: BrowserWindow | null = null;
 let boardWin: BrowserWindow | null = null;
 const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
+let screenHooksInstalled = false;
 let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
+
+/* ---------------- overlay move hotkey ---------------- */
+
+let moveHotkeyReg = '';
+
+/**
+ * A dedicated "move overlay" hotkey arms move mode for a short window: the
+ * panel takes the mouse so it can be dragged anywhere (and its buttons
+ * clicked), then releases it again. Dragging is impossible without the key,
+ * so gameplay never loses the cursor by accident.
+ */
+function registerMoveHotkey(): void {
+  const combo = handle?.store.get().desktop.moveHotkey?.trim() || 'CommandOrControl+Shift+M';
+  if (moveHotkeyReg === combo) return;
+  if (moveHotkeyReg) {
+    try {
+      globalShortcut.unregister(moveHotkeyReg);
+    } catch {
+      /* already gone */
+    }
+    moveHotkeyReg = '';
+  }
+  try {
+    if (globalShortcut.register(combo, () => handle?.broadcast({ type: 'move-mode' }))) {
+      moveHotkeyReg = combo;
+      log(`[app] overlay move hotkey: ${combo}`);
+    } else {
+      log(`[app] move hotkey refused (busy?): ${combo}`);
+    }
+  } catch (err) {
+    log('[app] move hotkey error: ' + err);
+  }
+}
+
+/* ---------------- auto update (GitHub Releases) ---------------- */
+
+/**
+ * Self-update via electron-updater: on packaged builds the app checks the
+ * GitHub release for a newer version, downloads the NSIS installer in the
+ * background and installs it silently on quit.
+ */
+function setupAutoUpdate(): void {
+  if (!app.isPackaged) return;
+  try {
+    autoUpdater.setFeedURL({ provider: 'github', owner: 'drednight', repo: 'TS3-TS6-Notifier' });
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('checking-for-update', () => {
+      log('[update] checking for updates');
+      handle?.broadcast({ type: 'update-status', status: 'checking' });
+    });
+    autoUpdater.on('update-available', (info) => {
+      log(`[update] available: ${info.version}`);
+      handle?.broadcast({ type: 'update-status', status: 'available', version: info.version });
+    });
+    autoUpdater.on('update-not-available', () => {
+      log('[update] already up to date');
+      handle?.broadcast({ type: 'update-status', status: 'latest' });
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      log(`[update] ${info.version} downloaded — ready to restart`);
+      handle?.broadcast({ type: 'update-status', status: 'downloaded', version: info.version });
+      try {
+        // Offer an immediate restart: the toast action, clicking the toast,
+        // and the «Перезапустить сейчас» button in «Ещё» all install + relaunch.
+        const notification = new Notification({
+          title: tr('updTitle'),
+          body: `${tr('updDownloaded').replace('{v}', info.version)} ${tr('updRestartToast')}`,
+          actions: [{ type: 'button', text: tr('updRestartAction') }],
+        });
+        notification.on('action', () => tryQuitAndInstall());
+        notification.on('click', () => tryQuitAndInstall());
+        notification.show();
+      } catch {
+        /* notification unavailable */
+      }
+    });
+    autoUpdater.on('error', (err) => {
+      log('[update] error: ' + err);
+      handle?.broadcast({ type: 'update-status', status: 'error' });
+    });
+    void autoUpdater.checkForUpdates().catch((err) => log('[update] check failed: ' + err));
+    setInterval(() => {
+      void autoUpdater.checkForUpdates().catch(() => {});
+    }, 4 * 60 * 60 * 1000);
+  } catch (err) {
+    log('[update] setup failed: ' + err);
+  }
+}
+
+function tryQuitAndInstall(): void {
+  if (!app.isPackaged) {
+    log('[update] dev build — nothing to install');
+    return;
+  }
+  log('[update] quit & install requested');
+  try {
+    autoUpdater.quitAndInstall(true, true);
+  } catch (err) {
+    log('[update] quitAndInstall failed: ' + err);
+  }
+}
+
+function checkForUpdatesNow(): void {
+  if (!app.isPackaged) {
+    log('[update] dev build — nothing to check');
+    handle?.broadcast({ type: 'update-status', status: 'error' });
+    return;
+  }
+  void autoUpdater.checkForUpdates().catch((err) => log('[update] check failed: ' + err));
+}
 
 /* ---------------- elevation (Windows) ---------------- */
 
@@ -252,9 +367,12 @@ function createOverlay(): void {
   overlayWin.once('ready-to-show', show);
   setTimeout(show, 1500);
 
-  screen.on('display-metrics-changed', fitOverlay);
-  screen.on('display-added', fitOverlay);
-  screen.on('display-removed', fitOverlay);
+  if (!screenHooksInstalled) {
+    screenHooksInstalled = true;
+    screen.on('display-metrics-changed', fitOverlay);
+    screen.on('display-added', fitOverlay);
+    screen.on('display-removed', fitOverlay);
+  }
   log(`[app] overlay bounds ${workArea.width}x${workArea.height}+${workArea.x}+${workArea.y}`);
 }
 
@@ -321,6 +439,34 @@ function openBoard(): void {
 }
 
 /* ---------------- tray ---------------- */
+
+/**
+ * The overlay window is optional: in "server-only" mode the app keeps just the
+ * small Node core (HTTP/WS + connector) running and the overlay is rendered
+ * on demand elsewhere — e.g. as an OBS browser source. That saves a whole
+ * renderer process plus the fullscreen compositor window.
+ */
+function applyOverlayWindow(): void {
+  const want = handle?.store.get().desktop.overlayWindow !== false;
+  if (want && !overlayWin) {
+    createOverlay();
+    log('[app] overlay window created');
+  } else if (!want && overlayWin) {
+    overlayWin.destroy();
+    overlayWin = null;
+    log('[app] overlay window closed (server-only mode)');
+  }
+}
+
+function copyOverlayUrl(): void {
+  const url = `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1`;
+  try {
+    clipboard.writeText(url);
+    log(`[app] overlay URL copied: ${url}`);
+  } catch {
+    log(`[app] overlay URL: ${url}`);
+  }
+}
 
 function setOverlayVisible(visible: boolean): void {
   overlayVisible = visible;
@@ -396,13 +542,88 @@ function registerSoundHotkeys(): void {
   }
 }
 
+/* ---------------- tray i18n ---------------- */
+
+const TRAY_STRINGS: Record<string, Record<string, string>> = {
+  ru: {
+    settings: 'Настройки…',
+    checkUpdates: 'Проверить обновления',
+    overlayWindow: 'Оверлей-окно',
+    copyUrl: 'Скопировать ссылку оверлея',
+    dataSource: 'Источник данных',
+    demo: 'Демо-режим',
+    ts3: 'TeamSpeak 3 (ClientQuery)',
+    ts6: 'TeamSpeak 6 (Remote Apps)',
+    reconnect: 'Переподключиться',
+    clickThrough: 'Клик-сквозной (закрепить оверлей)',
+    autostart: 'Запускать со старта',
+    showOverlay: 'Показывать оверлей',
+    quit: 'Выход',
+    updTitle: 'TS3-TS6 Notifier — обновление',
+    updDownloaded: 'Версия {v} скачана.',
+    updRestartAction: 'Перезапустить сейчас',
+    updRestartToast: 'Нажмите, чтобы перезапустить приложение сейчас — или оно обновится при выходе.',
+  },
+  en: {
+    settings: 'Settings…',
+    checkUpdates: 'Check for updates',
+    overlayWindow: 'Overlay window',
+    copyUrl: 'Copy overlay URL',
+    dataSource: 'Data source',
+    demo: 'Demo mode',
+    ts3: 'TeamSpeak 3 (ClientQuery)',
+    ts6: 'TeamSpeak 6 (Remote Apps)',
+    reconnect: 'Reconnect',
+    clickThrough: 'Click-through (lock overlay)',
+    autostart: 'Launch at startup',
+    showOverlay: 'Show overlay',
+    quit: 'Quit',
+    updTitle: 'TS3-TS6 Notifier — update',
+    updDownloaded: 'Version {v} downloaded.',
+    updRestartAction: 'Restart now',
+    updRestartToast: 'Click to restart the app now — otherwise it updates when you quit.',
+  },
+};
+
+function tr(key: string): string {
+  const raw = handle?.store.get().appearance.language ?? 'auto';
+  let lang: string = raw === 'en' || raw === 'ru' ? raw : 'en';
+  if (raw !== 'en' && raw !== 'ru') {
+    try {
+      if (typeof app.getLocale === 'function' && app.getLocale().startsWith('ru')) lang = 'ru';
+    } catch {
+      /* locale unavailable */
+    }
+  }
+  return TRAY_STRINGS[lang]?.[key] ?? TRAY_STRINGS.en?.[key] ?? key;
+}
+
 function buildTrayMenu(): void {
   if (!tray || !handle) return;
   const cfg = handle.store.get();
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'Settings…',
+      label: tr('settings'),
       click: () => openSettings(),
+    },
+    {
+      label: tr('checkUpdates'),
+      click: () => checkForUpdatesNow(),
+    },
+    {
+      label: tr('overlayWindow'),
+      type: 'checkbox',
+      checked: handle?.store.get().desktop.overlayWindow !== false,
+      click: () => {
+        const current = handle?.store.get().desktop.overlayWindow !== false;
+        handle?.store.update({ desktop: { overlayWindow: !current } });
+        applyOverlayWindow();
+        buildTrayMenu();
+      },
+    },
+    {
+      label: tr('copyUrl'),
+      click: () => copyOverlayUrl(),
     },
     // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
     ...(SOUNDS_UI_HIDDEN
@@ -415,39 +636,39 @@ function buildTrayMenu(): void {
         ]),
     { type: 'separator' },
     {
-      label: 'Data source',
+      label: tr('dataSource'),
       submenu: [
-        { label: 'Demo mode', type: 'radio', checked: cfg.source === 'mock', click: () => setSource('mock') },
-        { label: 'TeamSpeak 3 (ClientQuery)', type: 'radio', checked: cfg.source === 'ts3', click: () => setSource('ts3') },
-        { label: 'TeamSpeak 6 (Remote Apps)', type: 'radio', checked: cfg.source === 'ts6', click: () => setSource('ts6') },
+        { label: tr('demo'), type: 'radio', checked: cfg.source === 'mock', click: () => setSource('mock') },
+        { label: tr('ts3'), type: 'radio', checked: cfg.source === 'ts3', click: () => setSource('ts3') },
+        { label: tr('ts6'), type: 'radio', checked: cfg.source === 'ts6', click: () => setSource('ts6') },
       ],
     },
     {
-      label: 'Reconnect',
+      label: tr('reconnect'),
       click: () => handle?.restartConnector(),
     },
     { type: 'separator' },
     {
-      label: 'Click-through (lock overlay)',
+      label: tr('clickThrough'),
       type: 'checkbox',
       checked: cfg.desktop.clickThrough,
       click: () => toggleClickThrough(),
     },
     {
-      label: 'Launch at startup',
+      label: tr('autostart'),
       type: 'checkbox',
       checked: cfg.desktop.autostart,
       click: () => toggleAutostart(),
     },
     {
-      label: 'Show overlay',
+      label: tr('showOverlay'),
       type: 'checkbox',
       checked: overlayVisible,
       click: () => setOverlayVisible(!overlayVisible),
     },
     { type: 'separator' },
     {
-      label: 'Quit',
+      label: tr('quit'),
       click: () => app.quit(),
     },
   ];
@@ -474,8 +695,20 @@ async function boot(): Promise<void> {
   log('=== TS3-TS6 Notifier starting ===');
   verifyAssets();
 
+  // A stable port keeps the overlay URL usable in OBS browser sources.
+  let preferredPort = 48911;
+  try {
+    const raw = JSON.parse(readFileSync(join(DATA_DIR, 'config.json'), 'utf8')) as {
+      desktop?: { port?: number };
+    };
+    if (typeof raw?.desktop?.port === 'number') preferredPort = raw.desktop.port;
+  } catch {
+    /* defaults apply */
+  }
+
   handle = await startServer({
     port: 0,
+    preferredPort,
     host: '127.0.0.1',
     dataDir: DATA_DIR,
     publicDir: PUBLIC_DIR,
@@ -485,12 +718,16 @@ async function boot(): Promise<void> {
         id: String(d.id),
         label: d.label || `${d.size.width}×${d.size.height}`,
         primary: d.id === screen.getPrimaryDisplay().id,
+        width: d.workArea.width,
+        height: d.workArea.height,
       })),
     setOverlayClickThrough: (ignore: boolean) => {
       if (overlayWin && !overlayWin.isDestroyed()) {
         overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
       }
     },
+    checkUpdates: () => checkForUpdatesNow(),
+    restartToUpdate: () => tryQuitAndInstall(),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
@@ -499,12 +736,38 @@ async function boot(): Promise<void> {
   const cfg = handle.store.get();
   const firstRun = !cfg.desktop.seen;
 
-  createOverlay();
   createTray();
+  applyOverlayWindow();
   applyAutostart();
+  setupAutoUpdate();
+  registerMoveHotkey();
   registerSoundHotkeys();
-  handle.events.on('config', () => registerSoundHotkeys());
-  handle.events.on('config', () => fitOverlay());
+  // One guarded listener: heavy shell work only when its own slice changed.
+  // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
+  let lastFitSig = '';
+  let lastTraySig = '';
+  handle.events.on('config', () => {
+    const cfg = handle!.store.get();
+    const fitSig = String(cfg.desktop.display ?? 'primary');
+    if (fitSig !== lastFitSig) {
+      lastFitSig = fitSig;
+      fitOverlay();
+    }
+    const traySig = JSON.stringify([
+      cfg.appearance.language,
+      cfg.desktop.autostart,
+      cfg.desktop.clickThrough,
+      cfg.desktop.visible,
+      cfg.desktop.overlayWindow,
+    ]);
+    if (traySig !== lastTraySig) {
+      lastTraySig = traySig;
+      buildTrayMenu();
+    }
+    applyOverlayWindow();
+    registerMoveHotkey();
+    registerSoundHotkeys();
+  });
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });

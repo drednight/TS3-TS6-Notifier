@@ -11,6 +11,12 @@
   <!-- ======================= OVERLAY ======================= -->
   <div id="stage">
     <section id="panel" aria-label="TeamSpeak overlay">
+      <div id="moveHandle" class="move-handle" hidden>
+        <span class="grip">⠿</span><span class="move-handle-text" data-i18n="moveHandleText"></span>
+        <button type="button" id="moveSaveBtn" class="move-ico save" aria-label="save">✓</button>
+        <button type="button" id="moveDiscardBtn" class="move-ico discard" aria-label="cancel">✗</button>
+      </div>
+      <div id="moveHint" hidden></div>
       <header id="panelHeader">
         <span class="conn-dot" id="connDot" title=""></span>
         <div class="title-block">
@@ -69,7 +75,7 @@
       <button class="tab" data-tab="elements" data-i18n="tabElements"></button>
       <button class="tab" data-tab="sound" data-i18n="tabSound" hidden></button>
       <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
-      <button class="tab" data-tab="about" data-i18n="tabAbout"></button>
+      <button class="tab" data-tab="more" data-i18n="tabMore"></button>
     </nav>
 
     <div class="drawer-body">
@@ -142,14 +148,19 @@
           </div>
         </div>
 
-        <div class="field" data-slider="marginX" data-min="0" data-max="240" data-step="1">
+        <div class="field" data-slider="marginX" data-min="0" data-max="500" data-step="1">
           <label data-i18n="marginX"></label><output></output>
           <input type="range" />
         </div>
 
-        <div class="field" data-slider="marginY" data-min="0" data-max="240" data-step="1">
+        <div class="field" data-slider="marginY" data-min="0" data-max="500" data-step="1">
           <label data-i18n="marginY"></label><output></output>
           <input type="range" />
+        </div>
+
+        <div class="field">
+          <button class="btn" id="moveOverlayBtn" data-i18n="moveOverlayBtn"></button>
+          <div class="hint" data-i18n="moveOverlayHint"></div>
         </div>
 
         <div class="field" id="displayField" hidden>
@@ -324,11 +335,24 @@
         </details>
 </section>
 
-      <!-- ---------- About ---------- -->
-      <section class="tab-panel" data-panel="about">
-        <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.10</span></div>
-          <div class="hint" data-i18n="aboutText"></div>
+      <!-- ---------- More ---------- -->
+      <section class="tab-panel" data-panel="more">
+        <div class="field">
+          <label data-i18n="updatesTitle"></label>
+          <div class="hint" id="updateVersion"></div>
+          <div class="btn-row">
+            <button class="btn primary" id="checkUpdateBtn" data-i18n="checkUpdateBtn"></button>
+            <button class="btn primary" id="restartNowBtn" data-i18n="updRestartBtn" hidden></button>
+          </div>
+          <div class="hint block" id="updateStatus"></div>
+          <div class="hint block" data-i18n="updatesHint"></div>
+        </div>
+
+        <label class="switch-row"><span data-i18n="overlayWindowLabel"></span><input type="checkbox" id="overlayWindowToggle" /><i></i></label>
+        <div class="hint block" data-i18n="overlayWindowHint"></div>
+        <div class="hint block" id="obsHint"></div>
+        <div class="btn-row">
+          <button class="btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
         </div>
 
         <div class="field">
@@ -341,6 +365,10 @@
           <input type="file" id="importFile" accept="application/json" hidden />
         </div>
 
+        <div class="card about-card">
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.2.0</span></div>
+          <div class="hint" data-i18n="aboutText"></div>
+        </div>
         <div class="hint block" data-i18n="aboutTip"></div>
       </section>
     </div>
