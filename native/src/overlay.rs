@@ -469,6 +469,8 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("overlay".into())
         .spawn(move || {
+            #[cfg(windows)]
+            win32::spawn_tray(app.clone(), port);
             let mut ov = Overlay::new(app, port);
             #[cfg(windows)]
             {
@@ -488,7 +490,8 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
 
 /* ---------------- win32 host (windows only) ---------------- */
 
-#[cfg(windows)]
+/// win32 backend — always compiled so it type-checks on every platform;
+/// the windows import libs are only linked when targeting windows.
 mod win32 {
     use super::*;
     use crate::render::Buf;
@@ -568,7 +571,7 @@ mod win32 {
         lPrivate: u32,
     }
 
-    #[link(name = "user32")]
+    #[cfg_attr(windows, link(name = "user32"))]
     extern "system" {
         fn RegisterClassExW(c: *const WNDCLASSEXW) -> u16;
         fn CreateWindowExW(
@@ -622,10 +625,21 @@ mod win32 {
         fn ReleaseDC(w: *mut c_void, dc: *mut c_void) -> i32;
         fn SystemParametersInfoW(a: u32, u: u32, p: *mut c_void, w: u32) -> i32;
         fn ClientToScreen(w: *mut c_void, p: *mut POINT) -> i32;
+        fn GetMessageW(m: *mut MSG, w: *mut c_void, min: u32, max: u32) -> i32;
+        fn LoadIconW(inst: *mut c_void, name: *const u16) -> *mut c_void;
+        fn CreateIconIndirect(info: *const ICONINFO) -> *mut c_void;
+        fn SetTimer(w: *mut c_void, id: usize, ms: u32, proc: *mut c_void) -> usize;
+        fn CreatePopupMenu() -> *mut c_void;
+        fn AppendMenuW(menu: *mut c_void, flags: u32, id: usize, label: *const u16) -> i32;
+        fn TrackPopupMenu(menu: *mut c_void, flags: u32, x: i32, y: i32, res: i32, w: *mut c_void, rect: *const c_void) -> u32;
+        fn DestroyMenu(menu: *mut c_void) -> i32;
     }
 
-    #[link(name = "shell32")]
+    const HWND_MESSAGE: *mut c_void = -3isize as *mut c_void;
+
+    #[cfg_attr(windows, link(name = "shell32"))]
     extern "system" {
+        fn Shell_NotifyIconW(dw: usize, data: *mut NOTIFYICONDATAW) -> i32;
         fn ShellExecuteW(
             hwnd: *mut c_void,
             op: *const u16,
@@ -636,7 +650,7 @@ mod win32 {
         ) -> *mut c_void;
     }
 
-    #[link(name = "gdi32")]
+    #[cfg_attr(windows, link(name = "gdi32"))]
     extern "system" {
         fn CreateCompatibleDC(dc: *mut c_void) -> *mut c_void;
         fn DeleteDC(dc: *mut c_void) -> i32;
@@ -913,12 +927,296 @@ mod win32 {
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOSIZE: u32 = 0x0001;
 
+    /* ---------------- system tray ---------------- */
+
+    const WM_APP_TRAY: u32 = 0x8001;
+    const NIM_ADD: usize = 0;
+    const NIM_MODIFY: usize = 1;
+    const NIM_DELETE: usize = 2;
+    const NIF_MESSAGE: u32 = 0x1;
+    const NIF_ICON: u32 = 0x2;
+    const NIF_TIP: u32 = 0x4;
+    const WM_COMMAND: u32 = 0x0111;
+    const WM_RBUTTONUP: u32 = 0x0205;
+    const WM_TIMER: u32 = 0x0113;
+    const TPM_RETURNCMD: u32 = 0x0100;
+    const MF_STRING: u32 = 0x0;
+    const MF_CHECKED: u32 = 0x8;
+    const MF_SEPARATOR: u32 = 0x800;
+    const MF_POPUP: u32 = 0x10;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NOTIFYICONDATAW {
+        cb_size: u32,
+        hwnd: *mut c_void,
+        u_id: u32,
+        u_flags: u32,
+        u_callback: u32,
+        h_icon: *mut c_void,
+        sz_tip: [u16; 128],
+        dw_state: u32,
+        dw_state_mask: u32,
+        sz_info: [u16; 256],
+        u_timeout_version: u32,
+        sz_info_title: [u16; 64],
+        dw_info_flags: u32,
+        guid_item: [u8; 16],
+        h_balloon_icon: *mut c_void,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ICONINFO {
+        f_icon: u32,
+        x_hotspot: u32,
+        y_hotspot: u32,
+        hbm_mask: *mut c_void,
+        hbm_color: *mut c_void,
+    }
+
+    use std::ptr::{null, null_mut};
+
+    static TRAY: std::sync::Mutex<Option<std::sync::Arc<crate::http::App>>> = std::sync::Mutex::new(None);
+    static TRAY_PORT: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
+
+    fn status_text(app: &crate::http::App) -> (String, bool) {
+        let state = app.latest.read().unwrap().clone();
+        let ru = app.store.lock().unwrap().get().appearance.language != "en";
+        let (text, live) = match state.status {
+            "live" => (if ru { "Подключено" } else { "Connected" }, true),
+            "waiting-auth" => (if ru { "Ожидание авторизации" } else { "Waiting for auth" }, false),
+            "connecting" => (if ru { "Подключение…" } else { "Connecting…" }, false),
+            "error" => (if ru { "Ошибка" } else { "Error" }, false),
+            _ => (if ru { "Не подключено" } else { "Disconnected" }, false),
+        };
+        let source = if state.source == "ts6" { "TS6" } else if state.source == "ts3" { "TS3" } else { "Mock" };
+        (format!("TS3-TS6 Notifier — {} · {}", source, text), live)
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn tray_icon() -> *mut c_void {
+        let size = 32i32;
+        let mut b = crate::render::Buf::new(size, size);
+        let pal = crate::theme::Palette::from_appearance(&crate::config::Appearance::default());
+        b.round_rect(1.0, 1.0, 30.0, 30.0, 8.0, pal.panel_bg);
+        b.stroke_round_rect(1.0, 1.0, 30.0, 30.0, 8.0, pal.accent.scale_a(200.0), 1.5);
+        b.circle(16.0, 16.0, 6.5, pal.accent);
+        b.circle(16.0, 16.0, 2.5, pal.panel_bg);
+        let mut di = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: 40,
+                biWidth: size,
+                biHeight: size * 2,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 2835,
+                biYPelsPerMeter: 2835,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [0; 3],
+        };
+        let mut px = vec![0u8; (size * size * 4) as usize];
+        for y in 0..size as usize {
+            for x in 0..size as usize {
+                let idx = ((y * size as usize) + x) * 4;
+                px[idx] = b.px[idx + 2]; // B
+                px[idx + 1] = b.px[idx + 1]; // G
+                px[idx + 2] = b.px[idx]; // R
+                px[idx + 3] = b.px[idx + 3]; // A
+            }
+        }
+        unsafe {
+            let mut bits: *mut c_void = null_mut();
+            let dib = CreateDIBSection(null_mut(), &mut di, 0, &mut bits, null_mut(), 0);
+            if dib.is_null() || bits.is_null() {
+                return LoadIconW(null_mut(), 32512 as *const u16);
+            }
+            std::ptr::copy_nonoverlapping(px.as_ptr(), bits as *mut u8, px.len());
+            let icon_info = ICONINFO { f_icon: 1, x_hotspot: 0, y_hotspot: 0, hbm_mask: null_mut(), hbm_color: dib };
+            let icon = CreateIconIndirect(&icon_info);
+            DeleteObject(dib);
+            if icon.is_null() {
+                return LoadIconW(null_mut(), 32512 as *const u16);
+            }
+            icon
+        }
+    }
+
+    fn tray_nid(hwnd: *mut c_void, icon: *mut c_void, tip: &str) -> NOTIFYICONDATAW {
+        let t: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut nid = NOTIFYICONDATAW {
+            cb_size: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hwnd,
+            u_id: 1,
+            u_flags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+            u_callback: WM_APP_TRAY,
+            h_icon: icon,
+            sz_tip: [0; 128],
+            dw_state: 0,
+            dw_state_mask: 0,
+            sz_info: [0; 256],
+            u_timeout_version: 0,
+            sz_info_title: [0; 64],
+            dw_info_flags: 0,
+            guid_item: [0; 16],
+            h_balloon_icon: null_mut(),
+        };
+        let n = t.len().min(127);
+        nid.sz_tip[..n].copy_from_slice(&t[..n]);
+        nid
+    }
+
+    fn show_tray_menu(hwnd: *mut c_void, app: &std::sync::Arc<crate::http::App>, port: u16) {
+        let cfg = app.store.lock().unwrap().get().clone();
+        let ru = cfg.appearance.language != "en";
+        unsafe {
+            let menu = CreatePopupMenu();
+            let sub = CreatePopupMenu();
+            let sources = ["mock", "ts3", "ts6"];
+            let labels: [&str; 3] = if ru {
+                ["Mock (тестовый)", "TeamSpeak 3", "TeamSpeak 6"]
+            } else {
+                ["Mock (test)", "TeamSpeak 3", "TeamSpeak 6"]
+            };
+            for (i, src) in sources.iter().enumerate() {
+                let mut flags = MF_STRING;
+                if cfg.source == *src {
+                    flags |= MF_CHECKED;
+                }
+                AppendMenuW(sub, flags, 101 + i, wide(labels[i]).as_ptr());
+            }
+            AppendMenuW(menu, MF_POPUP, sub as usize, wide(if ru { "Источник данных" } else { "Data source" }).as_ptr());
+            AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            AppendMenuW(menu, MF_STRING, 110, wide(if ru { "Открыть панель" } else { "Open panel" }).as_ptr());
+            AppendMenuW(menu, MF_STRING, 111, wide(if ru { "Настройки" } else { "Settings" }).as_ptr());
+            AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            AppendMenuW(menu, MF_STRING, 0, wide(&format!("TS3-TS6 Notifier v{}", app.version)).as_ptr());
+            AppendMenuW(menu, MF_STRING, 120, wide(if ru { "Выход" } else { "Exit" }).as_ptr());
+            let mut pt = POINT { x: 0, y: 0 };
+            GetCursorPos(&mut pt);
+            let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, null());
+            DestroyMenu(menu);
+            DestroyMenu(sub);
+            if cmd == 0 {
+                return;
+            }
+            let cmd = cmd as usize;
+            if (101..=103).contains(&cmd) {
+                let src = sources[cmd - 101];
+                let patch = crate::json::obj(vec![("source", crate::json::Json::s(src))]);
+                app.store.lock().unwrap().update(&patch);
+                (app.restart_connector)();
+            } else if cmd == 110 {
+                let url: Vec<u16> = format!("http://127.0.0.1:{}/", port)
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                ShellExecuteW(null_mut(), wide("open").as_ptr(), url.as_ptr(), null(), null(), 1);
+            } else if cmd == 111 {
+                crate::settings::spawn_once(app.clone(), port);
+            } else if cmd == 120 {
+                let mut nid = tray_nid(hwnd, null_mut(), "");
+                Shell_NotifyIconW(NIM_DELETE, &mut nid);
+                std::process::exit(0);
+            }
+        }
+    }
+
+    unsafe extern "system" fn tray_wndproc(hwnd: *mut c_void, msg: u32, w: usize, l: isize) -> isize {
+        match msg {
+            WM_APP_TRAY => {
+                let app = TRAY.lock().unwrap().clone();
+                if let Some(app) = app {
+                    if (l as u32) == WM_RBUTTONUP || (l as u32) == WM_LBUTTONUP {
+                        let port = *TRAY_PORT.lock().unwrap();
+                        show_tray_menu(hwnd, &app, port);
+                    }
+                }
+                0
+            }
+            WM_TIMER => {
+                let app = TRAY.lock().unwrap().clone();
+                if let Some(app) = app {
+                    let (tip, _) = status_text(&app);
+                    let mut nid = tray_nid(hwnd, null_mut(), &tip);
+                    nid.u_flags = NIF_TIP;
+                    Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+                }
+                0
+            }
+            WM_COMMAND => 0,
+            _ => DefWindowProcW(hwnd, msg, w, l),
+        }
+    }
+
+    pub fn spawn_tray(app: std::sync::Arc<crate::http::App>, port: u16) {
+        unsafe {
+            *TRAY.lock().unwrap() = Some(app.clone());
+            *TRAY_PORT.lock().unwrap() = port;
+            let class = wide("TSNTrayClass");
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: 0,
+                lpfnWndProc: tray_wndproc,
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: std::ptr::null_mut(),
+                hIcon: std::ptr::null_mut(),
+                hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW as *const u16),
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class.as_ptr(),
+                hIconSm: std::ptr::null_mut(),
+            };
+            RegisterClassExW(&wc);
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                wide("").as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            );
+            if hwnd.is_null() {
+                return;
+            }
+            let hwnd_addr = hwnd as usize;
+            std::thread::spawn(move || unsafe {
+                let hwnd = hwnd_addr as *mut c_void;
+                let icon = tray_icon();
+                let (tip, _) = status_text(&app);
+                let mut nid = tray_nid(hwnd, icon, &tip);
+                Shell_NotifyIconW(NIM_ADD, &mut nid);
+                SetTimer(hwnd, 1, 2000, null_mut());
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, hwnd, 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                Shell_NotifyIconW(NIM_DELETE, &mut nid);
+            });
+        }
+    }
+
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         let mut host = unsafe { WinHost::new() };
-        let cfg = app.store.lock().unwrap().clone_config();
-        let mut m = crate::settings::SettingsModel::new(cfg.appearance.clone(), app.version);
+        let cfg = app.store.lock().unwrap().get().clone();
+        let mut m = crate::settings::SettingsModel::new(cfg.appearance.clone(), app.version.clone());
         let fonts = crate::font::Fonts::load();
-        let icons = crate::icons::Icons::load();
+        let icons = crate::assets::Icons::load();
         crate::settings::run_loop(&mut m, &app, &fonts, &icons, &mut host);
     }
 
