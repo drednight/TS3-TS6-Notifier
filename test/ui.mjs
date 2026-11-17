@@ -413,6 +413,10 @@ try {
     check('settings: per-type scope selectors present', doc.querySelectorAll('select[data-enum^="evScope"]').length === 6);
     check('settings: diagnostics block present', !!doc.getElementById('diagBtn') && !!doc.getElementById('diagCopyBtn') && !!doc.getElementById('diagOut'));
     check('settings: TS3 plugin block present', !!doc.getElementById('pluginInstallBtn') && !!doc.getElementById('pluginStatus'));
+    // v1.4.2: plugin install lives in the Connection tab under TS3 (shows with
+    // the TS3 source card); «run as administrator» moved to the More tab
+    check('settings: plugin block follows the TS3 fields', !!doc.querySelector('#ts3Fields #pluginInstallBtn') && !!doc.querySelector('#ts3Fields #pluginStatus'));
+    check('settings: elevate toggle moved to More tab', !doc.querySelector('[data-panel="connection"] #elevateToggle') && !!doc.querySelector('[data-panel="more"] #elevateToggle'));
     // v1.3.1: event sliders show counts/seconds, not px
     check('settings: event slider units (no px)', (() => {
       const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';

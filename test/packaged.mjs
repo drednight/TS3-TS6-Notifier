@@ -95,7 +95,7 @@ try {
     check('packaged: /api/plugin/install responds safely', pins.status === 200 && (pinsBody.ok === true || typeof pinsBody.error === 'string'), JSON.stringify(pinsBody));
     const diag = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagText = await diag.text();
-    check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3\/TS6 traffic/.test(diagText) && /TS3-TS6 Notifier diagnostics/.test(diagText), `len=${diagText.length}`);
+    check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3-TS6 Notifier diagnostics/.test(diagText) && /--- TS3 \(ClientQuery \/ plugin\) ---/.test(diagText) && /--- TS6 \(Remote Apps\) ---/.test(diagText), `len=${diagText.length}`);
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
     const { default: WebSocket } = await import('ws');
     const alive = await new Promise((resolve) => {

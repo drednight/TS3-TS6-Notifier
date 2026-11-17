@@ -383,6 +383,12 @@
             <input type="password" id="ts3ApiKey" spellcheck="false" autocomplete="off" />
             <div class="hint" data-i18n="ts3KeyHint"></div>
           </div>
+          <div class="sub-title" data-i18n="pluginTitle"></div>
+          <div class="hint block" data-i18n="pluginHint"></div>
+          <div class="tile-grid">
+            <button class="tile-btn" id="pluginInstallBtn" data-i18n="pluginInstall"></button>
+          </div>
+          <div class="hint" id="pluginStatus"></div>
         </div>
 
         <div id="ts6Fields" class="conn-fields opt-group">
@@ -399,9 +405,6 @@
         <div class="btn-row">
           <button class="btn primary wide" id="reconnectBtn" data-i18n="reconnect"></button>
         </div>
-
-        <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
-        <div class="hint block" data-i18n="elevateHint"></div>
 
         <div class="hint block" data-i18n="connectionHelp"></div>
         <details class="collapse-block" id="ts6GroupsBlock">
@@ -435,12 +438,9 @@
         </div>
 
         <div class="opt-group">
-          <div class="opt-group-title"><span class="group-ico" data-ico="check"></span><span data-i18n="pluginTitle"></span></div>
-          <div class="hint block" data-i18n="pluginHint"></div>
-          <div class="tile-grid">
-            <button class="tile-btn" id="pluginInstallBtn" data-i18n="pluginInstall"></button>
-          </div>
-          <div class="hint" id="pluginStatus"></div>
+          <div class="opt-group-title"><span class="group-ico" data-ico="gear"></span><span data-i18n="elevateTitle"></span></div>
+          <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
+          <div class="hint block" data-i18n="elevateHint"></div>
         </div>
 
         <div class="opt-group">

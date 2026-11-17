@@ -225,8 +225,10 @@ static void send_snapshot_all(void) {
 #endif
 
 PLUGINS_EXPORTDLL const char* ts3plugin_name(void) { return "TS3-TS6 Notifier bridge"; }
-PLUGINS_EXPORTDLL const char* ts3plugin_version(void) { return "1.0.0"; }
-PLUGINS_EXPORTDLL int ts3plugin_apiVersion(void) { return 23; }
+PLUGINS_EXPORTDLL const char* ts3plugin_version(void) { return "1.1.0"; }
+/* TS3 client 3.6.x requires API 26 (error on load: "Api version is not
+ * compatible: 23 (minimum: 26, current: 26)"). */
+PLUGINS_EXPORTDLL int ts3plugin_apiVersion(void) { return 26; }
 PLUGINS_EXPORTDLL const char* ts3plugin_author(void) { return "TS3-TS6 Notifier"; }
 PLUGINS_EXPORTDLL const char* ts3plugin_description(void) {
     return "Streams TeamSpeak events to the local TS3-TS6 Notifier overlay (no ClientQuery polling).";

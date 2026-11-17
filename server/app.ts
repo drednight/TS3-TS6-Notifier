@@ -8,7 +8,7 @@ import { DIAG, OverlayState, diag, emptyState } from './model.js';
 import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
-import { Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
+import { PluginBridge, Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
 import { Ts6Connector } from './connectors/ts6.js';
 import { findTs3Icon } from './icons.js';
 
@@ -65,9 +65,13 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   let connector: Connector | null = null;
   let latestState: OverlayState = emptyState(store.get().source, 'connecting');
 
+  let diagBridge: PluginBridge | null = null;
+
   function startConnector(): void {
     connector?.stop();
     connector = null;
+    diagBridge?.stop();
+    diagBridge = null;
     const cfg = store.get();
 
     const next: Connector =
@@ -89,6 +93,12 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
     connector = next;
     next.start();
+    // Both TeamSpeak clients may run at once — capture TS3 plugin events for
+    // the diagnostics report even when TS6 is the active source.
+    if (cfg.source !== 'ts3') {
+      diagBridge = new PluginBridge(48912);
+      diagBridge.start();
+    }
     log(`[server] data source: ${cfg.source}`);
   }
 
@@ -303,6 +313,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     // «Диагностика»: a copyable report of what the app caught from TS3/TS6.
     if (url === '/api/diagnostics' && method === 'GET') {
       const cfg = store.get();
+      const ts3Lines = DIAG.filter((l) => l.includes('[ts3]') || l.includes('[plugin]'));
+      const ts6Lines = DIAG.filter((l) => l.includes('[ts6]'));
+      const otherLines = DIAG.filter((l) => !l.includes('[ts3]') && !l.includes('[plugin]') && !l.includes('[ts6]'));
       const report = [
         `TS3-TS6 Notifier diagnostics — ${new Date().toISOString()}`,
         `version: ${opts.version ?? 'dev'}`,
@@ -315,8 +328,14 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           (m) => `${new Date(m.at).toISOString().slice(11, 19)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
         ),
         '',
-        `--- raw TS3/TS6 traffic (last ${DIAG.length} lines) ---`,
-        ...DIAG,
+        '--- TS3 (ClientQuery / plugin) ---',
+        ...(ts3Lines.length
+          ? ts3Lines
+          : ['(no data — активный источник не TS3; установите плагин TS3, чтобы видеть TS3-события и при источнике TS6)']),
+        '',
+        '--- TS6 (Remote Apps) ---',
+        ...(ts6Lines.length ? ts6Lines : ['(no data — активный источник не TS6)']),
+        ...(otherLines.length ? ['', '--- other ---', ...otherLines] : []),
       ].join('\n');
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(report);
