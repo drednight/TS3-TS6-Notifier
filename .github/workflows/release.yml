@@ -41,10 +41,14 @@ jobs:
       - name: Render icons
         run: npm run icons
 
+      - name: Set up MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Build TS3 plugin DLL
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cd plugin
           if not exist dist mkdir dist
           cl /nologo /LD /O2 /MD /W3 /I include ts3plugin_tsn.c /Fe:dist\ts3plugin_tsn_win64.dll /link ws2_32.lib
