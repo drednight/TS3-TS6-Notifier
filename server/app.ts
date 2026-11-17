@@ -441,7 +441,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   });
 
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive }));
+    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive, version: opts.version ?? 'dev' }));
   });
 
   return new Promise((resolve, reject) => {

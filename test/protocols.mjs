@@ -110,6 +110,7 @@ function ts6AuthDump() {
             rootChannels: [
               { id: 5, parentId: 0, properties: { name: 'General', order: 0 } },
               { id: 9, parentId: 0, properties: { name: 'AFK', order: 1 } },
+              { id: 88, parentId: 0, properties: { name: 'DiffLab', order: 2 } },
             ],
             subChannels: {},
           },
@@ -276,6 +277,48 @@ check('ts6: join feed row rendered', (() => {
   return m.some((x) => x.kind === 'system' && x.event === 'join' && x.nickname === 'Новичок');
 })(), JSON.stringify(ts6States[ts6States.length - 1]?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
+
+/* v1.4.1: moves must be announced for EVERYONE — not only own-channel touches.
+ * resync() closes the socket (and earlier tests trigger it) — wait until the
+ * fake server has a LIVE connection again or the sends vanish silently. */
+for (let i = 0; i < 60 && globalThis.ts6Sock?.readyState !== 1; i++) {
+  await new Promise((r) => setTimeout(r, 100));
+}
+await new Promise((r) => setTimeout(r, 350));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'channelCreated', payload: { connectionId: 7, channelId: 77, properties: { name: 'Lab' } } }));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, oldChannelId: 5, newChannelId: 9, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, oldChannelId: 9, newChannelId: 77, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: foreign-to-foreign move announced', rows.some((x) => x.kind === 'system' && x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'Lab' && x.own === false), JSON.stringify(rows.filter((x) => x.event === 'move')));
+  check('ts6: leaving own channel flagged own', rows.some((x) => x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'AFK' && x.own === true));
+}
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, channelToId: 77, invoker: {} } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: duplicate move form deduped', rows.filter((x) => x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'Lab').length === 1, JSON.stringify(rows.filter((x) => x.event === 'move')));
+}
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 1, oldChannelId: 5, newChannelId: 9, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: own move announced too', rows.some((x) => x.event === 'move' && x.nickname === 'Me' && x.detail === 'AFK' && x.own === true), JSON.stringify(rows.filter((x) => x.event === 'move')));
+}
+/* snapshot diff announces moves the event stream missed */
+{
+  globalThis.ts6Sock?.send(JSON.stringify({ type: 'channelCreated', payload: { connectionId: 7, channelId: 88, properties: { name: 'DiffLab' } } }));
+  await new Promise((r) => setTimeout(r, 150));
+  const before = (ts6States[ts6States.length - 1]?.chat || []).filter((x) => x.event === 'move' && x.detail === 'DiffLab').length;
+  ts6Users.find((u) => u.id === 102).channelId = 88;
+  globalThis.ts6Sock?.send(JSON.stringify(ts6AuthDump()));
+  await new Promise((r) => setTimeout(r, 500));
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  const after = rows.filter((x) => x.event === 'move' && x.detail === 'DiffLab').length;
+  check('ts6: snapshot diff announces missed move', after === before + 1, `before=${before} after=${after}`);
+}
 
 /* ---------------- TS3 plugin bridge (Overwolf-style) ---------------- */
 const { PluginBridge, PluginState, Ts3WithPluginConnector } = await import('../server/connectors/plugin-bridge.ts');

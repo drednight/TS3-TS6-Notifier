@@ -328,8 +328,8 @@ export class PluginState {
         this.clients.set(id, u);
         const cname = str(msg['cname']);
         if (cname) this.channelNames.set(to, cname);
-        if (!u.isSelf && !u.isQuery && nick) {
-          this.pushRow(nick, u.id, 'move', from === this.ownCid || to === this.ownCid, cname || this.channelNames.get(to) || '');
+        if (!u.isQuery && nick) {
+          this.pushRow(nick, u.id, 'move', u.isSelf || from === this.ownCid || to === this.ownCid, cname || this.channelNames.get(to) || '');
         }
         this.emitState();
         return;

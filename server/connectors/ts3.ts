@@ -699,6 +699,15 @@ export class Ts3Connector extends EventEmitter implements Connector {
         const to = fInt(fields, 'ctid');
         if (user?.isSelf) {
           this.ownCid = to;
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: user.nickname,
+            kind: 'system',
+            event: 'move',
+            detail: this.channels.get(to)?.name ?? '',
+            own: true,
+          });
         } else if (user && !user.isQuery && clid !== this.ownClid) {
           // v1.3.1: every move on the server («кто куда перешёл») — the user
           // wants the full picture, not only own-channel touches.

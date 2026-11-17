@@ -636,9 +636,10 @@
   }
 
   function wireMoreTab() {
-    // version line
-    const ver = document.querySelector('.about-title .ver')?.textContent?.trim() || '';
-    $('updateVersion').textContent = ver;
+    // Version line — the live value arrives in the ws hello (the static
+    // markup fallback was frozen at an old release and never refreshed).
+    const ver = (window.TSN_VERSION || document.querySelector('.about-title .ver')?.textContent?.trim() || '').replace(/^v/, '');
+    $('updateVersion').textContent = ver ? `v${ver}` : '';
 
     $('checkUpdateBtn').addEventListener('click', () => {
       $('updateStatus').textContent = t('updChecking');
@@ -807,6 +808,15 @@
           state = msg.state;
           syncFeatures();
           scheduleRender();
+        }
+        // Live version from the running binary — the static markup fallback
+        // was frozen at an old release and never refreshed after updates.
+        if (msg.version) {
+          window.TSN_VERSION = String(msg.version).replace(/^v/, '');
+          const span = document.querySelector('.about-title .ver');
+          if (span) span.textContent = `v${window.TSN_VERSION}`;
+          const upd = $('updateVersion');
+          if (upd) upd.textContent = `v${window.TSN_VERSION}`;
         }
       } else if (msg.type === 'state') {
         state = msg.state;

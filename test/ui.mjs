@@ -275,6 +275,11 @@ try {
     await new Promise((r) => setTimeout(r, 60));
     check('overlay: own-channel scope hides foreign events', !doc.querySelector('#eventsList .ev-move'));
 
+    // v1.4.1: the update section shows the LIVE version from the hello message
+    FakeWS.last._emit({ type: 'hello', config: fakeConfig, state: fakeState, version: '9.9.9' });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: live version from hello refreshes the label', doc.getElementById('updateVersion')?.textContent === 'v9.9.9', doc.getElementById('updateVersion')?.textContent);
+
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
     const mxBefore = doc.documentElement.style.getPropertyValue('--margin-x');
@@ -393,7 +398,7 @@ try {
     // v1.1.15: «Ещё» is a single tab — About/profiles merged in
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
-    check('settings: version line shows 1.3.0', /1\.3\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: version line present', /v?\d+\.\d+\.\d+/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
     // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
     check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
     check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
