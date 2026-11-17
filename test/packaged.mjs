@@ -62,6 +62,12 @@ await mkdir(join(PKG, 'appdata'), { recursive: true });
   check('packaged: sound feature fully removed from the client bundle', !/soundsUiVisible|Soundboard|AudioContext/.test(featSrc));
 }
   check('packaged: overlay window crops to the panel', /--crop-x/.test(css) && /api\/overlay\/bounds/.test(appJs));
+  // v1.4.13: a game in fullscreen/borderless mode covers a plain topmost
+  // window — the shipped bundle must re-claim the top layer and cover the
+  // whole display instead of hugging the panel.
+  const bundle = await fs.readFile(new URL('../app/dist/main.cjs', import.meta.url), 'utf8');
+  check('packaged: top layer is re-claimed in the bundle', /assertOverlayTop/.test(bundle) && /setAlwaysOnTop\(true, "screen-saver"\)/.test(bundle));
+  check('packaged: display-sized + fullscreen layer modes shipped', /setFullScreen\(true\)/.test(bundle) && /overlayLayer/.test(bundle) && /d\.bounds/.test(bundle));
 }
 
 // Boot the bundled main against that layout (electron stubbed)

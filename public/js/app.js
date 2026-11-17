@@ -9,6 +9,18 @@
   const rows = new Map(); // userId -> { el, avatar, ini, pip, nick, sub, badges, eq, sig }
   const leavingTimers = new Map();
 
+  /* v1.4.12: how the desktop overlay window is layered. 'panel' hugs the panel
+   * (memory saver) and is covered by any borderless/fullscreen game; the
+   * fullscreen modes keep the window display-sized so it stays on top. */
+  function overlayLayer() {
+    const v = config?.desktop?.overlayLayer;
+    return v === 'panel' || v === 'fullscreen' ? v : 'screen';
+  }
+  /** True when the window covers the whole display (no cropping allowed). */
+  function fullLayerMode() {
+    return overlayLayer() !== 'panel';
+  }
+
   /* ---------------- static icon injection ---------------- */
 
   function injectIcons() {
@@ -639,6 +651,8 @@
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
     $('overlayWindowToggle').checked = config.desktop?.overlayWindow !== false;
+    const layerSel = $('overlayLayerSelect');
+    if (layerSel) layerSel.value = overlayLayer();
     const obsUrl = `${location.origin}/?clean=1`;
     const obs = $('obsHint');
     if (obs) obs.textContent = t('obsHint').replace('{url}', obsUrl);
@@ -696,6 +710,16 @@
     $('overlayWindowToggle').addEventListener('change', () => {
       putConfig({ desktop: { overlayWindow: $('overlayWindowToggle').checked } });
     });
+
+    // v1.4.13: 'panel' saves memory, the display-wide modes stay above games.
+    const layerSel = $('overlayLayerSelect');
+    if (layerSel) {
+      layerSel.addEventListener('change', () => {
+        const v = layerSel.value;
+        if (config) config.desktop = { ...(config.desktop || {}), overlayLayer: v };
+        putConfig({ desktop: { overlayLayer: v } });
+      });
+    }
   }
 
   function wireMoreTab() {
@@ -906,6 +930,15 @@
         // A size/appearance change coming from another window: re-measure the
         // panel so the cropped desktop window follows it.
         if (isCleanMode) {
+          // A layer switch moves the window itself (cropped ↔ whole display),
+          // so the old crop offset is meaningless — start from zero and let
+          // the shell answer with the new one.
+          if (lastLayer !== null && lastLayer !== overlayLayer()) {
+            cropX = 0;
+            cropY = 0;
+            applyCropVars();
+          }
+          lastLayer = overlayLayer();
           lastBoundsSig = '';
           scheduleBounds();
         }
@@ -961,6 +994,7 @@
    * transparent layer is never composited. The page reports the panel rect in
    * screen-work-area coordinates; the shell answers with the crop applied. */
   const isCleanMode = Settings.clean;
+  let lastLayer = null; // last known overlay layer mode (see overlayLayer())
   // Desktop window token (?w=...). OBS browser sources load the same page
   // without it and must never be cropped.
   const winToken = new URLSearchParams(location.search).get('w') || '';
@@ -1074,7 +1108,10 @@
   function enterMoveMode() {
     moveMode = true;
     document.body.classList.add('move-mode');
-    if (isCleanMode) {
+    // In 'panel' mode the shell re-fits the window to the whole work area, so
+    // the crop is zero while dragging. A display-sized window keeps its own
+    // (work-area ↔ monitor) offset — zeroing it would shift the panel away.
+    if (isCleanMode && !fullLayerMode()) {
       cropX = 0;
       cropY = 0;
       applyCropVars();

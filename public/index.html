@@ -388,6 +388,15 @@
           <div class="opt-group-title"><span class="group-ico" data-ico="info"></span><span data-i18n="obsHintTitle"></span></div>
           <label class="switch-row"><span data-i18n="overlayWindowLabel"></span><input type="checkbox" id="overlayWindowToggle" /><i></i></label>
           <div class="hint block" data-i18n="overlayWindowHint"></div>
+          <div class="field" id="layerField" hidden>
+            <label data-i18n="layerLabel"></label>
+            <select id="overlayLayerSelect">
+              <option value="panel" data-i18n="layerPanel"></option>
+              <option value="screen" data-i18n="layerScreen"></option>
+              <option value="fullscreen" data-i18n="layerFullscreen"></option>
+            </select>
+            <div class="hint" data-i18n="layerHint"></div>
+          </div>
           <div class="hint block" id="obsHint"></div>
           <div class="tile-grid">
             <button class="tile-btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>

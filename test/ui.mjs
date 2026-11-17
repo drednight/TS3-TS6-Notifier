@@ -433,6 +433,27 @@ try {
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
     check('settings: version line present', /v?\d+\.\d+\.\d+/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    // v1.4.13: «поверх всех окон» — the overlay must not sink behind a game
+    {
+      const sel = doc.getElementById('overlayLayerSelect');
+      const values = sel ? [...sel.options].map((o) => o.value).join(',') : '';
+      check('layer: three overlay modes offered', values === 'panel,screen,fullscreen', values);
+      check('layer: defaults to a display-sized window', sel?.value === 'screen', sel?.value);
+      if (sel) {
+        // fetch is stubbed in this harness — catch the outgoing PATCH instead.
+        let sent = '';
+        const realFetch = dom.window.fetch;
+        dom.window.fetch = (input, init) => {
+          if (String(input).includes('/api/config') && init && init.method === 'PUT') sent = String(init.body || '');
+          return realFetch(input, init);
+        };
+        sel.value = 'fullscreen';
+        sel.dispatchEvent(new dom.window.Event('change'));
+        await new Promise((r) => setTimeout(r, 700)); // putConfig debounces
+        dom.window.fetch = realFetch;
+        check('layer: the choice is sent to the server', /"overlayLayer":"fullscreen"/.test(sent), sent);
+      }
+    }
     // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
     check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
     check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
@@ -691,7 +712,34 @@ try {
   check('placement: saving a drag goes through the settings model', /Settings\.setMany\(\{ marginX: pendingX, marginY: pendingY \}\)/.test(appjs));
   // a wider/taller panel must re-crop the desktop window, or it gets clipped
   check('size: a resized panel re-reports its rect to the shell', /new ResizeObserver\(scheduleBounds\)/.test(appjs) && /Settings\.onChange\(\(\) => \{\s*lastBoundsSig = ''/.test(appjs));
-  check('size: appearance pushed from another window re-measures too', /config = msg\.config;[\s\S]{0,900}isCleanMode\)\s*\{\s*lastBoundsSig = ''/.test(appjs));
+  check('size: appearance pushed from another window re-measures too', /config = msg\.config;[\s\S]{0,900}isCleanMode\)\s*\{[\s\S]{0,600}lastBoundsSig = ''/.test(appjs));
+}
+
+// v1.4.13: the overlay must stay above EVERY window, not only framed ones
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const main = await fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8');
+  const feat = await fs.readFile(new URL('../public/js/features.js', import.meta.url), 'utf8');
+  const { DEFAULT_CONFIG } = await import('../server/model.ts');
+  // the bug: a borderless/fullscreen game covers any NORMAL topmost window,
+  // so only a display-sized window stays visible over it
+  check('layer: default is a display-sized window', DEFAULT_CONFIG.desktop.overlayLayer === 'screen', String(DEFAULT_CONFIG.desktop.overlayLayer));
+  check('layer: mode select in the desktop-only field', /id="layerField"[^>]*hidden/.test(html) && /id="overlayLayerSelect"/.test(html));
+  check('layer: field is revealed only in the desktop shell', /getElementById\('layerField'\)/.test(feat));
+  const ru = i18n.indexOf('layerLabel');
+  const en = i18n.indexOf('layerLabel', ru + 1);
+  check('layer: labels exist in ru and en', ru > 0 && en > ru);
+  // a game steals the top slot on launch / alt-tab and never gives it back
+  check('layer: topmost z-order is re-claimed on a timer', /function assertOverlayTop\(\)/.test(main) && /setInterval\(assertOverlayTop/.test(main) && /setAlwaysOnTop\(true, 'screen-saver'\)/.test(main));
+  check('layer: fullscreen modes cover the whole display', /function overlayArea\(\)[\s\S]{0,300}d\.bounds/.test(main) && /overlayLayer\(\) === 'panel' \? d\.workArea : d\.bounds/.test(main));
+  check('layer: «fullscreen» uses the native fullscreen window', /win\.setFullScreen\(true\)/.test(main) && /win\.isFullScreen\(\)/.test(main) && /fullscreenable: true/.test(main));
+  // a cropped window drops out of the fullscreen z-band — never crop it there
+  check('layer: display-sized windows are never cropped', /overlayLayer\(\) !== 'panel'[\s\S]{0,500}return \{ cropX: bd\.x - wa\.x/.test(main));
+  check('layer: the page keeps the work-area offset instead', /fullLayerMode\(\)/.test(appjs) && /isCleanMode && !fullLayerMode\(\)/.test(appjs));
+  check('layer: switching modes resets the crop offset', /lastLayer !== overlayLayer\(\)/.test(appjs));
 }
 
 // v1.4.12: whispers must be visible — even from another channel

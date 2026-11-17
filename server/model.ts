@@ -201,6 +201,16 @@ export interface AppConfig {
     elevate: boolean;
     /** Show the in-game overlay window (off = server-only mode, e.g. for OBS). */
     overlayWindow: boolean;
+    /**
+     * How the desktop overlay window is layered over other apps:
+     *  - 'panel'      — the window hugs the panel (v1.4.5 memory saver); a game
+     *                   in borderless/fullscreen mode covers it.
+     *  - 'screen'     — the window covers the whole display, so it stays above
+     *                   normal and borderless-fullscreen windows.
+     *  - 'fullscreen' — same, plus native fullscreen: the strongest option for
+     *                   games that still swallow a plain full-screen window.
+     */
+    overlayLayer: 'panel' | 'screen' | 'fullscreen';
     /** Preferred local port for the web server (stable URL for OBS). 0 = random. */
     port: number;
   };
@@ -271,7 +281,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
-  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, overlayWindow: true, port: 48911 },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, overlayWindow: true, overlayLayer: 'screen', port: 48911 },
   classes: {
     enabled: false,
     // Default group-id → class mapping (the user's server). Override in
