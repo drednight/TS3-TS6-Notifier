@@ -537,22 +537,19 @@
       }, 1500);
     });
 
-    $('moveConfirmBtn').addEventListener('click', () => {
-      fetch('/api/overlay/move-confirm', { method: 'POST' }).catch(() => {});
-    });
-    $('moveCancelBtn').addEventListener('click', () => {
-      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
+    $('restartNowBtn').addEventListener('click', () => {
+      fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
     });
 
-    $('obsLaunchBtn').addEventListener('click', () => {
-      fetch('/api/obs/launch', { method: 'POST' })
-        .then((r) => r.json())
-        .catch(() => {});
-      const btn = $('obsLaunchBtn');
-      btn.textContent = '✓';
-      setTimeout(() => {
-        btn.textContent = t('obsLaunchBtn');
-      }, 1500);
+    // Save/cancel of the dragged position live ON the overlay itself — the
+    // settings window may be behind the game or on another display.
+    $('moveSaveBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      fetch('/api/overlay/move-confirm', { method: 'POST' }).catch(() => {});
+    });
+    $('moveDiscardBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
     });
   }
 
@@ -614,8 +611,7 @@
         if (want) enterMoveMode();
         else exitMoveMode();
       } else if (msg.type === 'move-pending') {
-        // A drag finished somewhere — wait for confirm/cancel.
-        showMoveConfirm(true);
+        // A drag finished somewhere — wait for the ✓/✗ buttons.
         const hint = $('moveHint');
         if (hint) hint.textContent = t('moveHintPending');
       } else if (msg.type === 'move-confirm') {
@@ -628,6 +624,8 @@
           const key = { checking: 'updChecking', available: 'updAvailable', latest: 'updLatest', downloaded: 'updDownloaded' }[msg.status] || 'updError';
           el.textContent = t(key).replace('{v}', msg.version || '');
         }
+        const restart = $('restartNowBtn');
+        if (restart) restart.hidden = msg.status !== 'downloaded';
       } else if (msg.type === 'sound') {
         // Only the overlay page (clean mode) plays hotkey triggers —
         // otherwise open windows would double-play.
@@ -664,13 +662,6 @@
   let pendingX = null;
   let pendingY = null;
 
-  function showMoveConfirm(on) {
-    const row = $('moveConfirmRow');
-    if (row) row.hidden = !on;
-    const btn = $('moveOverlayBtn');
-    if (btn) btn.hidden = !!on;
-  }
-
   function exitMoveMode() {
     if (!moveMode) return;
     moveMode = false;
@@ -683,7 +674,6 @@
     if (handle) handle.hidden = true;
     const hint = $('moveHint');
     if (hint) hint.hidden = true;
-    showMoveConfirm(false);
     postClickthrough(clickThroughWanted());
   }
 
@@ -697,7 +687,12 @@
       hint.hidden = false;
       hint.textContent = t('moveHint');
     }
-    showMoveConfirm(true);
+    // Localized tooltips for the ✓/✗ overlay buttons (data-i18n-title is not
+    // processed by the i18n runtime — set titles via JS).
+    const saveBtn = $('moveSaveBtn');
+    if (saveBtn) saveBtn.title = t('moveSaveTip');
+    const discardBtn = $('moveDiscardBtn');
+    if (discardBtn) discardBtn.title = t('moveCancelTip');
     // The overlay is click-through for gameplay — take the mouse only while
     // move mode is armed so the handle (and buttons) can be used.
     postClickthrough(false);
@@ -773,7 +768,6 @@
         // button («Отмена» snaps the panel back to the saved spot).
         pendingX = curX;
         pendingY = curY;
-        showMoveConfirm(true);
         const hint = $('moveHint');
         if (hint) hint.textContent = t('moveHintPending');
         fetch('/api/overlay/moved', {

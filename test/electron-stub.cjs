@@ -107,7 +107,7 @@ const electron = {
   nativeImage: { createFromPath: () => ({}) },
   globalShortcut: { register: () => true, unregisterAll: noop, isRegistered: () => false },
   clipboard: { writeText: noop, readText: () => '' },
-  Notification: class { show() {} },
+  Notification: class { show() {} on() {} },
   shell: { openExternal: async () => {} },
   screen: {
     getPrimaryDisplay: () => ({ workArea }),

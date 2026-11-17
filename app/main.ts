@@ -17,7 +17,6 @@ import {
   nativeImage,
   Notification,
   screen,
-  shell,
   Tray,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
@@ -128,13 +127,19 @@ function setupAutoUpdate(): void {
       handle?.broadcast({ type: 'update-status', status: 'latest' });
     });
     autoUpdater.on('update-downloaded', (info) => {
-      log(`[update] ${info.version} downloaded — installs on quit`);
+      log(`[update] ${info.version} downloaded — ready to restart`);
       handle?.broadcast({ type: 'update-status', status: 'downloaded', version: info.version });
       try {
-        new Notification({
+        // Offer an immediate restart: the toast action, clicking the toast,
+        // and the «Перезапустить сейчас» button in «Ещё» all install + relaunch.
+        const notification = new Notification({
           title: tr('updTitle'),
-          body: tr('updDownloaded').replace('{v}', info.version),
-        }).show();
+          body: `${tr('updDownloaded').replace('{v}', info.version)} ${tr('updRestartToast')}`,
+          actions: [{ type: 'button', text: tr('updRestartAction') }],
+        });
+        notification.on('action', () => tryQuitAndInstall());
+        notification.on('click', () => tryQuitAndInstall());
+        notification.show();
       } catch {
         /* notification unavailable */
       }
@@ -149,6 +154,19 @@ function setupAutoUpdate(): void {
     }, 4 * 60 * 60 * 1000);
   } catch (err) {
     log('[update] setup failed: ' + err);
+  }
+}
+
+function tryQuitAndInstall(): void {
+  if (!app.isPackaged) {
+    log('[update] dev build — nothing to install');
+    return;
+  }
+  log('[update] quit & install requested');
+  try {
+    autoUpdater.quitAndInstall(true, true);
+  } catch (err) {
+    log('[update] quitAndInstall failed: ' + err);
   }
 }
 
@@ -542,7 +560,9 @@ const TRAY_STRINGS: Record<string, Record<string, string>> = {
     showOverlay: 'Показывать оверлей',
     quit: 'Выход',
     updTitle: 'TS3-TS6 Notifier — обновление',
-    updDownloaded: 'Версия {v} скачана и установится при выходе из приложения.',
+    updDownloaded: 'Версия {v} скачана.',
+    updRestartAction: 'Перезапустить сейчас',
+    updRestartToast: 'Нажмите, чтобы перезапустить приложение сейчас — или оно обновится при выходе.',
   },
   en: {
     settings: 'Settings…',
@@ -559,7 +579,9 @@ const TRAY_STRINGS: Record<string, Record<string, string>> = {
     showOverlay: 'Show overlay',
     quit: 'Quit',
     updTitle: 'TS3-TS6 Notifier — update',
-    updDownloaded: 'Version {v} downloaded — installs when you quit the app.',
+    updDownloaded: 'Version {v} downloaded.',
+    updRestartAction: 'Restart now',
+    updRestartToast: 'Click to restart the app now — otherwise it updates when you quit.',
   },
 };
 
@@ -705,9 +727,7 @@ async function boot(): Promise<void> {
       }
     },
     checkUpdates: () => checkForUpdatesNow(),
-    openExternal: (url: string) => {
-      void shell.openExternal(url).catch((err) => log('[app] openExternal failed: ' + err));
-    },
+    restartToUpdate: () => tryQuitAndInstall(),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;

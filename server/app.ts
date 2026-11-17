@@ -25,8 +25,8 @@ export interface AppOptions {
   preferredPort?: number;
   /** Desktop only: trigger an update check in the shell. */
   checkUpdates?: () => void;
-  /** Desktop only: open a URL in the user's browser (OBS broadcast launch). */
-  openExternal?: (url: string) => void;
+  /** Desktop only: quit and install a downloaded update right now. */
+  restartToUpdate?: () => void;
 }
 
 export interface AppHandle {
@@ -260,18 +260,14 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
       return;
     }
 
-    // «Запустить вещание»: open the clean overlay page in the user's browser
-    // so OBS can capture it (or the URL can be pasted into a browser source).
-    if (url === '/api/obs/launch' && method === 'POST') {
-      const addr = server.address();
-      const port = typeof addr === 'object' && addr ? addr.port : (opts.port ?? 0);
-      const target = `http://127.0.0.1:${port}/?clean=1`;
+    // «Перезапустить сейчас»: install the downloaded update and relaunch.
+    if (url === '/api/update/restart' && method === 'POST') {
       try {
-        opts.openExternal?.(target);
+        opts.restartToUpdate?.();
       } catch (err) {
-        log(`[server] openExternal failed: ${err}`);
+        log(`[server] restart-to-update failed: ${err}`);
       }
-      json(res, 200, { ok: true, url: target, applied: !!opts.openExternal });
+      json(res, 200, { ok: true, applied: !!opts.restartToUpdate });
       return;
     }
 

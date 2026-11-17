@@ -242,9 +242,10 @@ try {
     // corner=tr: marginX from the right edge (drag left → grows), marginY from
     // the top (drag down → grows). No 500px cap — only screen bounds.
     check('overlay: drag in move mode updates offsets', mx === '58px' && my === '38px', `x=${mx} y=${my}`);
-    // v1.1.15: a drag alone does NOT end move mode — the user must confirm
+    // v1.1.5→1.2.0: a drag alone does NOT end move mode — save/cancel are the
+    // ✓/✗ icon buttons on the overlay handle itself
     check('overlay: move mode stays after the drag (await confirm)', doc.body.classList.contains('move-mode') === true);
-    check('overlay: confirm/cancel offered after drag', doc.getElementById('moveConfirmRow').hidden === false);
+    check('overlay: ✓/✗ save-cancel buttons on the handle', !!doc.getElementById('moveSaveBtn') && !!doc.getElementById('moveDiscardBtn') && doc.getElementById('moveHandle').hidden === false);
 
     // Cancel snaps the panel back to the saved position
     FakeWS.last._emit({ type: 'move-cancel' });
@@ -329,13 +330,17 @@ try {
     })(), `x=${doc.querySelector('[data-slider="marginX"] input')?.max} y=${doc.querySelector('[data-slider="marginY"] input')?.max}`);
     // v1.1.14: the move hotkey was replaced by a button on the Appearance tab
     check('settings: move-overlay button under the position controls', !!doc.getElementById('moveOverlayBtn') && !doc.getElementById('moveHotkey'));
-    check('settings: confirm/cancel row ready for move mode', !!doc.getElementById('moveConfirmBtn') && !!doc.getElementById('moveCancelBtn') && doc.getElementById('moveConfirmRow').hidden === true);
+    // v1.2.0: confirm/cancel buttons removed from settings — ✓/✗ live on the overlay
+    check('settings: no confirm/cancel buttons (moved to overlay)', !doc.getElementById('moveConfirmBtn') && !doc.getElementById('moveConfirmRow'));
+    check('settings: restart button ready for downloaded update', !!doc.getElementById('restartNowBtn') && doc.getElementById('restartNowBtn').hidden === true);
     // v1.1.15: «Ещё» is a single tab — About/profiles merged in
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
-    check('settings: version line shows 1.1.15', /1\.1\.15/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: version line shows 1.2.0', /1\.2\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
     check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
-    check('settings: OBS launch + copy buttons in «Ещё»', !!doc.getElementById('obsLaunchBtn') && !!doc.getElementById('copyObsUrlBtn') && !!doc.getElementById('overlayWindowToggle'));
+    // v1.2.0: «Запустить вещание» removed — OBS Browser Source only needs the
+    // copied URL (the launch button was not required to show TS in OBS)
+    check('settings: no OBS launch button (URL is enough for OBS)', !doc.getElementById('obsLaunchBtn') && !!doc.getElementById('copyObsUrlBtn') && !!doc.getElementById('overlayWindowToggle'));
     check('settings: OBS browser-source hint shows the URL', /\/\?clean=1/.test(doc.getElementById('obsHint')?.textContent || ''), doc.getElementById('obsHint')?.textContent);
 
     // v1.1.14: placement is clamped so the panel never leaves the screen
@@ -461,9 +466,9 @@ try {
       const b = await r.json();
       check(`server: ${route} answers`, r.ok && b.ok === true, JSON.stringify(b));
     }
-    const obs = await fetch(`${BASE}/api/obs/launch`, { method: 'POST' });
-    const obsBody = await obs.json();
-    check('server: obs launch endpoint answers with URL', obs.ok && obsBody.ok === true && /clean=1/.test(obsBody.url || ''), JSON.stringify(obsBody));
+    const rs = await fetch(`${BASE}/api/update/restart`, { method: 'POST' });
+    const rsBody = await rs.json();
+    check('server: update-restart endpoint answers', rs.ok && rsBody.ok === true && rsBody.applied === false, JSON.stringify(rsBody));
     const dp = await fetch(`${BASE}/api/displays`);
     const dpBody = await dp.json();
     check('server: displays reports panel size', dp.ok && dpBody.panelSize?.w === 292 && dpBody.panelSize?.h === 140, JSON.stringify(dpBody.panelSize));

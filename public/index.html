@@ -12,7 +12,9 @@
   <div id="stage">
     <section id="panel" aria-label="TeamSpeak overlay">
       <div id="moveHandle" class="move-handle" hidden>
-        <span class="grip">⠿</span><span data-i18n="moveHandleText"></span>
+        <span class="grip">⠿</span><span class="move-handle-text" data-i18n="moveHandleText"></span>
+        <button type="button" id="moveSaveBtn" class="move-ico save" aria-label="save">✓</button>
+        <button type="button" id="moveDiscardBtn" class="move-ico discard" aria-label="cancel">✗</button>
       </div>
       <div id="moveHint" hidden></div>
       <header id="panelHeader">
@@ -158,10 +160,6 @@
 
         <div class="field">
           <button class="btn" id="moveOverlayBtn" data-i18n="moveOverlayBtn"></button>
-          <div class="btn-row" id="moveConfirmRow" hidden>
-            <button class="btn primary" id="moveConfirmBtn" data-i18n="moveConfirmBtn"></button>
-            <button class="btn" id="moveCancelBtn" data-i18n="moveCancelBtn"></button>
-          </div>
           <div class="hint" data-i18n="moveOverlayHint"></div>
         </div>
 
@@ -344,6 +342,7 @@
           <div class="hint" id="updateVersion"></div>
           <div class="btn-row">
             <button class="btn primary" id="checkUpdateBtn" data-i18n="checkUpdateBtn"></button>
+            <button class="btn primary" id="restartNowBtn" data-i18n="updRestartBtn" hidden></button>
           </div>
           <div class="hint block" id="updateStatus"></div>
           <div class="hint block" data-i18n="updatesHint"></div>
@@ -353,7 +352,6 @@
         <div class="hint block" data-i18n="overlayWindowHint"></div>
         <div class="hint block" id="obsHint"></div>
         <div class="btn-row">
-          <button class="btn primary" id="obsLaunchBtn" data-i18n="obsLaunchBtn"></button>
           <button class="btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
         </div>
 
@@ -368,7 +366,7 @@
         </div>
 
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.15</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.2.0</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
         <div class="hint block" data-i18n="aboutTip"></div>

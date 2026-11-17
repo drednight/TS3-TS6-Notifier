@@ -196,6 +196,26 @@ html, body {
 body.move-mode .move-handle { display: flex; }
 body.dragging .move-handle { cursor: grabbing; }
 
+.move-handle-text {
+  flex: 1 1 auto;
+  text-align: center;
+}
+.move-ico {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  color: #fff;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.move-ico:hover { transform: scale(1.08); filter: brightness(1.1); }
+.move-ico.save { background: #16a34a; border-color: #22c55e; }
+.move-ico.discard { background: #dc2626; border-color: #ef4444; }
+
 body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
 body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
 body[data-corner="bl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
