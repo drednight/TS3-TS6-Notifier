@@ -3,7 +3,10 @@
 # NOT a release — no tags, no binaries published.
 name: native-toolchain (manual bootstrap)
 on:
-  workflow_dispatch:
+  # Not dispatchable from a non-default branch, so it runs on push whenever
+  # the toolchain or the dependency set changes.
+  push:
+    paths: ['.github/workflows/native-toolchain.yml', 'native/Cargo.toml']
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
