@@ -696,6 +696,9 @@ async function boot(): Promise<void> {
     checkUpdates: () => checkForUpdatesNow(),
     restartToUpdate: () => tryQuitAndInstall(),
     version: app.isPackaged && typeof app.getVersion === 'function' ? app.getVersion() : 'dev',
+    pluginDll: IS_PACKAGED
+      ? join(process.resourcesPath, 'plugin', 'ts3plugin_tsn_win64.dll')
+      : join(ROOT, 'plugin', 'dist', 'ts3plugin_tsn_win64.dll'),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;

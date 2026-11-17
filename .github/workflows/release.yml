@@ -41,6 +41,16 @@ jobs:
       - name: Render icons
         run: npm run icons
 
+      - name: Build TS3 plugin DLL
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cd plugin
+          if not exist dist mkdir dist
+          cl /nologo /LD /O2 /MD /W3 /I include ts3plugin_tsn.c /Fe:dist\ts3plugin_tsn_win64.dll /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          dir dist
+
       - name: Verify packaged file layout
         shell: pwsh
         run: |
@@ -69,6 +79,7 @@ jobs:
             dist/*.exe
             dist/latest.yml
             dist/*.blockmap
+            plugin/dist/ts3plugin_tsn_win64.dll
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -79,6 +90,7 @@ jobs:
             dist/*.exe
             dist/latest.yml
             dist/*.blockmap
+            plugin/dist/ts3plugin_tsn_win64.dll
           generate_release_notes: true
           body: |
             ## TS3-TS6 Notifier ${{ github.ref_name }}
@@ -91,3 +103,4 @@ jobs:
             3. TS3: Настройки → Плагины → Client Query → API key (вставить в Settings).
             4. TS6: Настройки → Remote Apps → включить → разрешить приложение при запросе.
             5. Оверлей поверх игры: оконный / безрамочный режим игры.
+            6. Рекомендуется: установите **ts3plugin_tsn_win64.dll** (в приложении «Ещё» → «Плагин TS3» → «Установить плагин», затем включите его в TeamSpeak и перезапустите клиент) — события без задержек и обрывов.

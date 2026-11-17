@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ConfigStore } from './config.js';
@@ -8,6 +8,7 @@ import { DIAG, OverlayState, diag, emptyState } from './model.js';
 import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
+import { Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
 import { Ts6Connector } from './connectors/ts6.js';
 import { findTs3Icon } from './icons.js';
 
@@ -29,6 +30,8 @@ export interface AppOptions {
   restartToUpdate?: () => void;
   /** App version for the diagnostics report. */
   version?: string;
+  /** Path of the bundled TS3 plugin DLL (for «Установить плагин»). */
+  pluginDll?: string;
 }
 
 export interface AppHandle {
@@ -69,7 +72,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
     const next: Connector =
       cfg.source === 'ts3'
-        ? new Ts3Connector(cfg.ts3.host, cfg.ts3.port, cfg.ts3.apiKey)
+        ? // Prefer the in-client TS3 plugin (instant events, no query drops);
+          // falls back to ClientQuery automatically when the plugin is absent.
+          new Ts3WithPluginConnector(cfg.ts3.host, cfg.ts3.port, cfg.ts3.apiKey)
         : cfg.source === 'ts6'
           ? new Ts6Connector(cfg.ts6.host, cfg.ts6.port, cfg.ts6.apiKey, (key) => {
               store.update({ ts6: { apiKey: key } });
@@ -258,6 +263,39 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           panelSize = { w: Math.round(Number(b?.w)), h: Math.round(Number(b?.h)) };
         }
         json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    // «Плагин TS3»: install the bundled bridge DLL into the client's plugin folder.
+    if (url === '/api/plugin/install' && method === 'POST') {
+      const src = opts.pluginDll ?? '';
+      const dst = process.env.APPDATA
+        ? join(process.env.APPDATA, 'TS3Client', 'plugins', 'ts3plugin_tsn_win64.dll')
+        : '';
+      try {
+        if (!src || !existsSync(src)) {
+          json(res, 200, { ok: false, error: 'dll-missing' });
+        } else if (!dst) {
+          json(res, 200, { ok: false, error: 'windows-only' });
+        } else {
+          mkdirSync(join(dst, '..'), { recursive: true });
+          copyFileSync(src, dst);
+          diag('plugin', `installed to ${dst}`);
+          json(res, 200, { ok: true, path: dst });
+        }
+      } catch (err) {
+        json(res, 200, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    if (url === '/api/plugin/status' && method === 'GET') {
+      const holder = connector as unknown as { getBridge?: () => { active(): boolean } };
+      const bridge = typeof holder?.getBridge === 'function' ? holder.getBridge() : null;
+      json(res, 200, {
+        active: !!bridge?.active(),
+        dll: !!(opts.pluginDll && existsSync(opts.pluginDll)),
       });
       return;
     }

@@ -277,6 +277,77 @@ check('ts6: join feed row rendered', (() => {
 })(), JSON.stringify(ts6States[ts6States.length - 1]?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
 
+/* ---------------- TS3 plugin bridge (Overwolf-style) ---------------- */
+const { PluginBridge, PluginState, Ts3WithPluginConnector } = await import('../server/connectors/plugin-bridge.ts');
+
+const pStates = [];
+let pStateRef = null;
+const pState = new PluginState(() => pStates.push(pStateRef.buildState()));
+pStateRef = pState;
+const bridge = new PluginBridge(0);
+let pluginActive = false;
+bridge.on('active', () => { pluginActive = true; });
+bridge.on('line', (m) => pState.ingest(m));
+bridge.start();
+await new Promise((r) => setTimeout(r, 200));
+const psock = net.createConnection({ host: '127.0.0.1', port: bridge.getPort() });
+await new Promise((r) => psock.on('connect', r));
+const sendLine = (obj) => psock.write(JSON.stringify(obj) + '\n');
+
+sendLine({ e: 'hello', v: '1.0.0' });
+sendLine({ e: 'snapshot', server: 'Тест', own: 1, owncid: 10, owncname: 'Лобби', clients: [
+  { id: 1, name: 'Я', cid: 10, groups: '6', cname: 'Лобби' },
+  { id: 2, name: 'Гость', cid: 10, groups: '', cname: 'Лобби' },
+  { id: 3, name: 'Дальний', cid: 11, groups: '', cname: 'Другая' },
+] });
+await new Promise((r) => setTimeout(r, 250));
+check('plugin: hello activates the bridge', pluginActive === true);
+check('plugin: snapshot fills the channel roster', (pStates.at(-1)?.users || []).length === 2, JSON.stringify(pStates.at(-1)?.users?.map((u) => u.nickname)));
+check('plugin: channel name from snapshot', (pStates.at(-1)?.channelName || '') === 'Лобби');
+
+sendLine({ e: 'join', clid: 4, cid: 10, name: 'Новенький', groups: '', cname: 'Лобби' });
+sendLine({ e: 'join', clid: 4, cid: 10, name: 'Новенький', groups: '', cname: 'Лобби' });
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = pStates.at(-1)?.chat || [];
+  check('plugin: join row appears (own channel)', rows.some((m) => m.event === 'join' && m.nickname === 'Новенький' && m.own === true), JSON.stringify(rows.map((m) => m.event)));
+  check('plugin: duplicate join deduped', rows.filter((m) => m.event === 'join' && m.nickname === 'Новенький').length === 1);
+}
+
+sendLine({ e: 'move', clid: 3, from: 11, to: 10, name: 'Дальний', groups: '', cname: 'Лобби' });
+sendLine({ e: 'chat', kind: 'server', clid: 2, name: 'Гость', text: 'Welcome' });
+sendLine({ e: 'talk', clid: 2, s: 1 });
+sendLine({ e: 'client', clid: 2, name: 'Гость', groups: '6,12' });
+sendLine({ e: 'poke', clid: 3, name: 'Дальний', text: 'привет' });
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = pStates.at(-1)?.chat || [];
+  const users = pStates.at(-1)?.users || [];
+  check('plugin: global move row with own flag', rows.some((m) => m.event === 'move' && m.nickname === 'Дальний' && m.own === true && m.detail === 'Лобби'), JSON.stringify(rows.filter((m) => m.event === 'move')));
+  check('plugin: server chat row verbatim', rows.some((m) => m.kind === 'server' && m.text === 'Welcome'));
+  check('plugin: poke row', rows.some((m) => m.kind === 'poke' && m.text === 'привет'));
+  check('plugin: group-change row', rows.some((m) => m.event === 'group' && m.userId === '2'));
+  check('plugin: talk state updates', users.some((u) => u.id === '2' && u.talking === true));
+}
+
+// The plugin must take over from the ClientQuery fallback while it is alive.
+const autoConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0);
+const autoStates = [];
+autoConn.on('state', (st) => autoStates.push(st));
+autoConn.start();
+await new Promise((r) => setTimeout(r, 150));
+const psock2 = net.createConnection({ host: '127.0.0.1', port: autoConn.getBridge().getPort() });
+await new Promise((r) => psock2.on('connect', r));
+psock2.write(JSON.stringify({ e: 'hello', v: '1.0.0' }) + '\n');
+psock2.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid: 5, clients: [{ id: 1, name: 'Я', cid: 5, groups: '' }] }) + '\n');
+await new Promise((r) => setTimeout(r, 350));
+check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.detail === 'TS3 plugin' && st.users.length === 1), JSON.stringify(autoStates.map((st) => st.detail)));
+
+psock.destroy();
+psock2.destroy();
+bridge.stop();
+autoConn.stop();
+
 /* ---- teardown ---- */
 c3.stop();
 c6.stop();

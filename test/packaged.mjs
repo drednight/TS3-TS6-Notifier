@@ -87,6 +87,12 @@ try {
     }
     const api = await fetch(`http://127.0.0.1:${port}/api/state`);
     check('packaged: /api/state works', api.status === 200);
+    const pst = await fetch(`http://127.0.0.1:${port}/api/plugin/status`);
+    const pstBody = await pst.json();
+    check('packaged: /api/plugin/status works', pst.status === 200 && typeof pstBody.active === 'boolean' && typeof pstBody.dll === 'boolean', JSON.stringify(pstBody));
+    const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
+    const pinsBody = await pins.json();
+    check('packaged: /api/plugin/install responds safely', pins.status === 200 && (pinsBody.ok === true || typeof pinsBody.error === 'string'), JSON.stringify(pinsBody));
     const diag = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagText = await diag.text();
     check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3\/TS6 traffic/.test(diagText) && /TS3-TS6 Notifier diagnostics/.test(diagText), `len=${diagText.length}`);

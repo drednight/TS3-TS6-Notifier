@@ -407,6 +407,7 @@ try {
     // v1.3.2: per-type scope selectors («Весь сервер» / «Мой канал») + diagnostics
     check('settings: per-type scope selectors present', doc.querySelectorAll('select[data-enum^="evScope"]').length === 6);
     check('settings: diagnostics block present', !!doc.getElementById('diagBtn') && !!doc.getElementById('diagCopyBtn') && !!doc.getElementById('diagOut'));
+    check('settings: TS3 plugin block present', !!doc.getElementById('pluginInstallBtn') && !!doc.getElementById('pluginStatus'));
     // v1.3.1: event sliders show counts/seconds, not px
     check('settings: event slider units (no px)', (() => {
       const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';
