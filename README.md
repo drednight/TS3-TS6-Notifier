@@ -8,7 +8,7 @@
 
 1. **Скачайте приложение** — `TS3-TS6-Notifier-Setup-*.exe` из раздела [Releases](../../releases) — и запустите (от себя достаточно; запуск от администратора — по желанию).
 2. **Выберите источник данных** — окно настроек откроется само при первом запуске (⚙ → **Связь**):
-   - **TeamSpeak 3** — включите плагин **ClientQuery** в самом клиенте: **Сервис → Настройки → Плагины → ClientQuery**. Плагин входит в состав [клиента TeamSpeak 3](https://www.teamspeak.com/en/downloads/) — отдельно ставить нечего; если плагин не виден, обновите клиент (он доставляется через myTeamSpeak). Ключ API находится в *Settings…* этого плагина — оверлей подхватит его сам. Официальная тема с описанием: [TeamSpeak Client 3.1.3 / ClientQuery](https://forum.teamspeak.com/threads/130474).
+   - **TeamSpeak 3** — включите плагин **ClientQuery** в самом клиенте: **Сервис → Настройки → Плагины → ClientQuery**. Плагин входит в состав [клиента TeamSpeak 3](https://www.teamspeak.com/en/downloads/) — отдельно ставить нечего. **Если плагина нет в списке аддонов** — установите его отсюда: [ClientQuery на myTeamSpeak](https://www.myteamspeak.com/addons/L2FkZG9ucy85NDNkZDgxNi03ZWYyLTQ4ZDctODJiOC1kNjBjM2I5YjEwYjM%3D). Ключ API находится в *Settings…* этого плагина — оверлей подхватит его сам. Официальная тема с описанием: [TeamSpeak Client 3.1.3 / ClientQuery](https://forum.teamspeak.com/threads/130474).
    - **TeamSpeak 6 (и TS5)** — включите **Remote Apps** (Настройки → Remote Apps) и один раз разрешите подключение.
    - **Демо-режим** — просто посмотреть, как всё выглядит.
 3. **Настройте вид** (по желанию): ⚙ → **Вид** — тема, прозрачность, положение на экране; перетащить панель можно кнопкой «Переместить оверлей» («✓» — сохранить, «✗» — отменить).
@@ -84,7 +84,7 @@ npm run dist       # → dist/TS3-TS6-Notifier-Setup-1.0.0.exe
 
 ## Подключение к TeamSpeak 3
 
-1. В клиенте TS3: **Сервис → Настройки → Плагины → ClientQuery** — включите плагин и откройте его *Settings…*. Плагин встроен в [клиент TeamSpeak 3](https://www.teamspeak.com/en/downloads/) (ставится/обновляется автоматически через myTeamSpeak — [официальная тема](https://forum.teamspeak.com/threads/130474)).
+1. В клиенте TS3: **Сервис → Настройки → Плагины → ClientQuery** — включите плагин и откройте его *Settings…*. Плагин встроен в [клиент TeamSpeak 3](https://www.teamspeak.com/en/downloads/) и обычно ставится/обновляется автоматически через myTeamSpeak. **Нет в списке аддонов?** Установите вручную: [ClientQuery на myTeamSpeak](https://www.myteamspeak.com/addons/L2FkZG9ucy85NDNkZDgxNi03ZWYyLTQ4ZDctODJiOC1kNjBjM2I5YjEwYjM%3D) ([официальная тема](https://forum.teamspeak.com/threads/130474)).
 2. API key **подхватывается автоматически** из ClientQuery (файл `clientquery.ini`). Если хотите вручную — скопируйте ключ из настроек плагина и вставьте в оверлей.
 3. В оверлее: **⚙ → Связь → Источник данных → TeamSpeak 3**, при необходимости вставьте ключ, *Переподключить*.
 
