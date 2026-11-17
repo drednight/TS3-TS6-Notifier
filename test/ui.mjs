@@ -235,6 +235,27 @@ try {
     await new Promise((r) => setTimeout(r, 40));
     check('overlay: unread badge hideable via setting', badge.hidden === true);
 
+    // v1.3.1: server-chat system lines + group changes surface as events
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: true, showUnreadBadge: true } },
+    });
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'sys90', userId: '', nickname: '', text: 'Σκuλλα подключился(-ась) к Fakken', kind: 'server', at: Date.now() },
+          { id: 'grp91', userId: 'u2', nickname: 'джусинг', text: 'channel', kind: 'system', event: 'group', detail: 'Guest', at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const evHtml = doc.getElementById('eventsList').innerHTML;
+    check('overlay: server-chat system line shown as event', doc.querySelector('#eventsList .ev-sys') && /Fakken/.test(evHtml));
+    check('overlay: group change shown as event', doc.querySelector('#eventsList .ev-group') && /Guest/.test(evHtml));
+    check('overlay: events plaque removed (no header)', !doc.querySelector('.events-head'));
+
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
     const mxBefore = doc.documentElement.style.getPropertyValue('--margin-x');
@@ -363,6 +384,13 @@ try {
     // v1.3.0 — new notification/event settings
     check('settings: unread badge toggle present', !!doc.querySelector('[data-toggle="showUnreadBadge"]'));
     check('settings: events settings present', !!doc.querySelector('[data-toggle="showEvents"]') && !!doc.querySelector('[data-toggle="showEvJoin"]') && !!doc.querySelector('[data-toggle="showEvChat"]') && !!doc.querySelector('[data-slider="eventsCount"]'));
+    check('settings: group/system event chips present', !!doc.querySelector('[data-toggle="showEvGroup"]') && !!doc.querySelector('[data-toggle="showEvSys"]'));
+    // v1.3.1: event sliders show counts/seconds, not px
+    check('settings: event slider units (no px)', (() => {
+      const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';
+      const d = doc.querySelector('[data-slider="eventsDelay"] output')?.textContent || '';
+      return !/px/.test(c) && /^\d+ s$/.test(d);
+    })(), `count='${doc.querySelector('[data-slider="eventsCount"] output')?.textContent}' delay='${doc.querySelector('[data-slider="eventsDelay"] output')?.textContent}'`);
     check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
     // v1.2.0: «Запустить вещание» removed — OBS Browser Source only needs the
     // copied URL (the launch button was not required to show TS in OBS)

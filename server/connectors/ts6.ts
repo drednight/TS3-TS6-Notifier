@@ -427,6 +427,25 @@ export class Ts6Connector extends EventEmitter implements Connector {
         return;
       }
 
+      case 'clientMoved':
+      case 'clientChannelChanged':
+      case 'clientSwitchedChannel': {
+        if (foreign) return;
+        const clientId = jInt(payload, 'clientId') || jInt(payload, 'id');
+        const to =
+          jInt(payload, 'newChannelId') || jInt(payload, 'toChannelId') ||
+          jInt(payload, 'channelId') || jInt(asObj(payload['properties']) ?? {}, 'channelId');
+        const user = this.clients.get(clientId);
+        if (user && clientId === this.ownClientId) {
+          this.ownChannelId = to || this.ownChannelId;
+        } else if (user) {
+          // v1.3.1: every move on the server, not just own-channel touches.
+          this.pushFeed(user, 'move', this.channels.get(to)?.name ?? '');
+        }
+        this.resync(`event ${type}`);
+        return;
+      }
+
       case 'channelMoved':
       case 'serverEdited':
         this.resync(`event ${type}`);

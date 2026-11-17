@@ -38,6 +38,12 @@ await cp(join(ROOT, 'app', 'dist', 'main.cjs'), join(APP_DIR, 'app', 'dist', 'ma
 await cp(join(ROOT, 'app', 'icons'), join(RES_DIR, 'icons'), { recursive: true });
 await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-notifier', main: 'app/dist/main.cjs' }));
 
+// v1.3.1: the Ctrl+Shift+M move hotkey is gone for good
+{
+  const mainSrc = await import('node:fs/promises').then((fs) => fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8'));
+  check('packaged: move hotkey removed from main', !/CommandOrControl\+Shift\+M|registerMoveHotkey/.test(mainSrc));
+}
+
 // Boot the bundled main against that layout (electron stubbed)
 const proc = spawn('node', ['-r', './test/electron-stub.cjs', 'app/dist/main.cjs'], {
   cwd: ROOT,

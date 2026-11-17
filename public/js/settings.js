@@ -44,6 +44,8 @@
     showEvMove: true,
     showEvPoke: true,
     showEvChat: true,
+    showEvGroup: true,
+    showEvSys: true,
     eventsCount: 5,
     eventsDelay: 20,
   };
@@ -85,7 +87,7 @@
     'showBadges', 'showSelf', 'hideQuery', 'animations', 'talkingFirst',
     'onlyTalking', 'compact', 'hideEmpty', 'showWhispers', 'showChat', 'chatPrivate',
     'showUnreadBadge', 'showEvents', 'showEvJoin', 'showEvLeave', 'showEvMove',
-    'showEvPoke', 'showEvChat',
+    'showEvPoke', 'showEvChat', 'showEvGroup', 'showEvSys',
   ];
 
   let local = {};
@@ -254,7 +256,8 @@
 
   function fmt(key, value) {
     if (key === 'opacity' || key === 'glow' || key === 'scale') return `${Math.round(value * 100)}%`;
-    if (key === 'chatDelay') return `${value} s`;
+    if (key === 'chatDelay' || key === 'eventsDelay') return `${value} s`;
+    if (key === 'eventsCount') return `${value}`;
     return `${value}px`;
   }
 

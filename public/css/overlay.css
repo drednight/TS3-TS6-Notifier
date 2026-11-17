@@ -1835,32 +1835,12 @@ body.no-anim .pp-eq i { animation: none; }
 .btn.wide { width: 100%; }
 
 /* ---- events feed (overlay) ---- */
+/* v1.3.1: the events list is chrome-less (the user asked to drop the
+ * «Последние события» plaque) — rows sit quietly under the roster. */
 .events-feed {
-  margin: 8px 0 2px;
-  border-radius: calc(var(--radius, 16px) * 0.7);
-  background: color-mix(in srgb, var(--accent) 7%, rgba(255, 255, 255, 0.03));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, rgba(255, 255, 255, 0.07));
-  padding: 8px 10px;
+  margin: 6px 0 2px;
 }
-.events-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--accent) 85%, #fff);
-  margin-bottom: 6px;
-}
-.events-head .events-ico {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 7px var(--accent);
-}
-.events-list { display: flex; flex-direction: column; gap: 3px; }
+.events-list { display: flex; flex-direction: column; gap: 2px; }
 .event-row {
   display: flex;
   align-items: baseline;
@@ -1889,3 +1869,6 @@ body.no-anim .event-row { animation: none; }
 .event-row.ev-move .ev-tag { background: color-mix(in srgb, #60a5fa 26%, transparent); color: #bfdbfe; }
 .event-row.ev-poke .ev-tag { background: color-mix(in srgb, #fbbf24 26%, transparent); color: #fde68a; }
 .event-row.ev-chat .ev-tag { background: color-mix(in srgb, var(--accent) 26%, transparent); color: color-mix(in srgb, var(--accent) 92%, #fff); }
+.event-row.ev-sys .ev-tag { background: color-mix(in srgb, #a78bfa 26%, transparent); color: #ddd6fe; }
+.event-row.ev-group .ev-tag { background: color-mix(in srgb, #22d3ee 24%, transparent); color: #a5f3fc; }
+.event-row.ev-sys, .event-row.ev-group { color: var(--muted, #aab0c4); font-style: italic; }

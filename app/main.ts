@@ -68,39 +68,6 @@ let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
 
-/* ---------------- overlay move hotkey ---------------- */
-
-let moveHotkeyReg = '';
-
-/**
- * A dedicated "move overlay" hotkey arms move mode for a short window: the
- * panel takes the mouse so it can be dragged anywhere (and its buttons
- * clicked), then releases it again. Dragging is impossible without the key,
- * so gameplay never loses the cursor by accident.
- */
-function registerMoveHotkey(): void {
-  const combo = handle?.store.get().desktop.moveHotkey?.trim() || 'CommandOrControl+Shift+M';
-  if (moveHotkeyReg === combo) return;
-  if (moveHotkeyReg) {
-    try {
-      globalShortcut.unregister(moveHotkeyReg);
-    } catch {
-      /* already gone */
-    }
-    moveHotkeyReg = '';
-  }
-  try {
-    if (globalShortcut.register(combo, () => handle?.broadcast({ type: 'move-mode' }))) {
-      moveHotkeyReg = combo;
-      log(`[app] overlay move hotkey: ${combo}`);
-    } else {
-      log(`[app] move hotkey refused (busy?): ${combo}`);
-    }
-  } catch (err) {
-    log('[app] move hotkey error: ' + err);
-  }
-}
-
 /* ---------------- auto update (GitHub Releases) ---------------- */
 
 /**
@@ -740,7 +707,6 @@ async function boot(): Promise<void> {
   applyOverlayWindow();
   applyAutostart();
   setupAutoUpdate();
-  registerMoveHotkey();
   registerSoundHotkeys();
   // One guarded listener: heavy shell work only when its own slice changed.
   // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
@@ -765,7 +731,6 @@ async function boot(): Promise<void> {
       buildTrayMenu();
     }
     applyOverlayWindow();
-    registerMoveHotkey();
     registerSoundHotkeys();
   });
 

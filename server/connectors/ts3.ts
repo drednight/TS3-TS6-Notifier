@@ -67,6 +67,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private traceCount = 0;
 
   private clients = new Map<number, UserState>();
+  private groupMem = new Map<number, { sg: string; cg: string }>();
   private channels = new Map<number, ChannelInfo>();
   private groups: ServerGroup[] = [];
   private chat: ChatMessage[] = [];
@@ -604,6 +605,37 @@ export class Ts3Connector extends EventEmitter implements Connector {
         if ('client_is_priority_speaker' in fields) patch.prioritySpeaker = fBool(fields, 'client_is_priority_speaker');
         if ('client_flag_talking' in fields) patch.talking = fBool(fields, 'client_flag_talking');
         this.clients.set(clid, { ...user, ...patch });
+        // Group membership changes («добавил пользователя в группу …») —
+        // diff the group fields and announce them as sys events.
+        const sg = 'client_servergroups' in fields ? fStr(fields, 'client_servergroups') : undefined;
+        const cg = 'client_channel_group_id' in fields
+          ? fStr(fields, 'client_channel_group_name') || String(fInt(fields, 'client_channel_group_id'))
+          : undefined;
+        const prev = this.groupMem.get(clid) ?? { sg: '', cg: '' };
+        if (sg !== undefined && sg !== prev.sg) {
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: 'server',
+            kind: 'system',
+            event: 'group',
+            detail: sg.split(',').filter(Boolean).join(', ') || '—',
+          });
+        }
+        if (cg !== undefined && cg !== prev.cg) {
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: 'channel',
+            kind: 'system',
+            event: 'group',
+            detail: cg || '—',
+          });
+        }
+        this.groupMem.set(clid, {
+          sg: sg ?? prev.sg,
+          cg: cg ?? prev.cg,
+        });
         this.emitState();
         return;
       }
@@ -616,17 +648,16 @@ export class Ts3Connector extends EventEmitter implements Connector {
         if (user?.isSelf) {
           this.ownCid = to;
         } else if (user && !user.isQuery && clid !== this.ownClid) {
-          // Only announce moves that touch the user's own channel.
-          if (to === this.ownCid || user.channelId === this.ownCid) {
-            this.pushChat({
-              userId: String(clid),
-              nickname: user.nickname,
-              text: user.nickname,
-              kind: 'system',
-              event: 'move',
-              detail: this.channels.get(to)?.name ?? '',
-            });
-          }
+          // v1.3.1: every move on the server («кто куда перешёл») — the user
+          // wants the full picture, not only own-channel touches.
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: user.nickname,
+            kind: 'system',
+            event: 'move',
+            detail: this.channels.get(to)?.name ?? '',
+          });
         }
         this.scheduleRefresh();
         return;

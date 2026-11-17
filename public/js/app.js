@@ -281,6 +281,11 @@
     if (m.event === 'join') return detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
     if (m.event === 'leave') return detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
     if (m.event === 'move') return t('evMove').replace('{n}', name).replace('{c}', detail || '…');
+    if (m.event === 'group') {
+      return t(m.text === 'server' ? 'evGroupServer' : 'evGroupChannel')
+        .replace('{n}', name)
+        .replace('{g}', detail || '…');
+    }
     return '';
   }
 
@@ -300,55 +305,67 @@
       (kind === 'leave' && a.showEvLeave) ||
       (kind === 'move' && a.showEvMove) ||
       (kind === 'poke' && a.showEvPoke) ||
-      (kind === 'chat' && a.showEvChat);
+      (kind === 'chat' && a.showEvChat) ||
+      (kind === 'group' && a.showEvGroup) ||
+      (kind === 'sys' && a.showEvSys);
     const delayMs = Math.max(5, Number(a.eventsDelay) || 20) * 1000;
     const maxRows = Math.min(10, Math.max(1, Number(a.eventsCount) || 5));
     const now = Date.now();
 
-    // Collect: structured system events + (optionally) chat lines.
+    // Collect: structured system events + server-chat system lines + chat.
     const items = [];
     for (const m of state.chat || []) {
       let kind = '';
-      if (m.kind === 'system' && (m.event === 'join' || m.event === 'leave' || m.event === 'move')) kind = m.event;
-      else if ((m.kind === 'poke' && m.event === 'poke') || m.kind === 'poke') kind = 'poke';
+      if (m.kind === 'system' && (m.event === 'join' || m.event === 'leave' || m.event === 'move' || m.event === 'group')) kind = m.event;
+      else if (m.kind === 'poke') kind = 'poke';
+      else if (m.kind === 'server') kind = 'sys'; // localized system lines from the client (TS6 server chat)
       else if (m.kind !== 'system') kind = 'chat';
       if (!kind || !allow(kind)) continue;
       if (kind === 'chat' && m.kind === 'private' && !a.chatPrivate) continue;
       if (now - (m.at || 0) > delayMs) continue;
-      const text = kind === 'chat' || kind === 'poke'
-        ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
-        : evText(m);
+      const text = kind === 'sys'
+        ? cleanChat(m.text)
+        : kind === 'chat' || kind === 'poke'
+          ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
+          : evText(m);
       if (!text) continue;
       items.push({ id: m.id || `${kind}-${m.at}`, kind, text, at: m.at || now });
     }
     items.sort((x, y) => y.at - x.at);
     const shown = items.slice(0, maxRows);
 
-    // Rebuild cheaply: keyed diff by id string.
+    // Keyed diff — existing rows are NEVER moved (moving a node restarts its
+    // CSS animation, which made the block jitter on every state render).
     const want = new Set(shown.map((i) => i.id));
-    for (const [id, el] of [...list.children].map((el) => [el.dataset.evId, el])) {
-      if (!want.has(id)) el.remove();
+    for (const el of [...list.children]) {
+      if (!want.has(el.dataset.evId)) el.remove();
     }
     const have = new Set([...list.children].map((el) => el.dataset.evId));
     for (const item of shown) {
       if (have.has(item.id)) continue;
       const el = document.createElement('div');
-      el.className = `event-row ${item.kind === 'chat' ? 'ev-chat' : 'ev-' + item.kind}`;
+      el.className = `event-row ${item.kind === 'sys' ? 'ev-sys' : item.kind === 'group' ? 'ev-group' : 'ev-' + item.kind}`;
       el.dataset.evId = item.id;
       const tag = document.createElement('span');
       tag.className = 'ev-tag';
-      tag.textContent = t(item.kind === 'chat' ? 'evTagChat' : item.kind === 'join' ? 'evTagJoin' : item.kind === 'leave' ? 'evTagLeave' : item.kind === 'move' ? 'evTagMove' : 'evTagPoke');
+      tag.textContent = t(
+        item.kind === 'chat' ? 'evTagChat'
+          : item.kind === 'join' ? 'evTagJoin'
+            : item.kind === 'leave' ? 'evTagLeave'
+              : item.kind === 'move' ? 'evTagMove'
+                : item.kind === 'group' ? 'evTagGroup'
+                  : item.kind === 'sys' ? 'evTagSys'
+                    : 'evTagPoke',
+      );
       const txt = document.createElement('span');
       txt.textContent = item.text;
       el.appendChild(tag);
       el.appendChild(txt);
-      list.prepend(el);
-    }
-    // Keep DOM order newest-first.
-    const byId = new Map(shown.map((i) => [i.id, i]));
-    for (const el of [...list.children]) {
-      const item = byId.get(el.dataset.evId);
-      if (item) list.appendChild(el);
+      // Newest first, inserted by timestamp — existing rows are never moved.
+      el.dataset.evAt = String(item.at);
+      const ref = [...list.children].find((c) => Number(c.dataset.evAt || 0) < item.at);
+      if (ref) list.insertBefore(el, ref);
+      else list.appendChild(el);
     }
     // Expiry tick: re-render as rows age out (cheap, coalesced).
     if (!evTickTimer && list.children.length) {
