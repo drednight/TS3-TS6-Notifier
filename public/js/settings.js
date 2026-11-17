@@ -46,6 +46,12 @@
     showEvChat: true,
     showEvGroup: true,
     showEvSys: true,
+    evScopeJoin: 'all',
+    evScopeLeave: 'all',
+    evScopeMove: 'all',
+    evScopeGroup: 'all',
+    evScopeSys: 'all',
+    evScopeChat: 'all',
     eventsCount: 5,
     eventsDelay: 20,
   };
@@ -66,6 +72,12 @@
     corner: ['tl', 'tr', 'bl', 'br'],
     language: ['auto', 'ru', 'en'],
     eqStyle: ['bars', 'ring', 'dots', 'none'],
+    evScopeJoin: ['all', 'own'],
+    evScopeLeave: ['all', 'own'],
+    evScopeMove: ['all', 'own'],
+    evScopeGroup: ['all', 'own'],
+    evScopeSys: ['all', 'own'],
+    evScopeChat: ['all', 'own'],
   };
 
   const NUM_RANGES = {
@@ -368,6 +380,11 @@
       btn.classList.toggle('active', btn.dataset.value === a.corner);
     });
 
+    document.querySelectorAll('[data-enum]').forEach((sel) => {
+      const key = sel.getAttribute('data-enum');
+      if (key in a) sel.value = a[key];
+    });
+
     const langSel = document.getElementById('languageSelect');
     if (langSel) langSel.value = a.language;
     const eqSel = document.getElementById('eqStyleSelect');
@@ -411,6 +428,10 @@
 
     document.querySelectorAll('#cornerGrid button').forEach((btn) => {
       btn.addEventListener('click', () => set('corner', btn.dataset.value));
+    });
+
+    document.querySelectorAll('[data-enum]').forEach((sel) => {
+      sel.addEventListener('change', () => set(sel.getAttribute('data-enum'), sel.value));
     });
 
     const langSel = document.getElementById('languageSelect');

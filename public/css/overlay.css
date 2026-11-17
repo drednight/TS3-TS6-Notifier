@@ -216,10 +216,12 @@ body.dragging .move-handle { cursor: grabbing; }
 .move-ico.save { background: #16a34a; border-color: #22c55e; }
 .move-ico.discard { background: #dc2626; border-color: #ef4444; }
 
-body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
-body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
-body[data-corner="bl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
-body[data-corner="br"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
+body[data-corner="tl"] #panel { top: var(--margin-y); bottom: auto; left: var(--margin-x); right: auto; transform-origin: top left; }
+body[data-corner="tr"] #panel { top: var(--margin-y); bottom: auto; right: var(--margin-x); left: auto; transform-origin: top right; }
+/* v1.3.2: bottom corners really anchor to the bottom edge (they used to
+ * mirror the top ones — only two positions worked). */
+body[data-corner="bl"] #panel { bottom: var(--margin-y); top: auto; left: var(--margin-x); right: auto; transform-origin: bottom left; }
+body[data-corner="br"] #panel { bottom: var(--margin-y); top: auto; right: var(--margin-x); left: auto; transform-origin: bottom right; }
 
 /* move mode: armed by the "Переместить оверлей" hotkey */
 body.move-mode #panel {
@@ -1811,6 +1813,34 @@ body.no-anim .pp-eq i { animation: none; }
   border-color: var(--accent);
   color: #fff;
   box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ---- per-type event scope rows ---- */
+.scope-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.scope-row { display: flex; align-items: center; gap: 8px; }
+.scope-row .chip-toggle { flex: 1 1 auto; justify-content: flex-start; }
+.scope-select {
+  flex: 0 0 auto;
+  max-width: 132px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.diag-out {
+  width: 100%;
+  min-height: 160px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  color: #d6d9e6;
+  font: 11px/1.5 ui-monospace, Consolas, monospace;
+  resize: vertical;
 }
 
 /* ---- tile buttons ---- */

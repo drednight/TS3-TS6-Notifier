@@ -695,6 +695,7 @@ async function boot(): Promise<void> {
     },
     checkUpdates: () => checkForUpdatesNow(),
     restartToUpdate: () => tryQuitAndInstall(),
+    version: app.isPackaged && typeof app.getVersion === 'function' ? app.getVersion() : 'dev',
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { basename, extname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ConfigStore } from './config.js';
-import { OverlayState, emptyState } from './model.js';
+import { DIAG, OverlayState, diag, emptyState } from './model.js';
 import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
@@ -27,6 +27,8 @@ export interface AppOptions {
   checkUpdates?: () => void;
   /** Desktop only: quit and install a downloaded update right now. */
   restartToUpdate?: () => void;
+  /** App version for the diagnostics report. */
+  version?: string;
 }
 
 export interface AppHandle {
@@ -257,6 +259,29 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
         }
         json(res, 200, { ok: true });
       });
+      return;
+    }
+
+    // «Диагностика»: a copyable report of what the app caught from TS3/TS6.
+    if (url === '/api/diagnostics' && method === 'GET') {
+      const cfg = store.get();
+      const report = [
+        `TS3-TS6 Notifier diagnostics — ${new Date().toISOString()}`,
+        `version: ${opts.version ?? 'dev'}`,
+        `source: ${cfg.source} (ts3 ${cfg.ts3.host}:${cfg.ts3.port}, ts6 ${cfg.ts6.host}:${cfg.ts6.port})`,
+        `last status: ${latestState.status} — ${latestState.detail || ''}`,
+        `users on channel: ${latestState.users.length}, chat/event rows kept: ${latestState.chat.length}`,
+        '',
+        '--- recent chat & events ---',
+        ...latestState.chat.slice(-30).map(
+          (m) => `${new Date(m.at).toISOString().slice(11, 19)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
+        ),
+        '',
+        `--- raw TS3/TS6 traffic (last ${DIAG.length} lines) ---`,
+        ...DIAG,
+      ].join('\n');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(report);
       return;
     }
 

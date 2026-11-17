@@ -248,13 +248,33 @@
           <div class="sub-title" data-i18n="eventsTitle"></div>
           <div class="chip-grid">
             <label class="chip-toggle"><input type="checkbox" data-toggle="showEvents" /><span class="chip-ico" data-ico="info"></span><span data-i18n="showEvents"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvJoin" /><span data-i18n="evTagJoin"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvLeave" /><span data-i18n="evTagLeave"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvMove" /><span data-i18n="evTagMove"></span></label>
             <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvPoke" /><span data-i18n="evTagPoke"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvChat" /><span data-i18n="evTagChat"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvGroup" /><span data-i18n="evTagGroup"></span></label>
-            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvSys" /><span data-i18n="evTagSys"></span></label>
+          </div>
+          <div class="scope-rows">
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvJoin" /><span data-i18n="evTagJoin"></span></label>
+              <select class="scope-select" data-enum="evScopeJoin"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvLeave" /><span data-i18n="evTagLeave"></span></label>
+              <select class="scope-select" data-enum="evScopeLeave"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvMove" /><span data-i18n="evTagMove"></span></label>
+              <select class="scope-select" data-enum="evScopeMove"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvChat" /><span data-i18n="evTagChat"></span></label>
+              <select class="scope-select" data-enum="evScopeChat"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvGroup" /><span data-i18n="evTagGroup"></span></label>
+              <select class="scope-select" data-enum="evScopeGroup"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvSys" /><span data-i18n="evTagSys"></span></label>
+              <select class="scope-select" data-enum="evScopeSys"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
           </div>
           <div class="field" data-slider="eventsCount" data-min="1" data-max="10" data-step="1">
             <label data-i18n="eventsCount"></label><output></output>
@@ -412,6 +432,16 @@
           <div class="tile-grid">
             <button class="tile-btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
           </div>
+        </div>
+
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="alert"></span><span data-i18n="diagTitle"></span></div>
+          <div class="hint block" data-i18n="diagHint"></div>
+          <div class="tile-grid">
+            <button class="tile-btn" id="diagBtn" data-i18n="diagBtn"></button>
+            <button class="tile-btn" id="diagCopyBtn" data-i18n="diagCopyBtn"></button>
+          </div>
+          <textarea id="diagOut" class="diag-out" readonly hidden></textarea>
         </div>
 
         <div class="opt-group">

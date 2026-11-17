@@ -256,6 +256,25 @@ try {
     check('overlay: group change shown as event', doc.querySelector('#eventsList .ev-group') && /Guest/.test(evHtml));
     check('overlay: events plaque removed (no header)', !doc.querySelector('.events-head'));
 
+    // v1.3.2: per-type scope filtering (own channel vs whole server)
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'mv01', userId: 'u2', nickname: 'Другой', text: 'Другой', kind: 'system', event: 'move', detail: 'Чужой канал', own: false, at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: global scope shows foreign events', !!doc.querySelector('#eventsList .ev-move'));
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: true, evScopeMove: 'own' } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: own-channel scope hides foreign events', !doc.querySelector('#eventsList .ev-move'));
+
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
     const mxBefore = doc.documentElement.style.getPropertyValue('--margin-x');
@@ -385,6 +404,9 @@ try {
     check('settings: unread badge toggle present', !!doc.querySelector('[data-toggle="showUnreadBadge"]'));
     check('settings: events settings present', !!doc.querySelector('[data-toggle="showEvents"]') && !!doc.querySelector('[data-toggle="showEvJoin"]') && !!doc.querySelector('[data-toggle="showEvChat"]') && !!doc.querySelector('[data-slider="eventsCount"]'));
     check('settings: group/system event chips present', !!doc.querySelector('[data-toggle="showEvGroup"]') && !!doc.querySelector('[data-toggle="showEvSys"]'));
+    // v1.3.2: per-type scope selectors («Весь сервер» / «Мой канал») + diagnostics
+    check('settings: per-type scope selectors present', doc.querySelectorAll('select[data-enum^="evScope"]').length === 6);
+    check('settings: diagnostics block present', !!doc.getElementById('diagBtn') && !!doc.getElementById('diagCopyBtn') && !!doc.getElementById('diagOut'));
     // v1.3.1: event sliders show counts/seconds, not px
     check('settings: event slider units (no px)', (() => {
       const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';

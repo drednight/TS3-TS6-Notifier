@@ -77,6 +77,23 @@ export interface ChatMessage {
   event?: 'join' | 'leave' | 'move' | 'poke' | 'group';
   /** Channel name for join/leave/move, poke body for pokes. */
   detail?: string;
+  /** True when the event touched the user's own channel (scope filtering). */
+  own?: boolean;
+}
+
+/* ---------------- diagnostics ring buffer ----------------
+ * Raw TS3/TS6 traffic + app notes, exposed via GET /api/diagnostics so the
+ * user can copy a report. Secrets are redacted on write. */
+const DIAG_LIMIT = 800;
+export const DIAG: string[] = [];
+
+export function diag(scope: string, line: string): void {
+  const redacted = String(line).replace(
+    /(apikey|api_key|token|password|passwd)(\s*[=:]\s*)\S+/gi,
+    '$1$2***',
+  );
+  DIAG.push(`${new Date().toISOString().slice(11, 19)} [${scope}] ${redacted}`);
+  if (DIAG.length > DIAG_LIMIT) DIAG.splice(0, DIAG.length - DIAG_LIMIT);
 }
 
 export interface Ts3Config {
@@ -137,6 +154,13 @@ export interface Appearance {
   showEvChat: boolean;
   eventsCount: number;
   eventsDelay: number;
+  /** Per-type event scope: 'all' = whole server, 'own' = own channel only. */
+  evScopeJoin: 'all' | 'own';
+  evScopeLeave: 'all' | 'own';
+  evScopeMove: 'all' | 'own';
+  evScopeGroup: 'all' | 'own';
+  evScopeSys: 'all' | 'own';
+  evScopeChat: 'all' | 'own';
 }
 
 export interface AppConfig {
@@ -242,6 +266,12 @@ export const DEFAULT_APPEARANCE: Appearance = {
   showEvChat: true,
   eventsCount: 5,
   eventsDelay: 20,
+  evScopeJoin: 'all',
+  evScopeLeave: 'all',
+  evScopeMove: 'all',
+  evScopeGroup: 'all',
+  evScopeSys: 'all',
+  evScopeChat: 'all',
 };
 
 export const DEFAULT_CONFIG: AppConfig = {

@@ -13,11 +13,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = join(ROOT, '.tmp-pkg');
 
-// The bundle must exist — build it if the caller hasn't.
-try {
-  await access(join(ROOT, 'app', 'dist', 'main.cjs'));
-} catch {
-  console.log('bundle missing — running npm run bundle first');
+// Always build a fresh bundle — a stale app/dist/main.cjs would test old code.
+{
   const r = spawnSync('npm', ['run', 'bundle'], { cwd: ROOT, shell: true, stdio: 'inherit' });
   if (r.status !== 0) process.exit(1);
 }
@@ -40,8 +37,14 @@ await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-n
 
 // v1.3.1: the Ctrl+Shift+M move hotkey is gone for good
 {
-  const mainSrc = await import('node:fs/promises').then((fs) => fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8'));
+  const fs = await import('node:fs/promises');
+  const mainSrc = await fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8');
   check('packaged: move hotkey removed from main', !/CommandOrControl\+Shift\+M|registerMoveHotkey/.test(mainSrc));
+  // v1.3.2: all four screen corners really anchor (bl/br used to mirror tl/tr)
+  const css = await fs.readFile(new URL('../public/css/overlay.css', import.meta.url), 'utf8');
+  const bl = /data-corner="bl"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
+  const br = /data-corner="br"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
+  check('packaged: bottom corners anchor to the bottom edge', bl && br);
 }
 
 // Boot the bundled main against that layout (electron stubbed)
@@ -84,6 +87,9 @@ try {
     }
     const api = await fetch(`http://127.0.0.1:${port}/api/state`);
     check('packaged: /api/state works', api.status === 200);
+    const diag = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const diagText = await diag.text();
+    check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3\/TS6 traffic/.test(diagText) && /TS3-TS6 Notifier diagnostics/.test(diagText), `len=${diagText.length}`);
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
     const { default: WebSocket } = await import('ws');
     const alive = await new Promise((resolve) => {

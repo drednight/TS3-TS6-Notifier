@@ -322,6 +322,15 @@
       else if (m.kind !== 'system') kind = 'chat';
       if (!kind || !allow(kind)) continue;
       if (kind === 'chat' && m.kind === 'private' && !a.chatPrivate) continue;
+      // Per-type scope: «Мой канал» vs «Весь сервер» (v1.3.2). Channel/private
+      // chats and pokes count as own-channel; server lines and remote events
+      // carry their own `own` flag from the connectors.
+      const scopeKey = {
+        join: 'evScopeJoin', leave: 'evScopeLeave', move: 'evScopeMove',
+        group: 'evScopeGroup', sys: 'evScopeSys', chat: 'evScopeChat',
+      }[kind];
+      const ownFlag = m.own ?? (m.kind === 'channel' || m.kind === 'private' || m.kind === 'poke');
+      if (scopeKey && a[scopeKey] === 'own' && !ownFlag) continue;
       if (now - (m.at || 0) > delayMs) continue;
       const text = kind === 'sys'
         ? cleanChat(m.text)
@@ -676,6 +685,46 @@
       fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
     });
 
+    // «Диагностика»: build the TS3/TS6 capture report and let the user copy it.
+    $('diagBtn').addEventListener('click', async () => {
+      const out = $('diagOut');
+      out.hidden = false;
+      out.value = '…';
+      try {
+        const res = await fetch('/api/diagnostics');
+        out.value = await res.text();
+      } catch {
+        out.value = t('updError');
+      }
+      out.scrollTop = out.scrollHeight;
+    });
+    $('diagCopyBtn').addEventListener('click', async () => {
+      const out = $('diagOut');
+      if (!out.value) {
+        out.hidden = false;
+        out.value = '…';
+        try {
+          out.value = await (await fetch('/api/diagnostics')).text();
+        } catch {
+          out.value = t('updError');
+        }
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(out.value);
+        ok = true;
+      } catch {
+        out.hidden = false;
+        out.select?.();
+        ok = false;
+      }
+      const btn = $('diagCopyBtn');
+      btn.textContent = ok ? '✓' : '!';
+      setTimeout(() => {
+        btn.textContent = t('diagCopyBtn');
+      }, 1500);
+    });
+
     // Save/cancel of the dragged position live ON the overlay itself — the
     // settings window may be behind the game or on another display.
     $('moveSaveBtn').addEventListener('click', (e) => {
@@ -888,12 +937,15 @@
         const dy = ev.clientY - startY;
         const corner = document.body.dataset.corner || 'tr';
         const rightSide = corner === 'tr' || corner === 'br';
+        const bottomSide = corner === 'bl' || corner === 'br';
         // The panel bumps into the screen edges and never leaves them — the
         // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
         const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
         const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
         curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
-        curY = Math.min(maxY, Math.max(0, baseY + dy));
+        // Bottom-anchored corners measure the margin from the bottom edge —
+        // dragging down must shrink it (the panel follows the mouse).
+        curY = Math.min(maxY, Math.max(0, baseY + (bottomSide ? -dy : dy)));
         document.documentElement.style.setProperty('--margin-x', `${curX}px`);
         document.documentElement.style.setProperty('--margin-y', `${curY}px`);
       };
