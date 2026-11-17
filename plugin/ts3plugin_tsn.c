@@ -336,7 +336,7 @@ PLUGINS_EXPORTDLL void ts3plugin_onUpdateClientEvent(uint64 schid, anyID clid, a
 
 PLUGINS_EXPORTDLL void ts3plugin_onTalkStatusChangeEvent(uint64 schid, int status, int isReceivedWhisper, anyID clid) {
     (void)isReceivedWhisper;
-    tsn_sendf("{\"e\":\"talk\",\"clid\":%u,\"s\":%d,\"schid\":%llu}", (unsigned)clid, status, (unsigned long long)schid);
+    tsn_sendf("{\"e\":\"talk\",\"clid\":%u,\"s\":%d,\"w\":%d,\"schid\":%llu}", (unsigned)clid, status, isReceivedWhisper ? 1 : 0, (unsigned long long)schid);
 }
 
 PLUGINS_EXPORTDLL int ts3plugin_onTextMessageEvent(uint64 schid, anyID targetMode, anyID toID, anyID fromID, const char* fromName, const char* fromUniqueIdentifier, const char* message, int ffIgnored) {
