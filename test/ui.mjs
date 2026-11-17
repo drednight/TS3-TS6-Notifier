@@ -217,6 +217,63 @@ try {
     const sysRow = [...doc.querySelectorAll('#chatFeed .chat-toast.kind-system')].map((el) => el.textContent).join(' | ');
     check('overlay: system event row localised (join)', /Мария/.test(sysRow) && /UI Test Channel/.test(sysRow) && !/…:/.test(sysRow), sysRow);
     check('overlay: system rows are not counted as unread', badge.hidden === false && doc.getElementById('chatUnreadCount').textContent === '1', doc.getElementById('chatUnreadCount').textContent);
+    // v1.3.0: persistent events feed (independent of chat toasts)
+    const evFeed = doc.getElementById('eventsFeed');
+    const evRows = doc.querySelectorAll('#eventsList .event-row');
+    check('overlay: events feed shows join/system events', evFeed.hidden === false && evRows.length >= 1, `rows=${evRows.length}`);
+    check('overlay: events feed row text localised', /Мария/.test(doc.getElementById('eventsList').textContent), doc.getElementById('eventsList').textContent);
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: false } },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: events feed disableable', evFeed.hidden === true);
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showUnreadBadge: false } },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: unread badge hideable via setting', badge.hidden === true);
+
+    // v1.3.1: server-chat system lines + group changes surface as events
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: true, showUnreadBadge: true } },
+    });
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'sys90', userId: '', nickname: '', text: 'Σκuλλα подключился(-ась) к Fakken', kind: 'server', at: Date.now() },
+          { id: 'grp91', userId: 'u2', nickname: 'джусинг', text: 'channel', kind: 'system', event: 'group', detail: 'Guest', at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const evHtml = doc.getElementById('eventsList').innerHTML;
+    check('overlay: server-chat system line shown as event', doc.querySelector('#eventsList .ev-sys') && /Fakken/.test(evHtml));
+    check('overlay: group change shown as event', doc.querySelector('#eventsList .ev-group') && /Guest/.test(evHtml));
+    check('overlay: events plaque removed (no header)', !doc.querySelector('.events-head'));
+
+    // v1.3.2: per-type scope filtering (own channel vs whole server)
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        chat: [
+          { id: 'mv01', userId: 'u2', nickname: 'Другой', text: 'Другой', kind: 'system', event: 'move', detail: 'Чужой канал', own: false, at: Date.now() },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: global scope shows foreign events', !!doc.querySelector('#eventsList .ev-move'));
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: true, evScopeMove: 'own' } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check('overlay: own-channel scope hides foreign events', !doc.querySelector('#eventsList .ev-move'));
 
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
@@ -336,7 +393,26 @@ try {
     // v1.1.15: «Ещё» is a single tab — About/profiles merged in
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
-    check('settings: version line shows 1.2.0', /1\.2\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: version line shows 1.3.0', /1\.3\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
+    check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
+    check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
+    check('settings: chip toggles wired', doc.querySelectorAll('[data-panel="elements"] .chip-toggle input[data-toggle]').length >= 16);
+    check('settings: source cards drive the source', !!doc.getElementById('sourceCards') && doc.querySelectorAll('#sourceCards .source-card').length === 3 && doc.getElementById('sourceSelect').hidden === true);
+    check('settings: tile buttons in «Ещё»', !!doc.getElementById('checkUpdateBtn').closest('.tile-btn') && !!doc.getElementById('copyObsUrlBtn').closest('.tile-btn'));
+    // v1.3.0 — new notification/event settings
+    check('settings: unread badge toggle present', !!doc.querySelector('[data-toggle="showUnreadBadge"]'));
+    check('settings: events settings present', !!doc.querySelector('[data-toggle="showEvents"]') && !!doc.querySelector('[data-toggle="showEvJoin"]') && !!doc.querySelector('[data-toggle="showEvChat"]') && !!doc.querySelector('[data-slider="eventsCount"]'));
+    check('settings: group/system event chips present', !!doc.querySelector('[data-toggle="showEvGroup"]') && !!doc.querySelector('[data-toggle="showEvSys"]'));
+    // v1.3.2: per-type scope selectors («Весь сервер» / «Мой канал») + diagnostics
+    check('settings: per-type scope selectors present', doc.querySelectorAll('select[data-enum^="evScope"]').length === 6);
+    check('settings: diagnostics block present', !!doc.getElementById('diagBtn') && !!doc.getElementById('diagCopyBtn') && !!doc.getElementById('diagOut'));
+    // v1.3.1: event sliders show counts/seconds, not px
+    check('settings: event slider units (no px)', (() => {
+      const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';
+      const d = doc.querySelector('[data-slider="eventsDelay"] output')?.textContent || '';
+      return !/px/.test(c) && /^\d+ s$/.test(d);
+    })(), `count='${doc.querySelector('[data-slider="eventsCount"] output')?.textContent}' delay='${doc.querySelector('[data-slider="eventsDelay"] output')?.textContent}'`);
     check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
     // v1.2.0: «Запустить вещание» removed — OBS Browser Source only needs the
     // copied URL (the launch button was not required to show TS in OBS)

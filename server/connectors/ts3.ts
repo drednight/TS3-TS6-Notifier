@@ -3,7 +3,7 @@ import net from 'node:net';
 import { readFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-import { ChatMessage, OverlayState, ServerGroup, UserState, emptyState, makeUser, StatusCode } from '../model.js';
+import { ChatMessage, OverlayState, ServerGroup, UserState, diag, emptyState, makeUser, StatusCode } from '../model.js';
 import {
   Connector,
   Ts3Fields,
@@ -67,6 +67,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private traceCount = 0;
 
   private clients = new Map<number, UserState>();
+  private groupMem = new Map<number, { sg: string; cg: string }>();
+  private announcedOnce = false;
   private channels = new Map<number, ChannelInfo>();
   private groups: ServerGroup[] = [];
   private chat: ChatMessage[] = [];
@@ -479,6 +481,37 @@ export class Ts3Connector extends EventEmitter implements Connector {
       }
 
       await this.readAvatars(clients);
+      // Diff against the previous snapshot: notify lines can be missed (or
+      // arrive before we listen) — announce joins/leaves that had no event.
+      const prevClients = this.clients;
+      if (this.announcedOnce) {
+        for (const [id, u] of clients) {
+          if (prevClients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
+          this.pushChat({
+            userId: String(id),
+            nickname: u.nickname,
+            text: u.nickname,
+            kind: 'system',
+            event: 'join',
+            detail: id === this.ownClid ? '' : this.channels.get(u.channelId)?.name && u.channelId === this.ownCid ? (this.channels.get(u.channelId)?.name ?? '') : '',
+            own: u.channelId === this.ownCid,
+          });
+        }
+        for (const [id, u] of prevClients) {
+          if (clients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
+          this.pushChat({
+            userId: String(id),
+            nickname: u.nickname,
+            text: u.nickname,
+            kind: 'system',
+            event: 'leave',
+            detail: u.channelId === this.ownCid ? (this.channels.get(u.channelId)?.name ?? '') : '',
+            own: u.channelId === this.ownCid,
+          });
+        }
+      } else {
+        this.announcedOnce = true;
+      }
       this.clients = clients;
 
       // Server groups (names + icon ids) — used for class icon mapping.
@@ -531,9 +564,18 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
   /* -------------------------------------------------- events */
 
+  private talkDiagSkipped = 0;
+
   private handleEvent(line: string): void {
     const space = line.indexOf(' ');
     const name = space < 0 ? line : line.slice(0, space);
+    // Diagnostics: capture raw notify lines (talk flaps sampled 1-in-10).
+    if (name === 'notifytalkstatuschange') {
+      this.talkDiagSkipped += 1;
+      if (this.talkDiagSkipped % 10 === 1) diag('ts3', line.slice(0, 240) + (this.talkDiagSkipped > 1 ? ' …' : ''));
+    } else {
+      diag('ts3', line.slice(0, 240));
+    }
     const fields: Ts3Fields = {};
     for (const token of (space < 0 ? '' : line.slice(space + 1)).split(' ')) {
       if (!token) continue;
@@ -604,6 +646,39 @@ export class Ts3Connector extends EventEmitter implements Connector {
         if ('client_is_priority_speaker' in fields) patch.prioritySpeaker = fBool(fields, 'client_is_priority_speaker');
         if ('client_flag_talking' in fields) patch.talking = fBool(fields, 'client_flag_talking');
         this.clients.set(clid, { ...user, ...patch });
+        // Group membership changes («добавил пользователя в группу …») —
+        // diff the group fields and announce them as sys events.
+        const sg = 'client_servergroups' in fields ? fStr(fields, 'client_servergroups') : undefined;
+        const cg = 'client_channel_group_id' in fields
+          ? fStr(fields, 'client_channel_group_name') || String(fInt(fields, 'client_channel_group_id'))
+          : undefined;
+        const prev = this.groupMem.get(clid) ?? { sg: '', cg: '' };
+        if (sg !== undefined && sg !== prev.sg) {
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: 'server',
+            kind: 'system',
+            event: 'group',
+            detail: sg.split(',').filter(Boolean).join(', ') || '—',
+            own: user.channelId === this.ownCid,
+          });
+        }
+        if (cg !== undefined && cg !== prev.cg) {
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: 'channel',
+            kind: 'system',
+            event: 'group',
+            detail: cg || '—',
+            own: user.channelId === this.ownCid,
+          });
+        }
+        this.groupMem.set(clid, {
+          sg: sg ?? prev.sg,
+          cg: cg ?? prev.cg,
+        });
         this.emitState();
         return;
       }
@@ -616,17 +691,17 @@ export class Ts3Connector extends EventEmitter implements Connector {
         if (user?.isSelf) {
           this.ownCid = to;
         } else if (user && !user.isQuery && clid !== this.ownClid) {
-          // Only announce moves that touch the user's own channel.
-          if (to === this.ownCid || user.channelId === this.ownCid) {
-            this.pushChat({
-              userId: String(clid),
-              nickname: user.nickname,
-              text: user.nickname,
-              kind: 'system',
-              event: 'move',
-              detail: this.channels.get(to)?.name ?? '',
-            });
-          }
+          // v1.3.1: every move on the server («кто куда перешёл») — the user
+          // wants the full picture, not only own-channel touches.
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: user.nickname,
+            kind: 'system',
+            event: 'move',
+            detail: this.channels.get(to)?.name ?? '',
+            own: to === this.ownCid || user.channelId === this.ownCid,
+          });
         }
         this.scheduleRefresh();
         return;
@@ -646,6 +721,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
             kind: 'system',
             event: 'leave',
             detail: wasOurs ? (this.channels.get(user!.channelId)?.name ?? '') : '',
+            own: wasOurs,
           });
         }
         if (this.clients.delete(clid)) this.emitState();
@@ -668,6 +744,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
             kind: 'system',
             event: 'join',
             detail: inOur ? (this.channels.get(ctid)?.name ?? '') : '',
+            own: inOur,
           });
         }
         this.scheduleRefresh();
@@ -719,19 +796,23 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
     const now = Date.now();
-    const last = this.chat[this.chat.length - 1];
-    // Own-message echo arrives twice with different metadata (e.g. target
-    // mode missing on the second copy) — merge instead of showing a twin.
-    if (last && !last.event && !msg.event && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
-      const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
-      const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
-      const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;
-      this.chat[this.chat.length - 1] = { ...last, kind, nickname };
-      this.emitState();
-      return;
+    // Duplicates arrive twice (own-echo with different metadata, refresh
+    // diffs racing notify lines): scan the recent tail, not just the last row.
+    for (let i = this.chat.length - 1; i >= 0 && i >= this.chat.length - 12; i--) {
+      const prev = this.chat[i]!;
+      if (now - prev.at > 5000) break;
+      if (prev.text === msg.text && prev.userId === msg.userId && (prev.event ?? '') === (msg.event ?? '') && (prev.detail ?? '') === (msg.detail ?? '')) {
+        // Merge metadata (echo copies may carry a better kind/nickname).
+        const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
+        const kind = (rank[msg.kind] ?? 0) > (rank[prev.kind] ?? 0) ? msg.kind : prev.kind;
+        const nickname = prev.nickname && prev.nickname !== '?' ? prev.nickname : msg.nickname;
+        this.chat[i] = { ...prev, kind, nickname, own: prev.own ?? msg.own };
+        this.emitState();
+        return;
+      }
     }
     this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: now });
-    if (this.chat.length > 20) this.chat = this.chat.slice(-20);
+    if (this.chat.length > 60) this.chat = this.chat.slice(-60);
     this.emitState();
   }
 

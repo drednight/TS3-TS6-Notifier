@@ -44,6 +44,10 @@
         <div id="whisperList" class="whisper-list"></div>
       </div>
 
+      <div id="eventsFeed" class="events-feed" hidden>
+        <div id="eventsList" class="events-list"></div>
+      </div>
+
       <div id="chatFeed" class="chat-feed" hidden></div>
       <div id="chatUnread" class="chat-unread" hidden data-i18n-title="unreadTitle">
         <span class="cu-dot"></span><span id="chatUnreadCount">0</span>
@@ -81,9 +85,23 @@
     <div class="drawer-body">
       <!-- ---------- Appearance ---------- -->
       <section class="tab-panel active" data-panel="appearance">
-        <div class="field">
-          <label data-i18n="theme"></label>
-          <div class="segmented" id="themeSeg">
+        <div class="preview-strip">
+          <div class="preview-panel" aria-hidden="true">
+            <div class="pp-header">
+              <span class="pp-dot"></span>
+              <div class="pp-lines"><i class="pp-l1"></i><i class="pp-l2"></i></div>
+              <span class="pp-count">3</span>
+            </div>
+            <div class="pp-row talking"><span class="pp-ava"></span><i class="pp-name"></i><span class="pp-eq"><i></i><i></i><i></i></span></div>
+            <div class="pp-row"><span class="pp-ava"></span><i class="pp-name"></i></div>
+            <div class="pp-row"><span class="pp-ava"></span><i class="pp-name short"></i></div>
+          </div>
+          <div class="preview-cap" data-i18n="lookPreview"></div>
+        </div>
+
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="theme"></span></div>
+          <div class="theme-tiles" id="themeSeg">
             <button data-value="glass" data-i18n="themeGlass"></button>
             <button data-value="midnight" data-i18n="themeMidnight"></button>
             <button data-value="frost" data-i18n="themeFrost"></button>
@@ -93,10 +111,6 @@
             <button data-value="amber" data-i18n="themeAmber"></button>
             <button data-value="mono" data-i18n="themeMono"></button>
           </div>
-        </div>
-
-        <div class="field">
-          <label data-i18n="accentColor"></label>
           <div class="swatch-row" id="accentSwatches">
             <button class="swatch" data-value="#7c6cff" style="--sw:#7c6cff"></button>
             <button class="swatch" data-value="#22d3ee" style="--sw:#22d3ee"></button>
@@ -108,113 +122,168 @@
           </div>
         </div>
 
-        <div class="field" data-slider="glow" data-min="0" data-max="1" data-step="0.05">
-          <label data-i18n="glow"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="opacity" data-min="0.15" data-max="1" data-step="0.01">
-          <label data-i18n="opacity"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="blur" data-min="0" data-max="40" data-step="1">
-          <label data-i18n="blur"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="radius" data-min="0" data-max="26" data-step="1">
-          <label data-i18n="radius"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="scale" data-min="0.75" data-max="1.5" data-step="0.05">
-          <label data-i18n="scale"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="fontSize" data-min="11" data-max="18" data-step="1">
-          <label data-i18n="fontSize"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field">
-          <label data-i18n="corner"></label>
-          <div class="corner-grid" id="cornerGrid">
-            <button data-value="tl" title="Top left"></button>
-            <button data-value="tr" title="Top right"></button>
-            <button data-value="bl" title="Bottom left"></button>
-            <button data-value="br" title="Bottom right"></button>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="wave"></span><span data-i18n="grpPanel"></span></div>
+          <div class="field" data-slider="glow" data-min="0" data-max="1" data-step="0.05">
+            <label data-i18n="glow"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="opacity" data-min="0.15" data-max="1" data-step="0.01">
+            <label data-i18n="opacity"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="blur" data-min="0" data-max="40" data-step="1">
+            <label data-i18n="blur"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="radius" data-min="0" data-max="26" data-step="1">
+            <label data-i18n="radius"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="scale" data-min="0.75" data-max="1.5" data-step="0.05">
+            <label data-i18n="scale"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="fontSize" data-min="11" data-max="18" data-step="1">
+            <label data-i18n="fontSize"></label><output></output>
+            <input type="range" />
           </div>
         </div>
 
-        <div class="field" data-slider="marginX" data-min="0" data-max="500" data-step="1">
-          <label data-i18n="marginX"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field" data-slider="marginY" data-min="0" data-max="500" data-step="1">
-          <label data-i18n="marginY"></label><output></output>
-          <input type="range" />
-        </div>
-
-        <div class="field">
-          <button class="btn" id="moveOverlayBtn" data-i18n="moveOverlayBtn"></button>
-          <div class="hint" data-i18n="moveOverlayHint"></div>
-        </div>
-
-        <div class="field" id="displayField" hidden>
-          <label data-i18n="displayLabel"></label>
-          <select id="displaySelect">
-            <option value="primary" data-i18n="displayPrimary"></option>
-          </select>
-          <div class="hint" data-i18n="displayHint"></div>
-        </div>
-
-        <div class="field">
-          <label data-i18n="language"></label>
-          <select id="languageSelect">
-            <option value="auto" data-i18n="langAuto"></option>
-            <option value="ru">Русский</option>
-            <option value="en">English</option>
-          </select>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="gear"></span><span data-i18n="corner"></span></div>
+          <div class="field">
+            <div class="corner-grid" id="cornerGrid">
+              <button data-value="tl" title="Top left"></button>
+              <button data-value="tr" title="Top right"></button>
+              <button data-value="bl" title="Bottom left"></button>
+              <button data-value="br" title="Bottom right"></button>
+            </div>
+          </div>
+          <div class="field" data-slider="marginX" data-min="0" data-max="500" data-step="1">
+            <label data-i18n="marginX"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="marginY" data-min="0" data-max="500" data-step="1">
+            <label data-i18n="marginY"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field">
+            <button class="btn primary wide" id="moveOverlayBtn" data-i18n="moveOverlayBtn"></button>
+            <div class="hint" data-i18n="moveOverlayHint"></div>
+          </div>
+          <div class="field" id="displayField" hidden>
+            <label data-i18n="displayLabel"></label>
+            <select id="displaySelect">
+              <option value="primary" data-i18n="displayPrimary"></option>
+            </select>
+            <div class="hint" data-i18n="displayHint"></div>
+          </div>
+          <div class="field">
+            <label data-i18n="language"></label>
+            <select id="languageSelect">
+              <option value="auto" data-i18n="langAuto"></option>
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+            </select>
+          </div>
         </div>
       </section>
 
       <!-- ---------- Elements ---------- -->
       <section class="tab-panel" data-panel="elements">
-        <div class="field">
-          <label data-i18n="eqStyle"></label>
-          <select id="eqStyleSelect">
-            <option value="bars" data-i18n="eqBars"></option>
-            <option value="ring" data-i18n="eqRing"></option>
-            <option value="dots" data-i18n="eqDots"></option>
-            <option value="none" data-i18n="eqNone"></option>
-          </select>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="users"></span><span data-i18n="grpChannel"></span></div>
+          <div class="chip-grid">
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showAvatars" /><span class="chip-ico" data-ico="users"></span><span data-i18n="showAvatars"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showBadges" /><span class="chip-ico" data-ico="star"></span><span data-i18n="showBadges"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showSelf" /><span class="chip-ico" data-ico="ghost"></span><span data-i18n="showSelf"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="hideQuery" /><span class="chip-ico" data-ico="x"></span><span data-i18n="hideQuery"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="hideEmpty" /><span class="chip-ico" data-ico="x"></span><span data-i18n="hideEmpty"></span></label>
+          </div>
         </div>
 
-        <div class="switch-list">
-          <label class="switch-row"><span data-i18n="showHeader"></span><input type="checkbox" data-toggle="showHeader" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showServerName"></span><input type="checkbox" data-toggle="showServerName" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showUserCount"></span><input type="checkbox" data-toggle="showUserCount" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showBanner"></span><input type="checkbox" data-toggle="showBanner" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showAvatars"></span><input type="checkbox" data-toggle="showAvatars" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showBadges"></span><input type="checkbox" data-toggle="showBadges" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showSelf"></span><input type="checkbox" data-toggle="showSelf" /><i></i></label>
-          <label class="switch-row"><span data-i18n="hideQuery"></span><input type="checkbox" data-toggle="hideQuery" /><i></i></label>
-          <label class="switch-row"><span data-i18n="talkingFirst"></span><input type="checkbox" data-toggle="talkingFirst" /><i></i></label>
-          <label class="switch-row"><span data-i18n="onlyTalking"></span><input type="checkbox" data-toggle="onlyTalking" /><i></i></label>
-          <label class="switch-row"><span data-i18n="compact"></span><input type="checkbox" data-toggle="compact" /><i></i></label>
-          <label class="switch-row"><span data-i18n="hideEmpty"></span><input type="checkbox" data-toggle="hideEmpty" /><i></i></label>
-          <label class="switch-row"><span data-i18n="animations"></span><input type="checkbox" data-toggle="animations" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showWhispers"></span><input type="checkbox" data-toggle="showWhispers" /><i></i></label>
-          <label class="switch-row"><span data-i18n="showChat"></span><input type="checkbox" data-toggle="showChat" /><i></i></label>
-          <label class="switch-row"><span data-i18n="chatPrivate"></span><input type="checkbox" data-toggle="chatPrivate" /><i></i></label>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="logo"></span><span data-i18n="grpPanel"></span></div>
+          <div class="chip-grid">
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showHeader" /><span class="chip-ico" data-ico="logo"></span><span data-i18n="showHeader"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showServerName" /><span class="chip-ico" data-ico="shield"></span><span data-i18n="showServerName"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showUserCount" /><span class="chip-ico" data-ico="users"></span><span data-i18n="showUserCount"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showBanner" /><span class="chip-ico" data-ico="alert"></span><span data-i18n="showBanner"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="compact" /><span class="chip-ico" data-ico="gear"></span><span data-i18n="compact"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="animations" /><span class="chip-ico" data-ico="wave"></span><span data-i18n="animations"></span></label>
+          </div>
         </div>
 
-        <div class="field" data-slider="chatDelay" data-min="2" data-max="60" data-step="1">
-          <label data-i18n="chatDelay"></label><output></output>
-          <input type="range" />
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="mic"></span><span data-i18n="grpVoice"></span></div>
+          <div class="chip-grid">
+            <label class="chip-toggle"><input type="checkbox" data-toggle="talkingFirst" /><span class="chip-ico" data-ico="mic"></span><span data-i18n="talkingFirst"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="onlyTalking" /><span class="chip-ico" data-ico="micOff"></span><span data-i18n="onlyTalking"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showWhispers" /><span class="chip-ico" data-ico="moon"></span><span data-i18n="showWhispers"></span></label>
+          </div>
+          <div class="field">
+            <label data-i18n="eqStyle"></label>
+            <select id="eqStyleSelect">
+              <option value="bars" data-i18n="eqBars"></option>
+              <option value="ring" data-i18n="eqRing"></option>
+              <option value="dots" data-i18n="eqDots"></option>
+              <option value="none" data-i18n="eqNone"></option>
+            </select>
+          </div>
+        </div>
+
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="keyboard"></span><span data-i18n="grpChat"></span></div>
+          <div class="chip-grid">
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showChat" /><span class="chip-ico" data-ico="keyboard"></span><span data-i18n="showChat"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="chatPrivate" /><span class="chip-ico" data-ico="shield"></span><span data-i18n="chatPrivate"></span></label>
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showUnreadBadge" /><span class="chip-ico" data-ico="star"></span><span data-i18n="unreadBadge"></span></label>
+          </div>
+          <div class="field" data-slider="chatDelay" data-min="2" data-max="60" data-step="1">
+            <label data-i18n="chatDelay"></label><output></output>
+            <input type="range" />
+          </div>
+
+          <div class="sub-title" data-i18n="eventsTitle"></div>
+          <div class="chip-grid">
+            <label class="chip-toggle"><input type="checkbox" data-toggle="showEvents" /><span class="chip-ico" data-ico="info"></span><span data-i18n="showEvents"></span></label>
+            <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvPoke" /><span data-i18n="evTagPoke"></span></label>
+          </div>
+          <div class="scope-rows">
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvJoin" /><span data-i18n="evTagJoin"></span></label>
+              <select class="scope-select" data-enum="evScopeJoin"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvLeave" /><span data-i18n="evTagLeave"></span></label>
+              <select class="scope-select" data-enum="evScopeLeave"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvMove" /><span data-i18n="evTagMove"></span></label>
+              <select class="scope-select" data-enum="evScopeMove"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvChat" /><span data-i18n="evTagChat"></span></label>
+              <select class="scope-select" data-enum="evScopeChat"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvGroup" /><span data-i18n="evTagGroup"></span></label>
+              <select class="scope-select" data-enum="evScopeGroup"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+            <div class="scope-row">
+              <label class="chip-toggle small"><input type="checkbox" data-toggle="showEvSys" /><span data-i18n="evTagSys"></span></label>
+              <select class="scope-select" data-enum="evScopeSys"><option value="all" data-i18n="scopeAll"></option><option value="own" data-i18n="scopeOwn"></option></select>
+            </div>
+          </div>
+          <div class="field" data-slider="eventsCount" data-min="1" data-max="10" data-step="1">
+            <label data-i18n="eventsCount"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="eventsDelay" data-min="5" data-max="60" data-step="1">
+            <label data-i18n="eventsDelay"></label><output></output>
+            <input type="range" />
+          </div>
         </div>
       </section>
 
@@ -290,9 +359,14 @@
           <div class="status-detail" id="statusDetail"></div>
         </div>
 
-        <div class="field">
-          <label data-i18n="dataSource"></label>
-          <select id="sourceSelect">
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="shield"></span><span data-i18n="dataSource"></span></div>
+          <div class="source-cards" id="sourceCards">
+            <button type="button" class="source-card" data-source="mock"><span class="sc-ico" data-ico="wave"></span><span data-i18n="sourceMock"></span></button>
+            <button type="button" class="source-card" data-source="ts3"><span class="sc-ico" data-ico="mic"></span><span data-i18n="sourceTs3"></span></button>
+            <button type="button" class="source-card" data-source="ts6"><span class="sc-ico" data-ico="headphones"></span><span data-i18n="sourceTs6"></span></button>
+          </div>
+          <select id="sourceSelect" hidden>
             <option value="mock" data-i18n="sourceMock"></option>
             <option value="ts3" data-i18n="sourceTs3"></option>
             <option value="ts6" data-i18n="sourceTs6"></option>
@@ -300,63 +374,78 @@
           <div class="hint" data-i18n="dataSourceHint"></div>
         </div>
 
-        <div id="ts3Fields" class="conn-fields">
-          <div class="field"><label>TS3 · Host</label><input type="text" id="ts3Host" spellcheck="false" /></div>
-          <div class="field"><label>TS3 · Port</label><input type="number" id="ts3Port" /></div>
+        <div id="ts3Fields" class="conn-fields opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="mic"></span><span>TeamSpeak 3</span></div>
+          <div class="field"><label>Host</label><input type="text" id="ts3Host" spellcheck="false" /></div>
+          <div class="field"><label>Port</label><input type="number" id="ts3Port" /></div>
           <div class="field">
-            <label>TS3 · API key</label>
+            <label>API key</label>
             <input type="password" id="ts3ApiKey" spellcheck="false" autocomplete="off" />
             <div class="hint" data-i18n="ts3KeyHint"></div>
           </div>
         </div>
 
-        <div id="ts6Fields" class="conn-fields">
-          <div class="field"><label>TS6 · Host</label><input type="text" id="ts6Host" spellcheck="false" /></div>
-          <div class="field"><label>TS6 · Port</label><input type="number" id="ts6Port" /></div>
+        <div id="ts6Fields" class="conn-fields opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="headphones"></span><span>TeamSpeak 6</span></div>
+          <div class="field"><label>Host</label><input type="text" id="ts6Host" spellcheck="false" /></div>
+          <div class="field"><label>Port</label><input type="number" id="ts6Port" /></div>
           <div class="field">
-            <label>TS6 · API key</label>
+            <label>API key</label>
             <input type="password" id="ts6ApiKey" spellcheck="false" autocomplete="off" />
             <div class="hint" data-i18n="ts6KeyHint"></div>
           </div>
         </div>
 
         <div class="btn-row">
-          <button class="btn primary" id="reconnectBtn" data-i18n="reconnect"></button>
+          <button class="btn primary wide" id="reconnectBtn" data-i18n="reconnect"></button>
         </div>
 
         <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
         <div class="hint block" data-i18n="elevateHint"></div>
 
         <div class="hint block" data-i18n="connectionHelp"></div>
-              <details class="collapse-block" id="ts6GroupsBlock">
+        <details class="collapse-block" id="ts6GroupsBlock">
           <summary data-i18n="ts6GroupsTitle"></summary>
           <div class="hint block" data-i18n="ts6GroupsHint"></div>
           <div id="ts6GroupMap" class="group-map"></div>
         </details>
-</section>
+      </section>
 
       <!-- ---------- More ---------- -->
       <section class="tab-panel" data-panel="more">
-        <div class="field">
-          <label data-i18n="updatesTitle"></label>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="download"></span><span data-i18n="updatesTitle"></span></div>
           <div class="hint" id="updateVersion"></div>
-          <div class="btn-row">
-            <button class="btn primary" id="checkUpdateBtn" data-i18n="checkUpdateBtn"></button>
-            <button class="btn primary" id="restartNowBtn" data-i18n="updRestartBtn" hidden></button>
+          <div class="tile-grid">
+            <button class="tile-btn accent" id="checkUpdateBtn" data-i18n="checkUpdateBtn"></button>
+            <button class="tile-btn accent" id="restartNowBtn" data-i18n="updRestartBtn" hidden></button>
           </div>
           <div class="hint block" id="updateStatus"></div>
           <div class="hint block" data-i18n="updatesHint"></div>
         </div>
 
-        <label class="switch-row"><span data-i18n="overlayWindowLabel"></span><input type="checkbox" id="overlayWindowToggle" /><i></i></label>
-        <div class="hint block" data-i18n="overlayWindowHint"></div>
-        <div class="hint block" id="obsHint"></div>
-        <div class="btn-row">
-          <button class="btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="info"></span><span data-i18n="obsHintTitle"></span></div>
+          <label class="switch-row"><span data-i18n="overlayWindowLabel"></span><input type="checkbox" id="overlayWindowToggle" /><i></i></label>
+          <div class="hint block" data-i18n="overlayWindowHint"></div>
+          <div class="hint block" id="obsHint"></div>
+          <div class="tile-grid">
+            <button class="tile-btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
+          </div>
         </div>
 
-        <div class="field">
-          <label data-i18n="profile"></label>
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="alert"></span><span data-i18n="diagTitle"></span></div>
+          <div class="hint block" data-i18n="diagHint"></div>
+          <div class="tile-grid">
+            <button class="tile-btn" id="diagBtn" data-i18n="diagBtn"></button>
+            <button class="tile-btn" id="diagCopyBtn" data-i18n="diagCopyBtn"></button>
+          </div>
+          <textarea id="diagOut" class="diag-out" readonly hidden></textarea>
+        </div>
+
+        <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="gear"></span><span data-i18n="profile"></span></div>
           <div class="btn-row">
             <button class="btn" id="exportBtn"><span class="btn-ico" data-ico="download"></span><span data-i18n="exportBtn"></span></button>
             <button class="btn" id="importBtn"><span class="btn-ico" data-ico="upload"></span><span data-i18n="importBtn"></span></button>
@@ -366,7 +455,7 @@
         </div>
 
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.2.0</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.3.0</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
         <div class="hint block" data-i18n="aboutTip"></div>

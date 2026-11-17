@@ -74,9 +74,26 @@ export interface ChatMessage {
   kind: 'channel' | 'private' | 'server' | 'system' | 'poke';
   at: number;
   /** System rows carry structured info so the UI can localise them. */
-  event?: 'join' | 'leave' | 'move' | 'poke';
+  event?: 'join' | 'leave' | 'move' | 'poke' | 'group';
   /** Channel name for join/leave/move, poke body for pokes. */
   detail?: string;
+  /** True when the event touched the user's own channel (scope filtering). */
+  own?: boolean;
+}
+
+/* ---------------- diagnostics ring buffer ----------------
+ * Raw TS3/TS6 traffic + app notes, exposed via GET /api/diagnostics so the
+ * user can copy a report. Secrets are redacted on write. */
+const DIAG_LIMIT = 800;
+export const DIAG: string[] = [];
+
+export function diag(scope: string, line: string): void {
+  const redacted = String(line).replace(
+    /(apikey|api_key|token|password|passwd)(\s*[=:]\s*)\S+/gi,
+    '$1$2***',
+  );
+  DIAG.push(`${new Date().toISOString().slice(11, 19)} [${scope}] ${redacted}`);
+  if (DIAG.length > DIAG_LIMIT) DIAG.splice(0, DIAG.length - DIAG_LIMIT);
 }
 
 export interface Ts3Config {
@@ -126,6 +143,24 @@ export interface Appearance {
   showChat: boolean;
   chatDelay: number;
   chatPrivate: boolean;
+  /** Unread-message badge on the overlay. */
+  showUnreadBadge: boolean;
+  /** Recent server events block (join/leave/move/poke/chat). */
+  showEvents: boolean;
+  showEvJoin: boolean;
+  showEvLeave: boolean;
+  showEvMove: boolean;
+  showEvPoke: boolean;
+  showEvChat: boolean;
+  eventsCount: number;
+  eventsDelay: number;
+  /** Per-type event scope: 'all' = whole server, 'own' = own channel only. */
+  evScopeJoin: 'all' | 'own';
+  evScopeLeave: 'all' | 'own';
+  evScopeMove: 'all' | 'own';
+  evScopeGroup: 'all' | 'own';
+  evScopeSys: 'all' | 'own';
+  evScopeChat: 'all' | 'own';
 }
 
 export interface AppConfig {
@@ -145,7 +180,6 @@ export interface AppConfig {
     /** Relaunch as administrator (Windows only, UAC prompt at startup). */
     elevate: boolean;
     /** Global hotkey that arms overlay move mode, e.g. "Ctrl+Shift+M". */
-    moveHotkey: string;
     /** Show the in-game overlay window (off = server-only mode, e.g. for OBS). */
     overlayWindow: boolean;
     /** Preferred local port for the web server (stable URL for OBS). 0 = random. */
@@ -223,6 +257,21 @@ export const DEFAULT_APPEARANCE: Appearance = {
   showChat: true,
   chatDelay: 8,
   chatPrivate: true,
+  showUnreadBadge: true,
+  showEvents: true,
+  showEvJoin: true,
+  showEvLeave: true,
+  showEvMove: true,
+  showEvPoke: true,
+  showEvChat: true,
+  eventsCount: 5,
+  eventsDelay: 20,
+  evScopeJoin: 'all',
+  evScopeLeave: 'all',
+  evScopeMove: 'all',
+  evScopeGroup: 'all',
+  evScopeSys: 'all',
+  evScopeChat: 'all',
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -230,7 +279,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
-  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, moveHotkey: 'CommandOrControl+Shift+M', overlayWindow: true, port: 48911 },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, overlayWindow: true, port: 48911 },
   classes: {
     enabled: false,
     // Default group-id → class mapping (the user's server). Override in

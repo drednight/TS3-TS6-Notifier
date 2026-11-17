@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
-import { ChatMessage, OverlayState, ServerGroup, StatusCode, UserState, emptyState, makeUser } from '../model.js';
+import { ChatMessage, OverlayState, ServerGroup, StatusCode, UserState, diag, emptyState, makeUser } from '../model.js';
 import {
   Connector,
   JObj,
@@ -218,6 +218,14 @@ export class Ts6Connector extends EventEmitter implements Connector {
     const connId = jInt(payload, 'connectionId');
     const foreign = connId !== 0 && this.connectionId !== 0 && connId !== this.connectionId;
 
+    // Diagnostics: capture proto messages (talking updates sampled 1-in-10).
+    if (/talk|updated/i.test(type)) {
+      this.noisyDiagSkipped += 1;
+      if (this.noisyDiagSkipped % 10 === 1) diag('ts6', `${type} ${JSON.stringify(payload).slice(0, 200)}`);
+    } else {
+      diag('ts6', `${type} ${JSON.stringify(payload).slice(0, 200)}`);
+    }
+
     switch (type) {
       case 'auth':
         this.handleAuth(payload);
@@ -405,7 +413,9 @@ export class Ts6Connector extends EventEmitter implements Connector {
       }
 
       case 'clientJoined':
-      case 'clientConnected': {
+      case 'clientConnected':
+      case 'clientEnteredView':
+      case 'clientOnline': {
         if (!foreign) {
           const clientId = jInt(payload, 'clientId') || jInt(payload, 'id');
           const props = asObj(payload['properties']) ?? payload;
@@ -420,8 +430,28 @@ export class Ts6Connector extends EventEmitter implements Connector {
               kind: 'system',
               event: 'join',
               detail: inOur ? (this.channels.get(channelId)?.name ?? '') : '',
+              own: inOur,
             });
           }
+        }
+        this.resync(`event ${type}`);
+        return;
+      }
+
+      case 'clientMoved':
+      case 'clientChannelChanged':
+      case 'clientSwitchedChannel': {
+        if (foreign) return;
+        const clientId = jInt(payload, 'clientId') || jInt(payload, 'id');
+        const to =
+          jInt(payload, 'newChannelId') || jInt(payload, 'toChannelId') ||
+          jInt(payload, 'channelId') || jInt(asObj(payload['properties']) ?? {}, 'channelId');
+        const user = this.clients.get(clientId);
+        if (user && clientId === this.ownClientId) {
+          this.ownChannelId = to || this.ownChannelId;
+        } else if (user) {
+          // v1.3.1: every move on the server, not just own-channel touches.
+          this.pushFeed(user, 'move', this.channels.get(to)?.name ?? '', to === this.ownChannelId || user.channelId === this.ownChannelId);
         }
         this.resync(`event ${type}`);
         return;
@@ -440,7 +470,7 @@ export class Ts6Connector extends EventEmitter implements Connector {
         const existing = this.clients.get(clientId);
         if (existing) {
           if (clientId !== this.ownClientId) {
-            this.pushFeed(existing, 'leave', existing.channelId === this.ownChannelId ? (this.channels.get(existing.channelId)?.name ?? '') : '');
+            this.pushFeed(existing, 'leave', existing.channelId === this.ownChannelId ? (this.channels.get(existing.channelId)?.name ?? '') : '', existing.channelId === this.ownChannelId);
           }
           this.clients.delete(clientId);
           this.emitState();
@@ -545,26 +575,29 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   /** Join/leave/move feed row built from a known user. */
-  private pushFeed(user: UserState, event: 'join' | 'leave' | 'move', detail: string): void {
+  private pushFeed(user: UserState, event: 'join' | 'leave' | 'move', detail: string, own = false): void {
     if (user.isQuery || !user.nickname) return;
-    this.pushChat({ userId: user.id, nickname: user.nickname, text: user.nickname, kind: 'system', event, detail });
+    this.pushChat({ userId: user.id, nickname: user.nickname, text: user.nickname, kind: 'system', event, detail, own });
   }
 
   private pushChat(msg: Omit<ChatMessage, 'id' | 'at'>): void {
     const now = Date.now();
-    const last = this.chat[this.chat.length - 1];
-    // Own-message echo arrives twice (second copy loses the target mode) —
-    // merge instead of showing a twin.
-    if (last && !last.event && !msg.event && last.text === msg.text && last.userId === msg.userId && now - last.at < 3000) {
-      const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
-      const kind = (rank[msg.kind] ?? 0) > (rank[last.kind] ?? 0) ? msg.kind : last.kind;
-      const nickname = last.nickname && last.nickname !== '?' ? last.nickname : msg.nickname;
-      this.chat[this.chat.length - 1] = { ...last, kind, nickname };
-      this.emitState();
-      return;
+    // Duplicates arrive twice (own-echo loses the target mode, resync diffs
+    // race the original event) — scan the recent tail, not just the last row.
+    for (let i = this.chat.length - 1; i >= 0 && i >= this.chat.length - 12; i--) {
+      const prev = this.chat[i]!;
+      if (now - prev.at > 5000) break;
+      if (prev.text === msg.text && prev.userId === msg.userId && (prev.event ?? '') === (msg.event ?? '') && (prev.detail ?? '') === (msg.detail ?? '')) {
+        const rank: Record<string, number> = { private: 3, server: 2, channel: 1 };
+        const kind = (rank[msg.kind] ?? 0) > (rank[prev.kind] ?? 0) ? msg.kind : prev.kind;
+        const nickname = prev.nickname && prev.nickname !== '?' ? prev.nickname : msg.nickname;
+        this.chat[i] = { ...prev, kind, nickname, own: prev.own ?? msg.own };
+        this.emitState();
+        return;
+      }
     }
     this.chat.push({ ...msg, id: `c${++this.chatSeq}`, at: now });
-    if (this.chat.length > 20) this.chat = this.chat.slice(-20);
+    if (this.chat.length > 60) this.chat = this.chat.slice(-60);
     this.emitState();
   }
 
@@ -618,6 +651,7 @@ export class Ts6Connector extends EventEmitter implements Connector {
   }
 
   private parseConnection(conn: JObj): void {
+    const prevClients = new Map(this.clients);
     this.channels.clear();
     this.clients.clear();
     this.connectionId = jInt(conn, 'id');
@@ -627,6 +661,7 @@ export class Ts6Connector extends EventEmitter implements Connector {
     const channelInfos = asObj(conn['channelInfos']);
     if (channelInfos) this.parseChannelInfos(channelInfos);
     this.ingestGroupInfos(conn);
+    // (diff-announced after the client list is built — see below)
 
     for (const raw of jArr(conn, 'clientInfos')) {
       const info = asObj(raw);
@@ -655,6 +690,21 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
     const me = this.clients.get(this.ownClientId);
     this.ownChannelId = me?.channelId ?? 0;
+
+    // Diff against the previous snapshot: join/leave events can be missed
+    // (e.g. a join payload without a nickname) — announce what changed.
+    if (this.announcedOnce) {
+      for (const [id, u] of this.clients) {
+        if (prevClients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
+        this.pushFeed(u, 'join', u.channelId === this.ownChannelId ? (this.channels.get(u.channelId)?.name ?? '') : '', u.channelId === this.ownChannelId);
+      }
+      for (const [id, u] of prevClients) {
+        if (this.clients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
+        this.pushFeed(u, 'leave', u.channelId === this.ownChannelId ? (this.channels.get(u.channelId)?.name ?? '') : '', u.channelId === this.ownChannelId);
+      }
+    } else {
+      this.announcedOnce = true;
+    }
   }
 
   /**
@@ -662,6 +712,9 @@ export class Ts6Connector extends EventEmitter implements Connector {
    * (serverGroups as objects, serverGroupInfos arrays etc.). Best-effort —
    * most builds expose only an id list per client.
    */
+  private announcedOnce = false;
+  private noisyDiagSkipped = 0;
+
   private ingestGroupInfos(source: JObj): void {
     for (const [key, value] of Object.entries(source)) {
       if (!/group/i.test(key) || !Array.isArray(value)) continue;

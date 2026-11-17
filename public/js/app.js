@@ -254,6 +254,7 @@
     $('panel').style.display = empty && a.hideEmpty && state.status === 'live' ? 'none' : '';
 
     renderChat();
+    renderEvents();
 
     // connection tab
     const pill = $('statusPill');
@@ -265,6 +266,124 @@
   /* ---------------- chat toasts ---------------- */
 
   const chatRows = new Map(); // id -> { el, timer }
+
+  /* ---------------- events feed (recent server events) ---------------- */
+
+  // Persistent «Последние события» block (v1.3.0): independent from the chat
+  // toasts, filterable per event kind, expires after eventsDelay seconds.
+  const evSeen = new Set();
+  let evTickTimer = 0;
+
+  function evText(m) {
+    const clean = cleanChat;
+    const name = clean(m.nickname || m.text || '…');
+    const detail = clean(m.detail || '');
+    if (m.event === 'join') return detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
+    if (m.event === 'leave') return detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
+    if (m.event === 'move') return t('evMove').replace('{n}', name).replace('{c}', detail || '…');
+    if (m.event === 'group') {
+      return t(m.text === 'server' ? 'evGroupServer' : 'evGroupChannel')
+        .replace('{n}', name)
+        .replace('{g}', detail || '…');
+    }
+    return '';
+  }
+
+  function renderEvents() {
+    const a = Settings.appearance;
+    const feed = $('eventsFeed');
+    if (!feed) return;
+    const list = $('eventsList');
+    const show = a.showEvents;
+    feed.hidden = !show;
+    if (!show || !state) {
+      if (list) list.textContent = '';
+      return;
+    }
+    const allow = (kind) =>
+      (kind === 'join' && a.showEvJoin) ||
+      (kind === 'leave' && a.showEvLeave) ||
+      (kind === 'move' && a.showEvMove) ||
+      (kind === 'poke' && a.showEvPoke) ||
+      (kind === 'chat' && a.showEvChat) ||
+      (kind === 'group' && a.showEvGroup) ||
+      (kind === 'sys' && a.showEvSys);
+    const delayMs = Math.max(5, Number(a.eventsDelay) || 20) * 1000;
+    const maxRows = Math.min(10, Math.max(1, Number(a.eventsCount) || 5));
+    const now = Date.now();
+
+    // Collect: structured system events + server-chat system lines + chat.
+    const items = [];
+    for (const m of state.chat || []) {
+      let kind = '';
+      if (m.kind === 'system' && (m.event === 'join' || m.event === 'leave' || m.event === 'move' || m.event === 'group')) kind = m.event;
+      else if (m.kind === 'poke') kind = 'poke';
+      else if (m.kind === 'server') kind = 'sys'; // localized system lines from the client (TS6 server chat)
+      else if (m.kind !== 'system') kind = 'chat';
+      if (!kind || !allow(kind)) continue;
+      if (kind === 'chat' && m.kind === 'private' && !a.chatPrivate) continue;
+      // Per-type scope: «Мой канал» vs «Весь сервер» (v1.3.2). Channel/private
+      // chats and pokes count as own-channel; server lines and remote events
+      // carry their own `own` flag from the connectors.
+      const scopeKey = {
+        join: 'evScopeJoin', leave: 'evScopeLeave', move: 'evScopeMove',
+        group: 'evScopeGroup', sys: 'evScopeSys', chat: 'evScopeChat',
+      }[kind];
+      const ownFlag = m.own ?? (m.kind === 'channel' || m.kind === 'private' || m.kind === 'poke');
+      if (scopeKey && a[scopeKey] === 'own' && !ownFlag) continue;
+      if (now - (m.at || 0) > delayMs) continue;
+      const text = kind === 'sys'
+        ? cleanChat(m.text)
+        : kind === 'chat' || kind === 'poke'
+          ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
+          : evText(m);
+      if (!text) continue;
+      items.push({ id: m.id || `${kind}-${m.at}`, kind, text, at: m.at || now });
+    }
+    items.sort((x, y) => y.at - x.at);
+    const shown = items.slice(0, maxRows);
+
+    // Keyed diff — existing rows are NEVER moved (moving a node restarts its
+    // CSS animation, which made the block jitter on every state render).
+    const want = new Set(shown.map((i) => i.id));
+    for (const el of [...list.children]) {
+      if (!want.has(el.dataset.evId)) el.remove();
+    }
+    const have = new Set([...list.children].map((el) => el.dataset.evId));
+    for (const item of shown) {
+      if (have.has(item.id)) continue;
+      const el = document.createElement('div');
+      el.className = `event-row ${item.kind === 'sys' ? 'ev-sys' : item.kind === 'group' ? 'ev-group' : 'ev-' + item.kind}`;
+      el.dataset.evId = item.id;
+      const tag = document.createElement('span');
+      tag.className = 'ev-tag';
+      tag.textContent = t(
+        item.kind === 'chat' ? 'evTagChat'
+          : item.kind === 'join' ? 'evTagJoin'
+            : item.kind === 'leave' ? 'evTagLeave'
+              : item.kind === 'move' ? 'evTagMove'
+                : item.kind === 'group' ? 'evTagGroup'
+                  : item.kind === 'sys' ? 'evTagSys'
+                    : 'evTagPoke',
+      );
+      const txt = document.createElement('span');
+      txt.textContent = item.text;
+      el.appendChild(tag);
+      el.appendChild(txt);
+      // Newest first, inserted by timestamp — existing rows are never moved.
+      el.dataset.evAt = String(item.at);
+      const ref = [...list.children].find((c) => Number(c.dataset.evAt || 0) < item.at);
+      if (ref) list.insertBefore(el, ref);
+      else list.appendChild(el);
+    }
+    // Expiry tick: re-render as rows age out (cheap, coalesced).
+    if (!evTickTimer && list.children.length) {
+      evTickTimer = setTimeout(() => {
+        evTickTimer = 0;
+        renderEvents();
+      }, 2500);
+    }
+  }
 
   /* ---------------- unread-message badge ---------------- */
 
@@ -296,6 +415,7 @@
   function clearUnread() {
     // "Read" is explicit only: the badge never fades on its own, it clears
     // when the user clicks it.
+    if (!Settings.appearance.showUnreadBadge) return;
     unreadCount = 0;
     const el = $('chatUnread');
     if (el) el.hidden = true;
@@ -322,6 +442,10 @@
       unreadCount += 1;
     }
     if (unreadCount <= 0) return;
+    if (!Settings.appearance.showUnreadBadge) {
+      el.hidden = true;
+      return;
+    }
     el.hidden = false;
     el.title = t('unreadTitle');
     $('chatUnreadCount').textContent = unreadCount > 99 ? '99+' : String(unreadCount);
@@ -430,9 +554,18 @@
     }, 400);
   }
 
+  function syncSourceCards() {
+    const sel = $('sourceSelect');
+    if (!sel) return;
+    document.querySelectorAll('#sourceCards .source-card').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.source === sel.value);
+    });
+  }
+
   function fillConnectionTab() {
     if (!config) return;
     $('sourceSelect').value = config.source;
+    syncSourceCards();
     $('ts3Host').value = config.ts3.host;
     $('ts3Port').value = config.ts3.port;
     $('ts3ApiKey').value = config.ts3.apiKey;
@@ -477,6 +610,17 @@
     ['ts6Host', 'ts6Port', 'ts6ApiKey'].forEach((id) => {
       $(id).addEventListener('change', () => putConfig(ts6Patch()));
     });
+
+    // v1.3.0: big source cards drive the hidden select
+    document.querySelectorAll('#sourceCards .source-card').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sel = $('sourceSelect');
+        sel.value = btn.dataset.source;
+        sel.dispatchEvent(new Event('change'));
+      });
+    });
+    $('sourceSelect').addEventListener('change', syncSourceCards);
+    syncSourceCards();
 
     $('reconnectBtn').addEventListener('click', () => {
       fetch('/api/reconnect', { method: 'POST' }).catch(() => {});
@@ -539,6 +683,46 @@
 
     $('restartNowBtn').addEventListener('click', () => {
       fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
+    });
+
+    // «Диагностика»: build the TS3/TS6 capture report and let the user copy it.
+    $('diagBtn').addEventListener('click', async () => {
+      const out = $('diagOut');
+      out.hidden = false;
+      out.value = '…';
+      try {
+        const res = await fetch('/api/diagnostics');
+        out.value = await res.text();
+      } catch {
+        out.value = t('updError');
+      }
+      out.scrollTop = out.scrollHeight;
+    });
+    $('diagCopyBtn').addEventListener('click', async () => {
+      const out = $('diagOut');
+      if (!out.value) {
+        out.hidden = false;
+        out.value = '…';
+        try {
+          out.value = await (await fetch('/api/diagnostics')).text();
+        } catch {
+          out.value = t('updError');
+        }
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(out.value);
+        ok = true;
+      } catch {
+        out.hidden = false;
+        out.select?.();
+        ok = false;
+      }
+      const btn = $('diagCopyBtn');
+      btn.textContent = ok ? '✓' : '!';
+      setTimeout(() => {
+        btn.textContent = t('diagCopyBtn');
+      }, 1500);
     });
 
     // Save/cancel of the dragged position live ON the overlay itself — the
@@ -606,6 +790,9 @@
           fillConnectionTab();
           syncFeatures();
         }
+        // Appearance flags (events feed, unread badge, elements) take effect
+        // immediately — one rAF-coalesced re-render.
+        scheduleRender();
       } else if (msg.type === 'move-mode') {
         const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
         if (want) enterMoveMode();
@@ -750,12 +937,15 @@
         const dy = ev.clientY - startY;
         const corner = document.body.dataset.corner || 'tr';
         const rightSide = corner === 'tr' || corner === 'br';
+        const bottomSide = corner === 'bl' || corner === 'br';
         // The panel bumps into the screen edges and never leaves them — the
         // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
         const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
         const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
         curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
-        curY = Math.min(maxY, Math.max(0, baseY + dy));
+        // Bottom-anchored corners measure the margin from the bottom edge —
+        // dragging down must shrink it (the panel follows the mouse).
+        curY = Math.min(maxY, Math.max(0, baseY + (bottomSide ? -dy : dy)));
         document.documentElement.style.setProperty('--margin-x', `${curX}px`);
         document.documentElement.style.setProperty('--margin-y', `${curY}px`);
       };

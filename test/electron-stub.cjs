@@ -85,6 +85,7 @@ const electron = {
   app: {
     isPackaged: !!process.env.TSN_APP_PATH,
     getLocale: () => 'en-US',
+    getVersion: () => process.env.TSN_STUB_VERSION || '1.0.0',
     getAppPath: () => APP_PATH,
     getPath: (name) => path.join(os.tmpdir(), 'tsn-stub', name),
     setAppUserModelId: noop,

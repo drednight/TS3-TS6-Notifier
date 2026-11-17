@@ -37,6 +37,23 @@
     showChat: true,
     chatDelay: 8,
     chatPrivate: true,
+    showUnreadBadge: true,
+    showEvents: true,
+    showEvJoin: true,
+    showEvLeave: true,
+    showEvMove: true,
+    showEvPoke: true,
+    showEvChat: true,
+    showEvGroup: true,
+    showEvSys: true,
+    evScopeJoin: 'all',
+    evScopeLeave: 'all',
+    evScopeMove: 'all',
+    evScopeGroup: 'all',
+    evScopeSys: 'all',
+    evScopeChat: 'all',
+    eventsCount: 5,
+    eventsDelay: 20,
   };
 
   const THEME_ACCENTS = {
@@ -55,6 +72,12 @@
     corner: ['tl', 'tr', 'bl', 'br'],
     language: ['auto', 'ru', 'en'],
     eqStyle: ['bars', 'ring', 'dots', 'none'],
+    evScopeJoin: ['all', 'own'],
+    evScopeLeave: ['all', 'own'],
+    evScopeMove: ['all', 'own'],
+    evScopeGroup: ['all', 'own'],
+    evScopeSys: ['all', 'own'],
+    evScopeChat: ['all', 'own'],
   };
 
   const NUM_RANGES = {
@@ -67,12 +90,16 @@
     marginX: [0, 20000],
     marginY: [0, 20000],
     chatDelay: [2, 60],
+    eventsCount: [1, 10],
+    eventsDelay: [5, 60],
   };
 
   const BOOLS = [
     'showHeader', 'showServerName', 'showUserCount', 'showBanner', 'showAvatars',
     'showBadges', 'showSelf', 'hideQuery', 'animations', 'talkingFirst',
     'onlyTalking', 'compact', 'hideEmpty', 'showWhispers', 'showChat', 'chatPrivate',
+    'showUnreadBadge', 'showEvents', 'showEvJoin', 'showEvLeave', 'showEvMove',
+    'showEvPoke', 'showEvChat', 'showEvGroup', 'showEvSys',
   ];
 
   let local = {};
@@ -241,7 +268,8 @@
 
   function fmt(key, value) {
     if (key === 'opacity' || key === 'glow' || key === 'scale') return `${Math.round(value * 100)}%`;
-    if (key === 'chatDelay') return `${value} s`;
+    if (key === 'chatDelay' || key === 'eventsDelay') return `${value} s`;
+    if (key === 'eventsCount') return `${value}`;
     return `${value}px`;
   }
 
@@ -352,6 +380,11 @@
       btn.classList.toggle('active', btn.dataset.value === a.corner);
     });
 
+    document.querySelectorAll('[data-enum]').forEach((sel) => {
+      const key = sel.getAttribute('data-enum');
+      if (key in a) sel.value = a[key];
+    });
+
     const langSel = document.getElementById('languageSelect');
     if (langSel) langSel.value = a.language;
     const eqSel = document.getElementById('eqStyleSelect');
@@ -395,6 +428,10 @@
 
     document.querySelectorAll('#cornerGrid button').forEach((btn) => {
       btn.addEventListener('click', () => set('corner', btn.dataset.value));
+    });
+
+    document.querySelectorAll('[data-enum]').forEach((sel) => {
+      sel.addEventListener('change', () => set(sel.getAttribute('data-enum'), sel.value));
     });
 
     const langSel = document.getElementById('languageSelect');
