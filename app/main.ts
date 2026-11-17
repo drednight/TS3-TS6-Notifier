@@ -12,7 +12,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  globalShortcut,
   Menu,
   nativeImage,
   Notification,
@@ -60,7 +59,6 @@ function verifyAssets(): void {
 let handle: AppHandle | null = null;
 let overlayWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
-let boardWin: BrowserWindow | null = null;
 const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
 let screenHooksInstalled = false;
@@ -228,10 +226,6 @@ function settingsUrl(): string {
   return `http://127.0.0.1:${handle?.port() ?? 0}/?open=settings&bare=1`;
 }
 
-function boardUrl(): string {
-  return `http://127.0.0.1:${handle?.port() ?? 0}/board.html`;
-}
-
 function targetDisplay(): Electron.Display {
   const want = handle?.store.get().desktop.display ?? 'primary';
   if (want && want !== 'primary') {
@@ -261,7 +255,7 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
     log(`[${tag}] did-fail-load code=${code} ${desc} url=${url}`);
     setTimeout(() => {
       if (!win.isDestroyed()) {
-        win.loadURL(tag === 'overlay' ? overlayUrl() : tag === 'board' ? boardUrl() : settingsUrl());
+        win.loadURL(tag === 'overlay' ? overlayUrl() : settingsUrl());
       }
     }, 1200);
   });
@@ -273,7 +267,7 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
       if (target.origin === new URL(settingsUrl()).origin) {
         const name = frameName || 'tsn-child';
         // Reuse the app's own single-instance windows when possible.
-        const managed = name === 'tsn-board' ? boardWin : name === 'tsn-settings' ? settingsWin : null;
+        const managed = name === 'tsn-settings' ? settingsWin : null;
         const existing = managed && !managed.isDestroyed() ? managed : childWindows.get(name);
         if (existing && !existing.isDestroyed()) {
           if (managed === settingsWin) void existing.loadURL(target.toString());
@@ -281,8 +275,8 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
           return { action: 'deny' };
         }
         const child = new BrowserWindow({
-          width: name === 'tsn-board' ? 540 : 430,
-          height: name === 'tsn-board' ? 560 : 820,
+          width: 430,
+          height: 820,
           autoHideMenuBar: true,
           title: 'TS3-TS6 Notifier',
           webPreferences: {
@@ -295,7 +289,7 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
         });
         childWindows.set(name, child);
         child.on('closed', () => childWindows.delete(name));
-        watchWebContents(child, name === 'tsn-board' ? 'board' : 'settings');
+        watchWebContents(child, 'settings');
         void child.loadURL(target.toString());
         return { action: 'deny' };
       }
@@ -394,40 +388,6 @@ function openSettings(): void {
   log('[app] settings window opened');
 }
 
-/* ---------------- soundboard window ---------------- */
-
-function openBoard(): void {
-  if (boardWin && !boardWin.isDestroyed()) {
-    boardWin.show();
-    boardWin.focus();
-    return;
-  }
-  boardWin = new BrowserWindow({
-    width: 520,
-    height: 440,
-    minWidth: 340,
-    minHeight: 260,
-    autoHideMenuBar: true,
-    icon: nativeImage.createFromPath(join(ICONS_DIR, 'icon.png')),
-    title: 'TS3-TS6 Notifier — Soundboard',
-    alwaysOnTop: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      spellcheck: false,
-      devTools: !IS_PACKAGED,
-    },
-  });
-  boardWin.setMenuBarVisibility(false);
-  watchWebContents(boardWin, 'board');
-  boardWin.loadURL(boardUrl());
-  boardWin.on('closed', () => {
-    boardWin = null;
-  });
-  log('[app] soundboard window opened');
-}
-
 /* ---------------- tray ---------------- */
 
 /**
@@ -503,34 +463,6 @@ function applyAutostart(): void {
     });
   } catch (err) {
     log('[app] autostart error: ' + err);
-  }
-}
-
-/* ---------------- soundboard hotkeys ---------------- */
-
-/**
- * Soundboard + sound settings are parked (hidden in the UI) for now at the
- * user's request — flip this to false together with unhiding the Sound tab
- * in public/index.html to bring the feature back.
- */
-const SOUNDS_UI_HIDDEN = true;
-
-function registerSoundHotkeys(): void {
-  if (!handle || SOUNDS_UI_HIDDEN) return;
-  try {
-    globalShortcut.unregisterAll();
-    const { items, enabled, hotkeysEnabled } = handle.store.get().sounds;
-    if (!enabled || !hotkeysEnabled) return;
-    for (const item of items) {
-      if (!item.hotkey) continue;
-      const ok = globalShortcut.register(item.hotkey, () => {
-        log(`[app] sound hotkey ${item.hotkey} → ${item.name}`);
-        handle?.broadcast({ type: 'sound', id: item.id });
-      });
-      if (!ok) log(`[app] hotkey ${item.hotkey} unavailable`);
-    }
-  } catch (err) {
-    log(`[app] hotkey registration error: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -617,15 +549,6 @@ function buildTrayMenu(): void {
       label: tr('copyUrl'),
       click: () => copyOverlayUrl(),
     },
-    // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
-    ...(SOUNDS_UI_HIDDEN
-      ? []
-      : [
-          {
-            label: 'Soundboard',
-            click: () => openBoard(),
-          } as Electron.MenuItemConstructorOptions,
-        ]),
     { type: 'separator' },
     {
       label: tr('dataSource'),
@@ -756,7 +679,6 @@ async function boot(): Promise<void> {
         const windows = new Map<number, string>([
           [pidOf(overlayWin), 'окно «Оверлей»'],
           [pidOf(settingsWin), 'окно «Настройки»'],
-          [pidOf(boardWin), 'окно «Саундборд»'],
         ]);
         const RU: Record<string, string> = {
           Browser: 'браузер (Chromium)',
@@ -795,7 +717,6 @@ async function boot(): Promise<void> {
   applyOverlayWindow();
   applyAutostart();
   setupAutoUpdate();
-  registerSoundHotkeys();
   // One guarded listener: heavy shell work only when its own slice changed.
   // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
   let lastFitSig = '';
@@ -820,8 +741,7 @@ async function boot(): Promise<void> {
       buildTrayMenu();
     }
     applyOverlayWindow();
-    registerSoundHotkeys();
-  });
+    });
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });
@@ -848,11 +768,6 @@ if (gotLock) {
 
   app.on('before-quit', () => {
     log('=== shutting down ===');
-    try {
-      globalShortcut.unregisterAll();
-    } catch {
-      /* ignore */
-    }
     handle?.close();
   });
 }

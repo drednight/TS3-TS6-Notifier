@@ -455,35 +455,14 @@ try {
     check('settings: server config applies instantly over stale cache', followX === '500px', followX);
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
-    check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
-    // the whole sound feature is parked: tab button and panel are hidden
-    const soundTabBtn = doc.querySelector('.tab[data-tab="sound"]');
-    const soundPanel = doc.querySelector('[data-panel="sound"]');
-    check('settings: sound tab hidden (feature parked)', soundTabBtn?.hidden === true && soundPanel?.hidden === true);
+    check('settings: sound feature fully removed', !doc.querySelector('.tab[data-tab="sound"]') && !doc.getElementById('soundItems') && !doc.getElementById('openBoardBtn'));
     check('settings: server groups in a collapsed block at the bottom', !!doc.getElementById('ts6GroupsBlock') && doc.getElementById('ts6GroupsBlock').open === false);
     // v1.1.9: chat polish + desktop toggles
     check('settings: header close X removed', !doc.getElementById('closeDrawer'));
     check('settings: run-as-admin toggle present', !!doc.getElementById('elevateToggle'));
     check('overlay: unread-message badge present', !!doc.getElementById('chatUnread') && !!doc.getElementById('chatUnreadCount'));
-    check('settings: adding sounds lives in the board menu only', !doc.getElementById('soundUploadBtn') && !doc.getElementById('addPresetsBtn'));
-    check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
-
-    // v1.1.1: dual output + hotkey toggle + visible hotkeys + range fill
-    check('settings: dual sound targets (мне/в канал)', !!doc.getElementById('localEnabled') && !!doc.getElementById('audioOutputLocal') && !!doc.getElementById('localVolume') && !!doc.getElementById('soundsEnabled'));
-    check('settings: hotkeys enable toggle', !!doc.getElementById('hotkeysEnabled'));
-    const rangeFill = doc.getElementById('localVolume')?.style.getPropertyValue('--fill');
+    const rangeFill = doc.querySelector('[data-slider="chatDelay"] input[type="range"]')?.style.getPropertyValue('--fill');
     check('settings: range fill painted (not stuck at 50%)', !!rangeFill && rangeFill !== '50%', `fill=${rangeFill}`);
-    // hotkey visible in the sound list
-    dom.window.TSN.config = {
-      ...fakeConfig,
-      sounds: { enabled: true, volume: 0.8, outputDevice: '', hotkeysEnabled: true, localEnabled: true, localVolume: 0.8, localDevice: '', items: [{ id: 's1', name: 'Монета', file: '/presets/coin.wav', hotkey: 'Ctrl+Alt+1', volume: 1 }] },
-    };
-    doc.dispatchEvent(new dom.window.CustomEvent('tsn:config'));
-    await new Promise((r) => setTimeout(r, 60));
-    const cap = doc.querySelector('.sound-row .hotkey-cap');
-    check('settings: sound row shows assigned hotkey', cap?.textContent.includes('Ctrl+Alt+1'), cap?.textContent);
-    check('settings: hotkey can be cleared', !!doc.querySelector('.sound-row .hotkey-clear'));
-    check('settings: sound item editor (group/trim)', !!doc.querySelector('.sound-item .sound-details') && !!doc.querySelector('.sound-item .d-group') && !!doc.querySelector('.sound-item .d-start') && !!doc.querySelector('.sound-item .d-end'));
 
     // TS6 group → class mapping UI
     check('settings: TS6 group map present', !!doc.getElementById('ts6GroupMap'));
@@ -505,22 +484,6 @@ try {
     dom.window.close();
   }
 
-  /* ---- 4. soundboard panel page ---- */
-  {
-    const { dom, errors } = await bootPage(`${BASE}/board.html`);
-    const doc = dom.window.document;
-    check('board: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
-    check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('menuStop') && !!doc.getElementById('boardGear'));
-    check('board: top menu present (add/delete/stop/hotkeys/audio)', !!doc.getElementById('menuAdd') && !!doc.getElementById('menuDelete') && !!doc.getElementById('menuStop') && !!doc.getElementById('menuHotkeys') && !!doc.getElementById('menuAudio'));
-    check('board: audio popover with dual outputs', !!doc.getElementById('audioPop') && !!doc.getElementById('popLocalVol') && !!doc.getElementById('popChannelVol') && !!doc.getElementById('popLocalEnabled') && !!doc.getElementById('popChannelEnabled'));
-    check('board: edit popover (group/trim/volume)', !!doc.getElementById('boardEdit') && !!doc.getElementById('editGroup') && !!doc.getElementById('editStart') && !!doc.getElementById('editEnd') && !!doc.getElementById('editVol'));
-    check('board: hotkey assignment in the edit popover', !!doc.getElementById('editKey') && !!doc.getElementById('editKeySet') && !!doc.getElementById('editKeyClear'));
-    check('board: presets removed everywhere', !doc.getElementById('menuPresets') && !doc.getElementById('addPresetsBtn'));
-    check('board: audio popover close button', !!doc.getElementById('popClose'));
-    check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
-    check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
-    dom.window.close();
-  }
   /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
   {
     const h2 = await startServer({

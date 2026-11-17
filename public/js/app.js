@@ -873,10 +873,6 @@
         }
         const restart = $('restartNowBtn');
         if (restart) restart.hidden = msg.status !== 'downloaded';
-      } else if (msg.type === 'sound') {
-        // Only the overlay page (clean mode) plays hotkey triggers —
-        // otherwise open windows would double-play.
-        if (Settings.clean) window.TSN?.Soundboard?.playById(msg.id);
       }
     };
 

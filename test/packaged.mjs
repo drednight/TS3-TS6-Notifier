@@ -59,7 +59,7 @@ await mkdir(join(PKG, 'appdata'), { recursive: true });
   const featSrc = await fs.readFile(new URL('../public/js/features.js', import.meta.url), 'utf8');
   check('packaged: diagnostics timestamps are local time', /toTimeString/.test(modelSrc) && /toTimeString/.test(appSrc) && !/toISOString\(\)\.slice\(11, 19\)/.test(modelSrc));
   check('packaged: memory report names windows in plain Russian', /окно «Оверлей»/.test(mainSrc) && /главный процесс/.test(appSrc));
-  check('packaged: no device probes while the sounds UI is hidden', /soundsUiVisible/.test(featSrc));
+  check('packaged: sound feature fully removed from the client bundle', !/soundsUiVisible|Soundboard|AudioContext/.test(featSrc));
 }
   check('packaged: overlay window crops to the panel', /--crop-x/.test(css) && /api\/overlay\/bounds/.test(appJs));
 }
