@@ -199,6 +199,20 @@ check('ts3: chat message captured', (() => {
 })(), JSON.stringify(last3b?.chat));
 check('ts3: whisper detected from targetmode', last3b?.users.find((u) => u.nickname === 'Борис')?.whispering === true);
 
+/* v1.4.12: a whisper from ANOTHER channel must still be reported (clid 3 sits
+ * in cid 11 while we are in cid 10) — otherwise the overlay shows nothing. */
+globalThis.ts3LastSocket?.write('notifytalkstatuschange targetmode=2 status=1 clid=3 schandlerid=1\n');
+await new Promise((r) => setTimeout(r, 400));
+{
+  const w = ts3States[ts3States.length - 1]?.whisperers || [];
+  check('ts3: whisper from another channel surfaced', w.some((u) => u.nickname === 'Other' && u.whispering === true), JSON.stringify(w.map((u) => u.nickname)));
+  check('ts3: outside whisperer carries its channel', w.find((u) => u.nickname === 'Other')?.whisperChannel === 'AFK', JSON.stringify(w.find((u) => u.nickname === 'Other')));
+  check('ts3: outside whisperer is not in the roster', !(ts3States[ts3States.length - 1]?.users || []).some((u) => u.nickname === 'Other'));
+}
+globalThis.ts3LastSocket?.write('notifytalkstatuschange targetmode=2 status=0 clid=3 schandlerid=1\n');
+await new Promise((r) => setTimeout(r, 1600));
+check('ts3: finished whisper expires', !(ts3States[ts3States.length - 1]?.whisperers || []).some((u) => u.nickname === 'Other'), JSON.stringify((ts3States[ts3States.length - 1]?.whisperers || []).map((u) => u.nickname)));
+
 /* duplicate delivery (own-message echo) must collapse into one entry */
 globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
 globalThis.ts3LastSocket?.write('notifytextmessage targetmode=3 msg=dup\\stest schandlerid=1 invokerid=3 invokername=Vasya\n');
@@ -307,6 +321,27 @@ await new Promise((r) => setTimeout(r, 250));
   const rows = ts6States[ts6States.length - 1]?.chat || [];
   check('ts6: own move announced too', rows.some((x) => x.event === 'move' && x.nickname === 'Me' && x.detail === 'AFK' && x.own === true), JSON.stringify(rows.filter((x) => x.event === 'move')));
 }
+
+/* v1.4.12: TS6 really sends «isWhisper» (the old check only knew «whisper» /
+ * targetMode, so whispers never registered) — and a whisper may come from
+ * another channel entirely, where the roster never sees the speaker. */
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'talkStatusChanged', payload: { connectionId: 7, clientId: 100, isWhisper: true, status: 1 } }));
+await new Promise((r) => setTimeout(r, 350));
+{
+  const w = ts6States[ts6States.length - 1]?.whisperers || [];
+  check('ts6: isWhisper flag surfaces an outside whisperer', w.some((u) => u.nickname === 'Ruslan2' && u.whispering === true), JSON.stringify(w.map((u) => u.nickname)));
+  check('ts6: outside whisperer carries its channel', w.find((u) => u.nickname === 'Ruslan2')?.whisperChannel === 'General', JSON.stringify(w.find((u) => u.nickname === 'Ruslan2')));
+  check('ts6: outside whisperer is not in the roster', !(ts6States[ts6States.length - 1]?.users || []).some((u) => u.nickname === 'Ruslan2'));
+  check('ts6: own whisper is not reported as incoming', !w.some((u) => u.id === '1'));
+}
+/* plain talking (no whisper) must not show up in the whisper section */
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'talkStatusChanged', payload: { connectionId: 7, clientId: 101, isWhisper: false, status: 1 } }));
+await new Promise((r) => setTimeout(r, 300));
+check('ts6: plain talking is not a whisper', !(ts6States[ts6States.length - 1]?.whisperers || []).some((u) => u.nickname === 'Elena'), JSON.stringify((ts6States[ts6States.length - 1]?.whisperers || []).map((u) => u.nickname)));
+/* whisper finished → the row disappears */
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'talkStatusChanged', payload: { connectionId: 7, clientId: 100, isWhisper: true, status: 0 } }));
+await new Promise((r) => setTimeout(r, 1600));
+check('ts6: finished whisper expires', !(ts6States[ts6States.length - 1]?.whisperers || []).some((u) => u.nickname === 'Ruslan2'), JSON.stringify((ts6States[ts6States.length - 1]?.whisperers || []).map((u) => u.nickname)));
 /* snapshot diff announces moves the event stream missed */
 {
   globalThis.ts6Sock?.send(JSON.stringify({ type: 'channelCreated', payload: { connectionId: 7, channelId: 88, properties: { name: 'DiffLab' } } }));
@@ -357,10 +392,25 @@ await new Promise((r) => setTimeout(r, 250));
   check('plugin: duplicate join deduped', rows.filter((m) => m.event === 'join' && m.nickname === 'Новенький').length === 1);
 }
 
+/* v1.4.12: whisper («w») — including speakers from another channel (clid 3
+ * sits in cid 11 while we are in cid 10). */
+sendLine({ e: 'talk', clid: 3, s: 1, w: 1, schid: 1 });
+await new Promise((r) => setTimeout(r, 300));
+{
+  const w = pStates.at(-1)?.whisperers || [];
+  check('plugin: whisper from another channel surfaced', w.some((u) => u.nickname === 'Дальний' && u.whispering === true), JSON.stringify(w.map((u) => u.nickname)));
+  check('plugin: outside whisperer carries its channel', w.find((u) => u.nickname === 'Дальний')?.whisperChannel === 'Другая', JSON.stringify(w.find((u) => u.nickname === 'Дальний')));
+}
+sendLine({ e: 'talk', clid: 4, s: 1, w: 0, schid: 1 });
+await new Promise((r) => setTimeout(r, 250));
+check('plugin: plain talking is not a whisper', !(pStates.at(-1)?.whisperers || []).some((u) => u.nickname === 'Новенький'), JSON.stringify((pStates.at(-1)?.whisperers || []).map((u) => u.nickname)));
+sendLine({ e: 'talk', clid: 3, s: 0, w: 0, schid: 1 });
+await new Promise((r) => setTimeout(r, 1600));
+check('plugin: finished whisper expires', !(pStates.at(-1)?.whisperers || []).some((u) => u.nickname === 'Дальний'), JSON.stringify((pStates.at(-1)?.whisperers || []).map((u) => u.nickname)));
+
 sendLine({ e: 'move', clid: 3, from: 11, to: 10, name: 'Дальний', groups: '', cname: 'Лобби' });
 sendLine({ e: 'chat', kind: 'server', clid: 2, name: 'Гость', text: 'Welcome' });
 sendLine({ e: 'talk', clid: 2, s: 1 });
-sendLine({ e: 'talk', clid: 2, s: 1, w: 1 });
 sendLine({ e: 'client', clid: 2, name: 'Гость', groups: '6,12' });
 sendLine({ e: 'poke', clid: 3, name: 'Дальний', text: 'привет' });
 await new Promise((r) => setTimeout(r, 250));
@@ -372,13 +422,6 @@ await new Promise((r) => setTimeout(r, 250));
   check('plugin: poke row', rows.some((m) => m.kind === 'poke' && m.text === 'привет'));
   check('plugin: group-change row', rows.some((m) => m.event === 'group' && m.userId === '2'));
   check('plugin: talk state updates', users.some((u) => u.id === '2' && u.talking === true));
-  check('plugin: whisper flag "w" sets whispering (v2 plugin)', users.some((u) => u.id === '2' && u.whispering === true && u.talking === true), JSON.stringify(users));
-}
-sendLine({ e: 'talk', clid: 2, s: 0, w: 0 });
-await new Promise((r) => setTimeout(r, 150));
-{
-  const users = pStates.at(-1)?.users || [];
-  check('plugin: talk stop clears talking and whisper', users.some((u) => u.id === '2' && u.talking === false && u.whispering === false), JSON.stringify(users));
 }
 
 // The plugin must take over from the ClientQuery fallback while it is alive.

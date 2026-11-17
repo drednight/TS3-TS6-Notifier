@@ -185,7 +185,8 @@ input[type="color"] {
 
 #panel {
   position: absolute;
-  width: 292px;
+  width: var(--panel-w, 292px);
+  max-height: var(--panel-max-h, none);
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
@@ -198,7 +199,14 @@ input[type="color"] {
   overflow: hidden;
   pointer-events: auto;
   transition: border-radius 0.25s ease;
+  /* v1.4.11: a capped panel is a flex column — only the roster shrinks and
+     scrolls, the header/banner/feeds keep their natural height. */
+  display: flex;
+  flex-direction: column;
 }
+
+#panel > * { flex: 0 0 auto; }
+#panel > .user-list { flex: 1 1 auto; min-height: 0; }
 
 /* Move-mode drag handle: a grab strip at the panel top (works even when the
  * header is hidden). Shown only while move mode is armed. */
@@ -384,7 +392,10 @@ body.compact #panelHeader { padding: 8px 10px; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: min(52vh, 480px);
+  /* v1.4.11: measured against the SCREEN (--screen-h), not the viewport — the
+     desktop window is cropped to the panel, so `vh` shrank together with the
+     panel and the roster kept re-shrinking itself in a loop. */
+  max-height: var(--list-max-h, min(calc(var(--screen-h, 100vh) * 0.52), 480px));
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--panel-border) transparent;
@@ -1718,7 +1729,8 @@ body.no-anim .board-btn { transition: none; }
 }
 .preview-panel {
   width: 100%;
-  max-width: 280px;
+  /* v1.4.11: the live preview follows the panel-width slider */
+  max-width: min(100%, var(--panel-w, 280px));
   border-radius: var(--radius, 16px);
   background: rgba(16, 18, 34, var(--panel-opacity, 0.72));
   border: 1px solid color-mix(in srgb, var(--accent) 30%, rgba(255, 255, 255, 0.12));

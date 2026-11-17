@@ -57,6 +57,9 @@ export class MockConnector extends EventEmitter implements Connector {
   private chat: ChatMessage[] = [];
   private chatSeq = 0;
   private chatLine = 0;
+  /** v1.4.12: someone from another channel whispering at us (demo only). */
+  private whisperer: UserState | null = null;
+  private whisperUntil = 0;
   private lastEmit = 0;
   private pending: OverlayState | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
@@ -73,6 +76,7 @@ export class MockConnector extends EventEmitter implements Connector {
     this.timer = null;
     this.flushTimer = null;
     this.actors = [];
+    this.whisperer = null;
   }
 
   private seed(): void {
@@ -122,6 +126,27 @@ export class MockConnector extends EventEmitter implements Connector {
         };
         this.chat.push(msg);
         if (this.chat.length > 20) this.chat = this.chat.slice(-20);
+        changed = true;
+      }
+    }
+
+    // v1.4.12: now and then someone from ANOTHER channel whispers at us —
+    // the demo must show the whisper section for outside speakers too.
+    if (this.whisperer && now >= this.whisperUntil) {
+      this.whisperer = null;
+      changed = true;
+    } else if (!this.whisperer && Math.random() < 0.02) {
+      const absent = this.actors.filter((a) => !a.present);
+      const a = absent.length ? absent[Math.floor(Math.random() * absent.length)]! : undefined;
+      if (a) {
+        this.whisperer = {
+          ...a.user,
+          talking: true,
+          whispering: true,
+          inputMuted: false,
+          whisperChannel: CHANNELS[(CHANNELS.indexOf(this.channelName) + 1) % CHANNELS.length]!,
+        };
+        this.whisperUntil = now + 2600 + Math.random() * 2600;
         changed = true;
       }
     }
@@ -188,6 +213,7 @@ export class MockConnector extends EventEmitter implements Connector {
       channelId: 'demo-channel',
       selfId: this.selfId,
       users,
+      whisperers: this.whisperer ? [this.whisperer] : [],
       groups: MOCK_GROUPS,
       chat: this.chat,
       updatedAt: Date.now(),

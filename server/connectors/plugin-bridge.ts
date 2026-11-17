@@ -35,6 +35,9 @@ interface PluginClient {
 
 type PluginLine = Record<string, unknown>;
 
+/** How long a finished whisper stays in the state (the UI fades it out). */
+const WHISPER_GRACE_MS = 1200;
+
 function str(v: unknown): string {
   return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
 }
@@ -276,6 +279,9 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
  */
 export class PluginState {
   private clients = new Map<number, UserState>();
+  /** clid → last whisper (active = whispering right now). */
+  private whisperHits = new Map<number, { at: number; active: boolean }>();
+  private whisperTimer: NodeJS.Timeout | null = null;
   private chat: ChatMessage[] = [];
   private chatSeq = 0;
   private ownId = 0;
@@ -404,17 +410,15 @@ export class PluginState {
       case 'talk': {
         const id = num(msg['clid']);
         const prev = this.clients.get(id);
+        const talking = num(msg['s']) === 1;
+        // «w» = isReceivedWhisper (plugin ≥ v1.4.12) — a whisper may come
+        // from another channel, where the roster never shows the speaker.
+        const whisper = talking && num(msg['w']) === 1;
         if (prev) {
-          // v2 plugin sends "w" (isReceivedWhisper); s==2 marks whispering in
-          // the TS3 SDK — both show in the whisper section (v1.4.9 linger).
-          const whisper = num(msg['w']) === 1 || num(msg['s']) === 2;
-          this.clients.set(id, {
-            ...prev,
-            talking: num(msg['s']) === 1 || whisper,
-            whispering: whisper,
-          });
+          this.clients.set(id, { ...prev, talking, whispering: whisper });
           this.emitState();
         }
+        this.noteWhisper(id, whisper);
         return;
       }
 
@@ -515,14 +519,70 @@ export class PluginState {
     this.emitState();
   }
 
+  /** Remember who whispered — including people from other channels. */
+  private noteWhisper(clid: number, whisper: boolean): void {
+    if (!clid || clid === this.ownId) return; // own whispering is not news
+    const prev = this.whisperHits.get(clid);
+    if (whisper) {
+      this.whisperHits.set(clid, { at: Date.now(), active: true });
+      if (this.whisperHits.size > 64) {
+        const cutoff = Date.now() - 60000;
+        for (const [id, rec] of this.whisperHits) {
+          if (!rec.active && rec.at < cutoff) this.whisperHits.delete(id);
+        }
+      }
+      if (!prev?.active) this.emitState();
+      return;
+    }
+    if (prev?.active) {
+      this.whisperHits.set(clid, { at: Date.now(), active: false });
+      this.emitState();
+      // Nothing else may happen after a whisper ends — re-publish once so the
+      // row really leaves the state (and the UI can fade it out).
+      if (!this.whisperTimer) {
+        this.whisperTimer = setTimeout(() => {
+          this.whisperTimer = null;
+          this.emitState();
+        }, WHISPER_GRACE_MS + 200);
+      }
+    }
+  }
+
+  /** Whisperers that are not in our channel (the roster covers the rest). */
+  private buildWhisperers(roster: UserState[]): UserState[] {
+    const now = Date.now();
+    const onRoster = new Set(roster.map((u) => String(u.id)));
+    const out: UserState[] = [];
+    for (const [clid, rec] of this.whisperHits) {
+      if (!rec.active && now - rec.at > WHISPER_GRACE_MS) {
+        this.whisperHits.delete(clid);
+        continue;
+      }
+      if (onRoster.has(String(clid)) || clid === this.ownId) continue;
+      const known = this.clients.get(clid);
+      if (known?.isQuery) continue;
+      out.push({
+        ...(known ?? makeUser(String(clid), `#${clid}`)),
+        id: String(clid),
+        talking: true,
+        whispering: true,
+        isSelf: false,
+        whisperChannel: known?.channelId ? this.channelNames.get(known.channelId) ?? '' : '',
+      });
+    }
+    return out;
+  }
+
   buildState(): OverlayState {
+    const users = [...this.clients.values()].filter((c) => this.ownCid > 0 && c.channelId === this.ownCid);
     return {
       ...emptyState('ts3', this.curStatus, this.curDetail),
       serverName: this.serverName,
       channelName: this.ownChannelName || (this.channelNames.get(this.ownCid) ?? ''),
       channelId: this.ownCid > 0 ? String(this.ownCid) : '',
       selfId: this.ownId > 0 ? String(this.ownId) : null,
-      users: [...this.clients.values()].filter((c) => this.ownCid > 0 && c.channelId === this.ownCid),
+      users,
+      whisperers: this.buildWhisperers(users),
       groups: this.groups,
       chat: this.chat,
       updatedAt: Date.now(),

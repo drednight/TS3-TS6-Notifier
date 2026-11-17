@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub type Emit = Arc<dyn Fn(OverlayState) + Send + Sync>;
+pub type Emit = crate::model::Emit;
 
 /* ------------------------------------------------------------------ */
 /* bridge                                                              */
@@ -204,7 +204,7 @@ pub struct PluginState {
     channel_names: HashMap<i64, String>,
     server_name: String,
     groups: Vec<ServerGroup>,
-    emit: Emit,
+    whispers: Arc<crate::model::WhisperBook>,
 }
 
 impl PluginState {
@@ -218,7 +218,7 @@ impl PluginState {
             channel_names: HashMap::new(),
             server_name: String::new(),
             groups: Vec::new(),
-            emit,
+            whispers: crate::model::WhisperBook::new(emit),
         }
     }
 
@@ -385,6 +385,11 @@ impl PluginState {
                     u.whispering = whisper;
                     self.emit_state();
                 }
+                // A whisper may come from another channel — note it even when
+                // the speaker never appears on the roster.
+                if id != self.own_id {
+                    crate::model::WhisperBook::note(&self.whispers, &id.to_string(), whisper);
+                }
             }
             "chat" => {
                 let kind_raw = msg.get("kind").map(|v| v.loose_str()).unwrap_or_default();
@@ -488,12 +493,29 @@ impl PluginState {
             .collect();
         st.groups = self.groups.clone();
         st.chat = self.chat.rows().to_vec();
+        // Outside whisperers (another channel) — v1.4.12 parity.
+        let roster: std::collections::HashSet<String> = st.users.iter().map(|u| u.id.clone()).collect();
+        let own = self.own_id.to_string();
+        let ids = self.whispers.ids(&own, &|id| roster.contains(id));
+        st.whisperers = ids
+            .iter()
+            .filter_map(|id| {
+                let key: i64 = id.parse().unwrap_or(0);
+                let base = self.clients.get(&key).cloned();
+                let cname = base
+                    .as_ref()
+                    .and_then(|u| self.channel_names.get(&u.channel_id))
+                    .cloned()
+                    .unwrap_or_default();
+                crate::model::outside_whisperer(base, id, cname)
+            })
+            .collect();
         st.updated_at = now_ms();
         st
     }
 
     fn emit_state(&mut self) {
-        (self.emit)(self.build_state());
+        crate::model::WhisperBook::publish(&self.whispers, self.build_state());
     }
 }
 
@@ -720,6 +742,48 @@ mod tests {
                 {"id":101,"name":"А","cid":7,"groups":"","cname":"Home"}]}"#,
         )
         .unwrap()
+    }
+
+    fn snapshot_with_outsider() -> Json {
+        Json::parse(
+            r#"{"e":"snapshot","server":"Eternals","own":100,"owncid":7,"owncname":"Home","clients":[
+                {"id":100,"name":"Я","cid":7,"groups":"","cname":"Home"},
+                {"id":3,"name":"Дальний","cid":20,"groups":"","cname":"Другая"}]}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn whisper_from_another_channel_surfaces() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_with_outsider());
+        // whisper from clid 3 («w» = isReceivedWhisper)
+        ps.ingest(&Json::parse(r#"{"e":"talk","clid":3,"s":1,"w":1}"#).unwrap());
+        let st = ps.build_state();
+        assert!(!st.users.iter().any(|u| u.nickname == "Дальний"), "outside whisperer must not be on the roster");
+        let w = st.whisperers.iter().find(|u| u.nickname == "Дальний").expect("whisperer surfaced");
+        assert!(w.whispering && w.talking);
+        assert_eq!(w.whisper_channel.as_deref(), Some("Другая"));
+        // own whispering is not news
+        ps.ingest(&Json::parse(r#"{"e":"talk","clid":100,"s":1,"w":1}"#).unwrap());
+        let st = ps.build_state();
+        assert!(!st.whisperers.iter().any(|u| u.id == "100"), "own whisper must not be reported");
+    }
+
+    #[test]
+    fn whisper_expires_after_grace() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_with_outsider());
+        ps.ingest(&Json::parse(r#"{"e":"talk","clid":3,"s":1,"w":1}"#).unwrap());
+        assert_eq!(ps.build_state().whisperers.len(), 1);
+        ps.ingest(&Json::parse(r#"{"e":"talk","clid":3,"s":0,"w":0}"#).unwrap());
+        // inside the grace window the row stays…
+        assert_eq!(ps.build_state().whisperers.len(), 1);
+        // …and leaves after it
+        std::thread::sleep(std::time::Duration::from_millis(crate::model::WHISPER_GRACE_MS + 300));
+        assert!(ps.build_state().whisperers.is_empty());
     }
 
     #[test]

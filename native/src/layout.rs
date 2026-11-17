@@ -52,6 +52,8 @@ pub struct FrameInput<'a> {
     pub users: Vec<UserState>,
     /// class keys aligned with `users` (avatar slot art)
     pub class_keys: Vec<Option<String>>,
+    /// scroll offset (css px) inside a height-capped panel (panelMaxHeight)
+    pub roster_scroll: f32,
     /// class keys aligned with `whisperers`
     pub whisper_keys: Vec<(String, Option<String>)>,
     /// whisper-section users (full rows) — split+linger applied by caller
@@ -65,6 +67,8 @@ pub struct FrameInput<'a> {
 
 pub struct Frame {
     pub buf: Buf,
+    /// suggested roster scroll (keeps the first talking row visible)
+    pub scroll_to: f32,
     pub hits: Vec<(Rect, Hit)>,
     pub panel_w: f32,
     pub panel_h: f32,
@@ -411,7 +415,7 @@ fn draw_user_row(
         pal.nick
     };
     let nick = c.fonts.truncate(&u.nickname, nick_size, true, w - (tx - x) - c.s(72.0));
-    let sub = if u.away && !u.away_message.is_empty() {
+    let sub = if !u.away_message.is_empty() && (u.away || whisper) {
         Some(c.fonts.truncate(&u.away_message, c.em(0.76), false, w - (tx - x) - c.s(24.0)))
     } else {
         None
@@ -464,7 +468,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         anim: a.animations,
     };
     let pad = SHADOW_PAD * k;
-    let panel_w = PANEL_W * k;
+    let panel_w = ((a.panel_width as f32) * k).clamp(200.0 * k, 600.0 * k);
     let opts = RowOpts {
         show_avatars: a.show_avatars,
         show_badges: a.show_badges,
@@ -510,7 +514,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if inp.users.is_empty() && !a.hide_empty && inp.whisperers.is_empty() {
         y += c.s(118.0);
     }
-    let panel_h = y.max(header_h + c.s(40.0));
+    let mut panel_h = y.max(header_h + c.s(40.0));
+    // «Максимальная высота» (panelMaxHeight): 0 = auto (content height)
+    let max_h = (a.panel_max_height as f32) * k;
+    let mut scroll = 0.0f32;
+    let mut scroll_max = 0.0f32;
+    if max_h > 0.0 && panel_h > max_h {
+        panel_h = max_h;
+    }
 
     let bw = (panel_w + pad * 2.0).ceil() as i32;
     let bh = (panel_h + pad * 2.0).ceil() as i32;
@@ -630,6 +641,22 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
 
     // ---- user rows ----
     cy += list_pad;
+    // content viewport: roster/whispers/feed scroll inside a capped panel
+    let content_top = cy;
+    let content_h_total = (py + panel_h) - content_top;
+    let content_total = list_h
+        + (if inp.whisperers.is_empty() { 0.0 } else { whisper_head_h + c.s(2.0) + inp.whisperers.len() as f32 * (row_h + row_gap) + c.s(4.0) })
+        + (if inp.feed.is_empty() { 0.0 } else { c.s(4.0) + inp.feed.len() as f32 * (feed_row_h + feed_gap) + c.s(2.0) })
+        + (if inp.users.is_empty() && !a.hide_empty && inp.whisperers.is_empty() { c.s(118.0) } else { 0.0 })
+        + list_pad * 2.0;
+    scroll_max = (content_total - content_h_total).max(0.0);
+    scroll = inp.roster_scroll.clamp(0.0, scroll_max);
+    let scroll_on = scroll_max > 0.5;
+    if scroll_on {
+        buf.set_clip(px + 1.0, content_top, panel_w - 2.0, content_h_total);
+        cy -= scroll;
+    }
+
     for (i, u) in inp.users.iter().enumerate() {
         let key = inp.class_keys.get(i).and_then(|k| k.as_deref());
         draw_user_row(&c, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, &you_label, &opts);
@@ -716,8 +743,24 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         let sw = inp.fonts.measure(&sub, ss, false);
         inp.fonts.draw(&mut buf, icx - sw * 0.5, icy + c.s(56.0), &sub, ss, false, inp.pal.muted);
     }
+    if scroll_on {
+        buf.clear_clip();
+    }
 
-    Frame { buf, hits, panel_w, panel_h }
+    // keep the first talking row visible (auto-follow for capped panels)
+    let mut scroll_to = scroll;
+    if scroll_max > 0.0 {
+        if let Some(i) = inp.users.iter().position(|u| u.talking) {
+            let ry = rows_top + i as f32 * (row_h + row_gap);
+            if ry < scroll {
+                scroll_to = ry;
+            } else if ry + row_h > scroll + content_h_total {
+                scroll_to = (ry + row_h - content_h_total).clamp(0.0, scroll_max);
+            }
+        }
+    }
+
+    Frame { buf, hits, panel_w, panel_h, scroll_to }
 }
 
 #[cfg(test)]
@@ -726,6 +769,49 @@ mod tests {
     use crate::assets::Icons;
     use crate::font::Fonts;
     use crate::theme::Palette;
+
+    fn size_inp<'a>(a: &'a Appearance, pal: &'a Palette, fonts: &'a Fonts, icons: &'a Icons) -> FrameInput<'a> {
+        FrameInput {
+            appearance: a,
+            pal,
+            fonts,
+            icons,
+            status: "live",
+            server_name: "S",
+            channel_name: "C",
+            user_count: 2,
+            users: vec![
+                { let mut u = crate::model::UserState::new("1", "A"); u.talking = true; u },
+                crate::model::UserState::new("2", "B"),
+            ],
+            class_keys: vec![None, None],
+            whisper_keys: vec![],
+            whisperers: vec![],
+            feed: vec![],
+            lang: "ru",
+            move_mode: false,
+            now_ms: 1000,
+            roster_scroll: 0.0,
+            work_h: 1080.0,
+        }
+    }
+
+    #[test]
+    fn panel_size_settings() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let pal = Palette::from_appearance(&Appearance::default());
+        // panel width follows the setting
+        let mut a = Appearance::default();
+        a.panel_width = 400.0;
+        let f = render_frame(&size_inp(&a, &pal, &fonts, &icons));
+        assert_eq!(f.panel_w, 400.0);
+        // max height caps the panel and auto-follow reports a scroll target
+        a.panel_max_height = 120.0;
+        let f2 = render_frame(&size_inp(&a, &pal, &fonts, &icons));
+        assert!(f2.panel_h <= 120.0 + 1.0, "{}", f2.panel_h);
+        assert!(f2.scroll_to >= 0.0);
+    }
 
     #[test]
     fn class_matching_rules() {
@@ -784,6 +870,7 @@ mod tests {
             move_mode: true,
             now_ms: 1000,
             work_h: 1080.0,
+            roster_scroll: 0.0,
         };
         let frame = render_frame(&inp);
         assert_eq!(frame.panel_w, PANEL_W);
@@ -824,6 +911,7 @@ mod tests {
             move_mode: false,
             now_ms: 0,
             work_h: 800.0,
+            roster_scroll: 0.0,
         };
         let frame = render_frame(&inp);
         assert_eq!(frame.panel_w, PANEL_W * 1.25);
@@ -886,6 +974,7 @@ mod qa {
             move_mode: true,
             now_ms: 1500,
             work_h: 1080.0,
+            roster_scroll: 0.0,
         };
         let frame = render_frame(&inp);
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
@@ -914,6 +1003,7 @@ mod qa {
             move_mode: false,
             now_ms: 0,
             work_h: 1080.0,
+            roster_scroll: 0.0,
         };
         let frame2 = render_frame(&inp2);
         write_png(&format!("{dir}/frame_empty_frost.png"), &frame2.buf).unwrap();

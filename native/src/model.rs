@@ -1,6 +1,7 @@
 //! Shared state model — the exact JSON contract of the web overlay.
 
 use crate::json::{obj, Json};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn now_ms() -> u64 {
@@ -27,6 +28,9 @@ pub struct UserState {
     pub is_query: bool,
     pub avatar_hash: String,
     pub server_groups: String,
+    /// Only on rows from `OverlayState.whisperers`: the channel this person
+    /// whispers FROM (they are not in your channel).
+    pub whisper_channel: Option<String>,
 }
 
 impl UserState {
@@ -47,6 +51,7 @@ impl UserState {
             is_query: false,
             avatar_hash: String::new(),
             server_groups: String::new(),
+            whisper_channel: None,
         }
     }
 
@@ -67,8 +72,148 @@ impl UserState {
             ("isQuery", Json::b(self.is_query)),
             ("avatarHash", Json::s(self.avatar_hash.clone())),
             ("serverGroups", Json::s(self.server_groups.clone())),
-        ])
+        ]
+        .into_iter()
+        .chain(
+            self.whisper_channel
+                .as_ref()
+                .map(|c| ("whisperChannel", Json::s(c.clone())))
+                .into_iter(),
+        )
+        .collect())
     }
+}
+
+/// How long a finished whisper stays in the state (the UI fades it out).
+pub const WHISPER_GRACE_MS: u64 = 1200;
+
+pub type Emit = Arc<dyn Fn(OverlayState) + Send + Sync>;
+
+/// Who whispered recently — including people from other channels.
+/// Mirrors `whisperHits` in the TS connectors (note + grace expiry).
+#[derive(Default)]
+pub struct WhisperHits {
+    hits: std::collections::HashMap<String, (u64, bool)>, // id -> (at, active)
+}
+
+impl WhisperHits {
+    /// Record whisper activity. Returns true when the state must be re-emitted.
+    pub fn note(&mut self, id: &str, whispering: bool) -> bool {
+        if id.is_empty() {
+            return false;
+        }
+        let now = now_ms();
+        // prune expired while we are here
+        self.hits
+            .retain(|_, (at, active)| *active || now.saturating_sub(*at) <= WHISPER_GRACE_MS);
+        let prev = self.hits.get(id).copied();
+        if whispering {
+            self.hits.insert(id.to_string(), (now, true));
+            if self.hits.len() > 64 {
+                let cutoff = now.saturating_sub(60_000);
+                self.hits.retain(|_, (at, active)| *active || *at >= cutoff);
+            }
+            return !matches!(prev, Some((_, true)));
+        }
+        if matches!(prev, Some((_, true))) {
+            self.hits.insert(id.to_string(), (now, false));
+            return true;
+        }
+        false
+    }
+
+    /// Ids to surface as outside whisperers: not on the roster, not self,
+    /// active or still inside the grace window.
+    pub fn ids(&self, own_id: &str, on_roster: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let now = now_ms();
+        let mut out: Vec<String> = self
+            .hits
+            .iter()
+            .filter(|(id, (at, active))| {
+                (*active || now.saturating_sub(*at) <= WHISPER_GRACE_MS)
+                    && id.as_str() != own_id
+                    && !on_roster(id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub fn alive_ids(&self) -> std::collections::HashSet<String> {
+        let now = now_ms();
+        self.hits
+            .iter()
+            .filter(|(_, (at, active))| *active || now.saturating_sub(*at) <= WHISPER_GRACE_MS)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+}
+
+/// Whisper book shared by a connector session: hit list + last published
+/// state + the delayed cleanup re-emit (mirrors `whisperTimer` in TS).
+pub struct WhisperBook {
+    hits: Mutex<WhisperHits>,
+    last: Mutex<Option<OverlayState>>,
+    emit: Emit,
+}
+
+impl WhisperBook {
+    pub fn new(emit: Emit) -> Arc<WhisperBook> {
+        Arc::new(WhisperBook {
+            hits: Mutex::new(WhisperHits::default()),
+            last: Mutex::new(None),
+            emit,
+        })
+    }
+
+    /// Record whisper activity; a finished whisper schedules one cleanup
+    /// re-emit so the row really leaves the state (tests wait 1.6 s).
+    pub fn note(book: &Arc<Self>, id: &str, whispering: bool) {
+        let ended = book.hits.lock().unwrap().note(id, whispering) && !whispering;
+        if ended {
+            let me = book.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(WHISPER_GRACE_MS + 200));
+                let alive = me.hits.lock().unwrap().alive_ids();
+                let mut guard = me.last.lock().unwrap();
+                if let Some(st) = guard.as_mut() {
+                    let before = st.whisperers.len();
+                    st.whisperers.retain(|u| alive.contains(&u.id));
+                    if st.whisperers.len() != before {
+                        let st = st.clone();
+                        *guard = Some(st.clone());
+                        (me.emit)(st);
+                    }
+                }
+            });
+        }
+    }
+
+    /// Outside-whisperer ids (not roster, not self).
+    pub fn ids(&self, own_id: &str, on_roster: &dyn Fn(&str) -> bool) -> Vec<String> {
+        self.hits.lock().unwrap().ids(own_id, on_roster)
+    }
+
+    /// Store + emit a state through this book.
+    pub fn publish(book: &Arc<Self>, st: OverlayState) {
+        *book.last.lock().unwrap() = Some(st.clone());
+        (book.emit)(st);
+    }
+}
+
+/// Shape an outside whisperer row (whisperers are talking + whispering).
+pub fn outside_whisperer(base: Option<UserState>, id: &str, channel_name: String) -> Option<UserState> {
+    if base.as_ref().map(|u| u.is_query).unwrap_or(false) {
+        return None;
+    }
+    let mut u = base.unwrap_or_else(|| UserState::new(id, format!("#{}", id)));
+    u.id = id.to_string();
+    u.talking = true;
+    u.whispering = true;
+    u.is_self = false;
+    u.whisper_channel = Some(channel_name);
+    Some(u)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,6 +296,9 @@ pub struct OverlayState {
     pub channel_id: String,
     pub self_id: Option<String>,
     pub users: Vec<UserState>,
+    /// People who whispered to you (or to your channel) from ANOTHER channel —
+    /// they are not part of `users`; the overlay lists them under «Шёпот».
+    pub whisperers: Vec<UserState>,
     pub groups: Vec<ServerGroup>,
     pub chat: Vec<ChatMessage>,
     pub updated_at: u64,
@@ -167,6 +315,7 @@ impl OverlayState {
             channel_id: String::new(),
             self_id: None,
             users: Vec::new(),
+            whisperers: Vec::new(),
             groups: Vec::new(),
             chat: Vec::new(),
             updated_at: now_ms(),
@@ -183,6 +332,7 @@ impl OverlayState {
             ("channelId", Json::s(self.channel_id.clone())),
             ("selfId", match &self.self_id { Some(s) => Json::s(s.clone()), None => Json::Null }),
             ("users", Json::Arr(self.users.iter().map(|u| u.to_json()).collect())),
+            ("whisperers", Json::Arr(self.whisperers.iter().map(|u| u.to_json()).collect())),
             ("groups", Json::Arr(self.groups.iter().map(|g| g.to_json()).collect())),
             ("chat", Json::Arr(self.chat.iter().map(|c| c.to_json()).collect())),
             ("updatedAt", Json::i(self.updated_at as i64)),

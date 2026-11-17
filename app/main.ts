@@ -235,9 +235,81 @@ function targetDisplay(): Electron.Display {
   return screen.getPrimaryDisplay();
 }
 
+/**
+ * Layering mode of the overlay window.
+ *
+ * A game in borderless or fullscreen mode lives in its own z-order band that
+ * sits ABOVE ordinary topmost windows — that is exactly why the overlay used
+ * to be visible only over «framed» windows and windowed games. Only a window
+ * that covers the whole display competes in that band, so anything but
+ * 'panel' keeps the window display-sized (that costs some memory, which is
+ * what the 'panel' mode trades away).
+ */
+function overlayLayer(): 'panel' | 'screen' | 'fullscreen' {
+  const v = handle?.store.get().desktop.overlayLayer;
+  return v === 'panel' || v === 'fullscreen' ? v : 'screen';
+}
+
+/** Which part of the target display the overlay window covers. */
+function overlayArea(): Electron.Rectangle {
+  const d = targetDisplay();
+  // 'panel' hugs the work area; the other modes cover the WHOLE monitor so
+  // Windows treats the window as fullscreen and keeps it above games.
+  return overlayLayer() === 'panel' ? d.workArea : d.bounds;
+}
+
 function fitOverlay(): void {
-  if (!overlayWin) return;
-  overlayWin.setBounds(targetDisplay().workArea);
+  const win = overlayWin;
+  if (!win || win.isDestroyed()) return;
+  const layer = overlayLayer();
+  if (layer === 'fullscreen') {
+    try {
+      if (!win.isFullScreen()) win.setFullScreen(true);
+    } catch (err) {
+      log(`[app] fullscreen layer failed: ${err}`);
+      win.setBounds(overlayArea());
+    }
+  } else {
+    try {
+      if (win.isFullScreen()) win.setFullScreen(false);
+      win.setBounds(overlayArea());
+    } catch (err) {
+      log(`[app] fit failed: ${err}`);
+    }
+  }
+  assertOverlayTop();
+}
+
+/**
+ * Re-assert the topmost z-order.
+ *
+ * Games (and alt-tabbing out of them) grab the top slot and Windows never
+ * hands it back on its own, so the overlay silently sinks behind the game.
+ * Re-stating HWND_TOPMOST costs nothing and does not take the focus.
+ */
+function assertOverlayTop(): void {
+  const win = overlayWin;
+  if (!win || win.isDestroyed() || !overlayVisible || !win.isVisible()) return;
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } catch (err) {
+    log(`[app] always-on-top failed: ${err}`);
+  }
+}
+
+let topGuard: NodeJS.Timeout | null = null;
+
+/** Keep re-claiming the top slot while the overlay window lives. */
+function startTopGuard(): void {
+  if (topGuard) return;
+  topGuard = setInterval(assertOverlayTop, 2500);
+  topGuard.unref?.(); // never hold the app open just for this
+}
+
+function stopTopGuard(): void {
+  if (!topGuard) return;
+  clearInterval(topGuard);
+  topGuard = null;
 }
 
 function applyClickThrough(): void {
@@ -301,20 +373,21 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
 }
 
 function createOverlay(): void {
-  const workArea = targetDisplay().workArea;
+  const area = overlayArea();
   overlayToken = Math.random().toString(36).slice(2, 10);
   overlayWin = new BrowserWindow({
-    x: workArea.x,
-    y: workArea.y,
-    width: workArea.width,
-    height: workArea.height,
+    x: area.x,
+    y: area.y,
+    width: area.width,
+    height: area.height,
     transparent: true,
     frame: false,
     resizable: false,
     movable: false,
     minimizable: false,
     maximizable: false,
-    fullscreenable: false,
+    // v1.4.13: the 'fullscreen' layer mode needs the native fullscreen flag.
+    fullscreenable: true,
     focusable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -334,6 +407,10 @@ function createOverlay(): void {
   overlayWin.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
   watchWebContents(overlayWin, 'overlay');
   overlayWin.loadURL(overlayUrl());
+  overlayWin.on('closed', () => {
+    overlayWin = null;
+    stopTopGuard();
+  });
 
   // ready-to-show is unreliable for transparent windows — always fall back.
   let shown = false;
@@ -342,6 +419,9 @@ function createOverlay(): void {
     shown = true;
     if (overlayVisible) overlayWin.showInactive();
     applyClickThrough();
+    fitOverlay(); // fullscreen layer mode needs one pass after showing
+    assertOverlayTop();
+    startTopGuard();
     log('[app] overlay shown');
   };
   overlayWin.once('ready-to-show', show);
@@ -353,7 +433,7 @@ function createOverlay(): void {
     screen.on('display-added', fitOverlay);
     screen.on('display-removed', fitOverlay);
   }
-  log(`[app] overlay bounds ${workArea.width}x${workArea.height}+${workArea.x}+${workArea.y}`);
+  log(`[app] overlay layer=${overlayLayer()} bounds ${area.width}x${area.height}+${area.x}+${area.y}`);
 }
 
 function openSettings(): void {
@@ -402,6 +482,7 @@ function applyOverlayWindow(): void {
     createOverlay();
     log('[app] overlay window created');
   } else if (!want && overlayWin) {
+    stopTopGuard();
     overlayWin.destroy();
     overlayWin = null;
     log('[app] overlay window closed (server-only mode)');
@@ -423,6 +504,9 @@ function setOverlayVisible(visible: boolean): void {
   if (!overlayWin) return;
   if (visible) {
     overlayWin.showInactive();
+    fitOverlay();
+    assertOverlayTop();
+    startTopGuard();
   } else {
     overlayWin.hide();
   }
@@ -649,6 +733,14 @@ async function boot(): Promise<void> {
         // Not our window (OBS source, stale tab) — no crop, keep full layout.
         return { cropX: 0, cropY: 0, screenW: 0, screenH: 0 };
       }
+      if (overlayLayer() !== 'panel') {
+        // The window covers the whole display and must stay that way — a
+        // cropped window drops out of the fullscreen z-band and sinks behind
+        // games again. Report the work-area offset so the page can still lay
+        // the panel out in work-area coordinates.
+        const bd = targetDisplay().bounds;
+        return { cropX: bd.x - wa.x, cropY: bd.y - wa.y, screenW: wa.width, screenH: wa.height };
+      }
       const w = Math.max(120, Math.min(Math.round(rect.w), wa.width));
       const h = Math.max(80, Math.min(Math.round(rect.h), wa.height));
       const x = Math.max(0, Math.min(Math.round(rect.x), wa.width - w));
@@ -721,8 +813,18 @@ async function boot(): Promise<void> {
   // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
   let lastFitSig = '';
   let lastTraySig = '';
+  let lastLayerSig = '';
   handle.events.on('config', () => {
     const cfg = handle!.store.get();
+    // A layer switch resizes/re-fullscreens the window — and the page has to
+    // re-measure, so push the config back out (it resets the reported rect).
+    const layerSig = String(cfg.desktop.overlayLayer ?? 'screen');
+    if (layerSig !== lastLayerSig) {
+      lastLayerSig = layerSig;
+      fitOverlay();
+      handle!.broadcast({ type: 'config', config: cfg });
+      log(`[app] overlay layer → ${layerSig}`);
+    }
     const fitSig = String(cfg.desktop.display ?? 'primary');
     if (fitSig !== lastFitSig) {
       lastFitSig = fitSig;
@@ -768,6 +870,7 @@ if (gotLock) {
 
   app.on('before-quit', () => {
     log('=== shutting down ===');
+    stopTopGuard();
     handle?.close();
   });
 }

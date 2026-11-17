@@ -195,6 +195,10 @@
       const displays = out.displays || [];
       if (!displays.length) return; // web mode — hide the field
       field.hidden = false;
+      // v1.4.12: the overlay layer («поверх всех окон») only exists in the
+      // desktop shell — it rides on the same «we have real displays» check.
+      const layerField = document.getElementById('layerField');
+      if (layerField) layerField.hidden = false;
       sel.innerHTML = displays
         .map(
           (d) =>

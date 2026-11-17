@@ -28,6 +28,10 @@ pub struct Appearance {
     pub radius: f64,
     pub scale: f64,
     pub font_size: f64,
+    /// Overlay panel width in px.
+    pub panel_width: f64,
+    /// Max panel height in px (roster scrolls inside); 0 = auto (content height).
+    pub panel_max_height: f64,
     pub corner: String,
     pub margin_x: f64,
     pub margin_y: f64,
@@ -82,6 +86,8 @@ impl Default for Appearance {
             radius: 16.0,
             scale: 1.0,
             font_size: 13.0,
+            panel_width: 292.0,
+            panel_max_height: 0.0,
             corner: "tr".into(),
             margin_x: 18.0,
             margin_y: 18.0,
@@ -132,6 +138,9 @@ pub struct DesktopPrefs {
     pub display: String,
     pub elevate: bool,
     pub overlay_window: bool,
+    /// How the overlay window is layered over other apps: 'panel' | 'screen' |
+    /// 'fullscreen' (see model.ts — 'screen' keeps it above borderless games).
+    pub overlay_layer: String,
     pub port: i64,
 }
 
@@ -145,6 +154,7 @@ impl Default for DesktopPrefs {
             display: "primary".into(),
             elevate: true,
             overlay_window: true,
+            overlay_layer: "screen".into(),
             port: 48911,
         }
     }
@@ -191,6 +201,7 @@ impl Default for AppConfig {
                 display: "primary".into(),
                 elevate: true,
                 overlay_window: true,
+                overlay_layer: "screen".into(),
                 port: 48911,
             },
             classes: ClassesCfg { enabled: false, map },
@@ -225,8 +236,13 @@ pub fn ts_endpoint_from_json(obj: &Json, base: &TsEndpoint) -> TsEndpoint {
 }
 
 pub fn appearance_from_json(obj: &Json) -> Appearance {
+    appearance_from_json_with(obj, &Appearance::default())
+}
+
+/// Merge an appearance patch over `base` (only known keys, no nulls).
+pub fn appearance_from_json_with(obj: &Json, base: &Appearance) -> Appearance {
     // Unknown keys never leak: only fields present in Appearance are read.
-    let d = Appearance::default();
+    let d = base.clone();
     if !matches!(obj, Json::Obj(_)) {
         return d;
     }
@@ -242,6 +258,8 @@ pub fn appearance_from_json(obj: &Json) -> Appearance {
         blur: pick_f64(obj, "blur", d.blur),
         radius: pick_f64(obj, "radius", d.radius),
         scale: pick_f64(obj, "scale", d.scale),
+        panel_width: pick_f64(obj, "panelWidth", d.panel_width),
+        panel_max_height: pick_f64(obj, "panelMaxHeight", d.panel_max_height),
         font_size: pick_f64(obj, "fontSize", d.font_size),
         corner: pick_str(obj, "corner", &d.corner),
         margin_x: pick_f64(obj, "marginX", d.margin_x),
@@ -366,6 +384,10 @@ impl AppConfig {
                 display: pick_str(desktop, "display", &base.desktop.display),
                 elevate: pick_bool(desktop, "elevate", base.desktop.elevate),
                 overlay_window: pick_bool(desktop, "overlayWindow", base.desktop.overlay_window),
+                overlay_layer: {
+                    let v = pick_str(desktop, "overlayLayer", &base.desktop.overlay_layer);
+                    if matches!(v.as_str(), "panel" | "screen" | "fullscreen") { v } else { "screen".into() }
+                },
                 port: pick_f64(desktop, "port", base.desktop.port as f64) as i64,
             },
             classes: ClassesCfg {
@@ -401,6 +423,7 @@ impl AppConfig {
                 ("display", Json::s(self.desktop.display.clone())),
                 ("elevate", Json::b(self.desktop.elevate)),
                 ("overlayWindow", Json::b(self.desktop.overlay_window)),
+                ("overlayLayer", Json::s(self.desktop.overlay_layer.clone())),
                 ("port", Json::n(self.desktop.port as f64)),
             ])),
             ("classes", crate::json::obj(vec![
@@ -429,7 +452,7 @@ impl AppConfig {
                     }
                     "ts3" => self.ts3 = ts_endpoint_from_json(value, &self.ts3),
                     "ts6" => self.ts6 = ts_endpoint_from_json(value, &self.ts6),
-                    "appearance" => self.appearance = appearance_from_json(value),
+                    "appearance" => self.appearance = appearance_from_json_with(value, &self.appearance),
                     "desktop" => {
                         self.desktop = DesktopPrefs {
                             click_through: pick_bool(value, "clickThrough", self.desktop.click_through),
@@ -439,6 +462,10 @@ impl AppConfig {
                             display: pick_str(value, "display", &self.desktop.display),
                             elevate: pick_bool(value, "elevate", self.desktop.elevate),
                             overlay_window: pick_bool(value, "overlayWindow", self.desktop.overlay_window),
+                            overlay_layer: {
+                                let v = pick_str(value, "overlayLayer", &self.desktop.overlay_layer);
+                                if matches!(v.as_str(), "panel" | "screen" | "fullscreen") { v } else { self.desktop.overlay_layer.clone() }
+                            },
                             port: pick_f64(value, "port", self.desktop.port as f64) as i64,
                         };
                     }
@@ -513,6 +540,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn overlay_layer_and_panel_fields() {
+        // defaults: v1.4.13 parity
+        let d = AppConfig::default();
+        assert_eq!(d.desktop.overlay_layer, "screen");
+        assert_eq!(d.appearance.panel_width, 292.0);
+        assert_eq!(d.appearance.panel_max_height, 0.0);
+        // patch round-trip
+        let mut c = AppConfig::default();
+        let patch = crate::json::Json::parse(
+            r#"{"appearance":{"panelWidth":380,"panelMaxHeight":640},"desktop":{"overlayLayer":"fullscreen"}}"#,
+        )
+        .unwrap();
+        c.update_from(&patch);
+        assert_eq!(c.appearance.panel_width, 380.0);
+        assert_eq!(c.appearance.panel_max_height, 640.0);
+        assert_eq!(c.desktop.overlay_layer, "fullscreen");
+        // unknown appearance keys must NOT reset the rest (v1.4.x store merge)
+        let patch2 = crate::json::Json::parse(r#"{"appearance":{"opacity":0.5}}"#).unwrap();
+        c.update_from(&patch2);
+        assert_eq!(c.appearance.opacity, 0.5);
+        assert_eq!(c.appearance.panel_width, 380.0);
+        // bogus layer values fall back
+        let patch3 = crate::json::Json::parse(r#"{"desktop":{"overlayLayer":"bogus"}}"#).unwrap();
+        c.update_from(&patch3);
+        assert_eq!(c.desktop.overlay_layer, "fullscreen"); // unchanged on invalid
+    }
+
+    #[test]
     fn merge_drops_unknown_keys_and_nulls() {
         let mut cfg = AppConfig::default();
         let patch = Json::parse(r#"{"appearance":{"glow":0.5,"bogus":1,"accent":null},"source":"ts3","junk":true}"#).unwrap();
@@ -537,3 +592,4 @@ mod tests {
         assert_eq!(a.theme, "neon");
     }
 }
+

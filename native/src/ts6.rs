@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub type EmitFn = Box<dyn Fn(OverlayState) + Send>;
+pub type EmitFn = crate::model::Emit;
 pub type SaveKeyFn = Arc<dyn Fn(String) + Send + Sync>;
 
 const APP_IDENTIFIER: &str = "dev.tsnotifier.overlay";
@@ -61,6 +61,7 @@ struct Ts6Session {
     noisy_diag_skipped: i32,
     cur_status: &'static str,
     cur_detail: String,
+    whispers: Arc<crate::model::WhisperBook>,
 }
 
 impl Ts6Session {
@@ -71,7 +72,7 @@ impl Ts6Session {
     }
 
     fn emit_state(&mut self) {
-        (self.emit)(self.build_state());
+        crate::model::WhisperBook::publish(&self.whispers, self.build_state());
     }
 
     fn build_state(&self) -> OverlayState {
@@ -98,6 +99,23 @@ impl Ts6Session {
             .collect();
         st.groups = groups;
         st.chat = self.chat.rows().to_vec();
+        // Outside whisperers (another channel) — v1.4.12 parity.
+        let roster: std::collections::HashSet<String> = st.users.iter().map(|u| u.id.clone()).collect();
+        let own = self.own_client_id.to_string();
+        let wids = self.whispers.ids(&own, &|id| roster.contains(id));
+        st.whisperers = wids
+            .iter()
+            .filter_map(|id| {
+                let key: i64 = id.parse().unwrap_or(0);
+                let base = self.clients.get(&key).cloned();
+                let cname = base
+                    .as_ref()
+                    .and_then(|u| self.channels.get(&u.channel_id))
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
+                crate::model::outside_whisperer(base, id, cname)
+            })
+            .collect();
         st.updated_at = now_ms();
         st
     }
@@ -315,6 +333,7 @@ impl Ts6Session {
                 let whisper = talking
                     && (status >= 2
                         || payload.get("whisper").map(|v| v.loose_bool()).unwrap_or(false)
+                        || payload.get("isWhisper").map(|v| v.loose_bool()).unwrap_or(false)
                         || (payload.get("targetMode").is_some()
                             && payload.get("targetMode").map(|v| v.loose_i64()).unwrap_or(0) != 0));
                 if foreign {
@@ -329,6 +348,11 @@ impl Ts6Session {
                         u.whispering = whisper;
                         self.emit_state();
                     }
+                }
+                // A whisper may come from another channel — note it even when
+                // the speaker never appears on the roster.
+                if client_id != self.own_client_id {
+                    crate::model::WhisperBook::note(&self.whispers, &client_id.to_string(), whisper);
                 }
             }
             "clientSelfPropertyUpdated" => {
@@ -1071,15 +1095,16 @@ pub fn run(
     api_key: String,
     save_key: SaveKeyFn,
     stop: Arc<AtomicBool>,
-    emit: impl Fn(OverlayState) + Send + 'static,
+    emit: impl Fn(OverlayState) + Send + Sync + 'static,
 ) {
-    let emit: EmitFn = Box::new(emit);
+    let emit: EmitFn = Arc::new(emit);
     let mut session = Ts6Session {
         host,
         port,
         api_key,
         save_key,
         stop: stop.clone(),
+        whispers: crate::model::WhisperBook::new(emit.clone()),
         emit,
         clients: HashMap::new(),
         channels: HashMap::new(),
@@ -1178,7 +1203,7 @@ mod tests {
         .unwrap();
         // replicate the extraction against a session-less helper path via a tiny state
         let (tx, _rx) = channel();
-        let emit: EmitFn = Box::new(move |_st| {
+        let emit: EmitFn = Arc::new(move |_st| {
             let _ = tx.send(());
         });
         let mut s = Ts6Session {
@@ -1187,6 +1212,7 @@ mod tests {
             api_key: String::new(),
             save_key: Arc::new(|_| {}),
             stop: Arc::new(AtomicBool::new(false)),
+            whispers: crate::model::WhisperBook::new(emit.clone()),
             emit,
             clients: HashMap::new(),
             channels: HashMap::new(),

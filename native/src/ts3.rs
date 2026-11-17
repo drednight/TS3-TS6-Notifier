@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-pub type EmitFn = Box<dyn Fn(OverlayState) + Send>;
+pub type EmitFn = crate::model::Emit;
 
 enum Job {
     /// raw command + optional response sink (None = fire and forget)
@@ -90,6 +90,7 @@ struct Ts3Session {
     refresh_fails: i32,
     talk_diag_skipped: i32,
     refresh_pending_at: u64,
+    whispers: Arc<crate::model::WhisperBook>,
 }
 
 impl Ts3Session {
@@ -100,7 +101,7 @@ impl Ts3Session {
     }
 
     fn emit_state(&mut self) {
-        (self.emit)(self.build_state());
+        crate::model::WhisperBook::publish(&self.whispers, self.build_state());
     }
 
     fn build_state(&self) -> OverlayState {
@@ -117,6 +118,23 @@ impl Ts3Session {
             .collect();
         st.groups = self.groups.clone();
         st.chat = self.chat.rows().to_vec();
+        // Outside whisperers (another channel) — v1.4.12 parity.
+        let roster: std::collections::HashSet<String> = st.users.iter().map(|u| u.id.clone()).collect();
+        let own = self.own_clid.to_string();
+        let ids = self.whispers.ids(&own, &|id| roster.contains(id));
+        st.whisperers = ids
+            .iter()
+            .filter_map(|id| {
+                let key: i64 = id.parse().unwrap_or(0);
+                let base = self.clients.get(&key).cloned();
+                let cname = base
+                    .as_ref()
+                    .and_then(|u| self.channels.get(&u.channel_id))
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
+                crate::model::outside_whisperer(base, id, cname)
+            })
+            .collect();
         st.updated_at = now_ms();
         st
     }
@@ -163,6 +181,11 @@ impl Ts3Session {
                         user.whispering = whisper;
                         self.emit_state();
                     }
+                }
+                // A whisper may come from another channel — note it even when
+                // the speaker never appears on the roster.
+                if clid != self.own_clid {
+                    crate::model::WhisperBook::note(&self.whispers, &clid.to_string(), whisper);
                 }
             }
             "notifytextmessage" => {
@@ -769,13 +792,14 @@ pub struct Ts3Connector;
 
 impl Ts3Connector {
     /// Blocking run: connects, maintains and emits states until `stop`.
-    pub fn run(host: String, port: i64, api_key: String, stop: Arc<AtomicBool>, emit: impl Fn(OverlayState) + Send + 'static) {
-        let emit: EmitFn = Box::new(emit);
+    pub fn run(host: String, port: i64, api_key: String, stop: Arc<AtomicBool>, emit: impl Fn(OverlayState) + Send + Sync + 'static) {
+        let emit: EmitFn = Arc::new(emit);
         let mut session = Ts3Session {
             host,
             port,
             api_key,
             stop: stop.clone(),
+            whispers: crate::model::WhisperBook::new(emit.clone()),
             emit,
             clients: HashMap::new(),
             group_mem: HashMap::new(),

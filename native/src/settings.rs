@@ -143,6 +143,15 @@ impl SettingsModel {
                     self.touch();
                 }
             },
+            Ctrl::Cycle(key) if key == "overlay_layer" => {
+                let next = match self.desktop.overlay_layer.as_str() {
+                    "panel" => "screen",
+                    "screen" => "fullscreen",
+                    _ => "panel",
+                };
+                self.desktop.overlay_layer = next.to_string();
+                self.touch();
+            }
             Ctrl::Cycle(key) => {
                 cycle_advance(&mut self.app, key);
                 self.touch();
@@ -244,6 +253,8 @@ fn slider_range(key: &str) -> (f64, f64) {
     match key {
         "scale" => (0.75, 1.5),
         "font_size" => (11.0, 18.0),
+        "panel_width" => (200.0, 600.0),
+        "panel_max_height" => (0.0, 1000.0),
         "opacity" => (0.15, 1.0),
         "glow" => (0.0, 1.0),
         "blur" => (0.0, 40.0),
@@ -258,6 +269,8 @@ fn set_slider(app: &mut Appearance, key: &str, v: f64) {
     match key {
         "scale" => app.scale = v,
         "font_size" => app.font_size = v.round().clamp(min, max),
+        "panel_width" => app.panel_width = v.round().clamp(min, max),
+        "panel_max_height" => app.panel_max_height = v.round().clamp(min, max),
         "opacity" => app.opacity = v,
         "glow" => app.glow = v,
         "blur" => app.blur = v,
@@ -271,6 +284,8 @@ fn get_slider(app: &Appearance, key: &str) -> f64 {
     match key {
         "scale" => app.scale,
         "font_size" => app.font_size,
+        "panel_width" => app.panel_width,
+        "panel_max_height" => app.panel_max_height,
         "opacity" => app.opacity,
         "glow" => app.glow,
         "blur" => app.blur,
@@ -313,6 +328,25 @@ struct Ctx<'a> {
     fs: f32,
 }
 
+/// Split text into lines that fit `max_w` (word wrap).
+fn wrap_text(fonts: &crate::font::Fonts, text: &str, size: f32, max_w: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+        if fonts.measure(&candidate, size, false) <= max_w || cur.is_empty() {
+            cur = candidate;
+        } else {
+            lines.push(cur);
+            cur = word.to_string();
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
 fn round_btn(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, label: &str, active: bool, danger: bool) {
     let bg = if danger {
         Rgba::rgb(220, 38, 38).scale_a(200.0)
@@ -340,13 +374,8 @@ fn draw_toggle(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, on: 
     buf.circle(kx, ty + th * 0.5, th * 0.38, Rgba::rgb(255, 255, 255));
 }
 
-fn draw_slider(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, value: f64, range: (f64, f64), unit: &str) -> crate::layout::Rect {
-    let text = if unit == "px" {
-        format!("{label}: {value:.0}")
-    } else {
-        format!("{label}: {value:.2}")
-    };
-    c.fonts.draw(buf, x, y + 12.0, &text, c.fs, false, c.pal.text);
+fn draw_slider(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, text: &str, value: f64, range: (f64, f64)) -> crate::layout::Rect {
+    c.fonts.draw(buf, x, y + 12.0, text, c.fs, false, c.pal.text);
     let track = crate::layout::Rect { x, y: y + 22.0, w, h: 6.0 };
     buf.round_rect(track.x, track.y, track.w, track.h, 3.0, c.pal.row_hover);
     let t = ((value - range.0) / (range.1 - range.0)).clamp(0.0, 1.0) as f32;
@@ -384,6 +413,9 @@ fn sample_input<'a>(
     let mut ghost = UserState::new("103", "Ghost");
     ghost.whispering = true;
     ghost.talking = true;
+    ghost.whisper_channel = Some("Другая".into());
+    ghost.away = true;
+    ghost.away_message = "Шёпот из канала «Другая»".into();
     FrameInput {
         appearance: a,
         pal,
@@ -401,6 +433,7 @@ fn sample_input<'a>(
         lang: "ru",
         move_mode: false,
         now_ms: 1500,
+        roster_scroll: 0.0,
         work_h: WIN_H,
     }
 }
@@ -484,9 +517,11 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
 
     section(&mut buf, &c, y, &tr(&m.lang, "Геометрия и стиль", "Geometry & style"));
     y += 34.0;
-    let sliders: [(&str, &str, &str); 8] = [
+    let sliders: [(&str, &str, &str); 10] = [
         ("scale", "Масштаб", "Scale"),
         ("font_size", "Шрифт", "Font size"),
+        ("panel_width", "Ширина панели", "Panel width"),
+        ("panel_max_height", "Максимальная высота", "Max height"),
         ("opacity", "Прозрачность", "Opacity"),
         ("glow", "Свечение", "Glow"),
         ("blur", "Размытие", "Blur"),
@@ -496,9 +531,17 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     ];
     for (key, ru, en) in sliders {
         let label = tr(&m.lang, ru, en);
-        let unit = match key {
-            "font_size" | "blur" | "radius" | "margin_x" | "margin_y" => "px",
-            _ => "",
+        let value = get_slider(&m.app, key);
+        let int_unit = match key {
+            "font_size" | "blur" | "radius" | "margin_x" | "margin_y" | "panel_width" | "panel_max_height" => true,
+            _ => false,
+        };
+        let text = if key == "panel_max_height" && value <= 0.0 {
+            format!("{}: {}", label, tr(&m.lang, "авто", "auto"))
+        } else if int_unit {
+            format!("{label}: {value:.0}")
+        } else {
+            format!("{label}: {value:.2}")
         };
         let track = draw_slider(
             &c,
@@ -506,10 +549,9 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
             pane_x + 4.0,
             y,
             pane_w - 8.0,
-            &label,
-            get_slider(&m.app, key),
+            &text,
+            value,
             slider_range(key),
-            unit,
         );
         regions.push(Region { rect: track, ctrl: Ctrl::Slider(key) });
         y += 52.0;
@@ -572,12 +614,26 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         });
         y += 30.0;
     }
-    // «Система» — desktop prefs (UAC + click-through)
+    // «Система» — desktop prefs (layer + UAC + click-through)
     y += 16.0;
     {
         let label = tr(&m.lang, "Система", "System");
         c.fonts.draw(&mut buf, pane_x + 4.0, y, &label, 13.0, true, pal.accent);
         y += 26.0;
+    }
+    {
+        let label = tr(&m.lang, "Поверх всех окон", "Over all windows");
+        let value = match m.desktop.overlay_layer.as_str() {
+            "panel" => tr(&m.lang, "Панель", "Panel"),
+            "screen" => tr(&m.lang, "Во весь экран", "Full screen"),
+            _ => tr(&m.lang, "Полноэкранное", "Fullscreen"),
+        };
+        draw_cycle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + pane_w - 144.0, y, w: 140.0, h: 24.0 },
+            ctrl: Ctrl::Cycle("overlay_layer"),
+        });
+        y += 36.0;
     }
     let sys_rows: [(&str, &str, &str); 2] = [
         ("elevate", "Запуск от имени администратора", "Run as administrator"),
@@ -685,6 +741,7 @@ fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
             crate::json::obj(vec![
                 ("elevate", crate::json::Json::b(d.elevate)),
                 ("clickThrough", crate::json::Json::b(d.click_through)),
+                ("overlayLayer", crate::json::Json::s(d.overlay_layer.clone())),
             ]),
         ),
     ]);
@@ -826,7 +883,7 @@ mod tests {
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 8);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 10);
     }
 }
 

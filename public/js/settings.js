@@ -18,6 +18,8 @@
     radius: 16,
     scale: 1,
     fontSize: 13,
+    panelWidth: 292,
+    panelMaxHeight: 0,
     corner: 'tr',
     marginX: 18,
     marginY: 18,
@@ -103,6 +105,8 @@
     radius: [0, 26],
     scale: [0.75, 1.5],
     fontSize: [11, 18],
+    panelWidth: [200, 600],
+    panelMaxHeight: [0, 1000],
     marginX: [0, 20000],
     marginY: [0, 20000],
     chatDelay: [2, 60],
@@ -227,6 +231,16 @@
     root.setProperty('--radius', `${a.radius}px`);
     root.setProperty('--scale', a.scale);
     root.setProperty('--font-size', `${a.fontSize}px`);
+    root.setProperty('--panel-w', `${Math.round(Number(a.panelWidth) || 292)}px`);
+    // 0 = «авто»: the panel is as tall as its content needs.
+    const maxH = Math.max(0, Math.round(Number(a.panelMaxHeight) || 0));
+    root.setProperty('--panel-max-h', maxH > 0 ? `${maxH}px` : 'none');
+    if (maxH > 0) {
+      // Capped: the roster scrolls inside the panel, so nothing else limits it.
+      root.setProperty('--list-max-h', 'none');
+    } else {
+      root.removeProperty('--list-max-h');
+    }
     const clamp = panelClamp();
     const mx = Math.min(Number(a.marginX) || 0, clamp.maxX);
     const my = Math.min(Number(a.marginY) || 0, clamp.maxY);
@@ -290,7 +304,24 @@
     if (key === 'opacity' || key === 'glow' || key === 'scale') return `${Math.round(value * 100)}%`;
     if (key === 'chatDelay' || key === 'eventsDelay') return `${value} s`;
     if (key === 'eventsCount') return `${value}`;
+    if (key === 'panelMaxHeight' && Number(value) <= 0) return window.I18N?.t('sizeAuto') || 'auto';
     return `${value}px`;
+  }
+
+  // The desktop shell shrinks the overlay window down to the panel (v1.4.5
+  // memory optimization), so inside the overlay page `window.innerWidth` is
+  // only «panel + padding» and NOT the surface the panel is placed on. Every
+  // clamp that uses the viewport (apply, drag, sliders) therefore snapped the
+  // panel back to its corner as soon as the window got cropped. The real work
+  // area arrives with the /api/overlay/bounds reply — app.js feeds it here.
+  const SURFACE = { w: 0, h: 0 };
+
+  /** Size of the surface the panel lives on (display work area). */
+  function surfaceSize() {
+    return {
+      w: SURFACE.w || Number(window.innerWidth) || Number(window.screen?.availWidth) || 1920,
+      h: SURFACE.h || Number(window.innerHeight) || Number(window.screen?.availHeight) || 1080,
+    };
   }
 
   // Margin sliders follow the user's screen size: the overlay may be dragged
@@ -301,7 +332,7 @@
     const sw = Number(window.screen?.availWidth) || 1920;
     const sh = Number(window.screen?.availHeight) || 1080;
     boundsCache = {
-      maxX: Math.max(0, Math.round(sw) - (panelW || 292)),
+      maxX: Math.max(0, Math.round(sw) - panelWidth()),
       maxY: Math.max(0, Math.round(sh) - (panelH || 140)),
     };
     try {
@@ -311,7 +342,7 @@
           const list = body?.displays || [];
           const d = list.find((x) => x.primary) || list[0];
           if (d?.width && d?.height) {
-            const pw = body?.panelSize?.w || panelW || 292;
+            const pw = body?.panelSize?.w || panelWidth();
             const ph = body?.panelSize?.h || panelH || 140;
             boundsCache = {
               maxX: Math.max(0, Math.round(d.width) - pw),
@@ -338,16 +369,20 @@
     boundsCache = null;
   }
 
-  /** Viewport minus the panel size — the panel must never leave the surface
-   *  it lives in. window.innerWidth/innerHeight match the drag handler's
-   *  bounds exactly (the overlay window on desktop, the browser source in
-   *  OBS), so a dropped panel never snaps elsewhere on apply. */
+  /** Configured (or measured) panel width — the margin clamp needs it. */
+  function panelWidth() {
+    return panelW || Math.round(Number(appearance.panelWidth) || 292);
+  }
+
+  /** Surface minus the panel size — the panel must never leave the surface it
+   *  lives on. surfaceSize() matches the drag handler's bounds exactly (the
+   *  display work area on desktop, the browser source in OBS), so a dropped
+   *  panel never snaps elsewhere on the next apply(). */
   function panelClamp() {
-    const vw = Number(window.innerWidth) || Number(window.screen?.availWidth) || 1920;
-    const vh = Number(window.innerHeight) || Number(window.screen?.availHeight) || 1080;
+    const s = surfaceSize();
     return {
-      maxX: Math.max(0, vw - (panelW || 292)),
-      maxY: Math.max(0, vh - (panelH || 140)),
+      maxX: Math.max(0, s.w - panelWidth()),
+      maxY: Math.max(0, s.h - (panelH || 140)),
     };
   }
 
@@ -593,6 +628,28 @@
         paintControls();
       });
     },
+    /** Apply several settings at once (one save, one push to the server). */
+    setMany,
+    /** Re-apply the current appearance to CSS (snap back after a cancelled drag). */
+    reapply() {
+      recompute();
+      apply();
+    },
+    /**
+     * Real overlay surface (display work area) — set by the desktop shell's
+     * bounds reply. Clamping the placement against the (cropped) viewport
+     * used to drag the panel back to its corner on every save.
+     */
+    setSurface(w, h) {
+      const nw = Math.max(0, Math.round(Number(w) || 0));
+      const nh = Math.max(0, Math.round(Number(h) || 0));
+      if (nw === SURFACE.w && nh === SURFACE.h) return;
+      SURFACE.w = nw;
+      SURFACE.h = nh;
+      apply();
+    },
+    /** Read the surface the panel is placed on (see setSurface). */
+    surfaceSize,
     /** Server pushed its config (hello / config message). */
     syncServer(cfg) {
       const incoming = sanitize(cfg?.appearance);

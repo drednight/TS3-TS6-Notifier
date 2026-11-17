@@ -225,6 +225,8 @@ pub trait Host {
     fn set_interactive(&mut self, on: bool);
     fn open_url(&self, url: &str);
     fn work_area(&self) -> (f64, f64, f64, f64);
+    /// Full bounds of the target monitor ('screen'/'fullscreen' layer modes).
+    fn screen_area(&self) -> (f64, f64, f64, f64);
 }
 
 /// Headless host — tests and non-windows builds.
@@ -255,6 +257,9 @@ impl Host for HeadlessHost {
     fn work_area(&self) -> (f64, f64, f64, f64) {
         (0.0, 0.0, 1920.0, 1080.0)
     }
+    fn screen_area(&self) -> (f64, f64, f64, f64) {
+        (0.0, 0.0, 1920.0, 1080.0)
+    }
 }
 
 /* ---------------- window loop ---------------- */
@@ -265,6 +270,10 @@ pub struct Overlay {
     fonts: Fonts,
     icons: Icons,
     whisper_seen: HashMap<String, u64>,
+    /// v1.4.12: outside whisperers (another channel) with their own linger.
+    outside_whisper: HashMap<String, (UserState, u64)>,
+    /// roster scroll inside a height-capped panel (panelMaxHeight)
+    roster_scroll: f32,
     pending: Option<(f64, f64)>,
     saved_margins: Option<(f64, f64)>,
     dragging: bool,
@@ -280,6 +289,8 @@ impl Overlay {
             fonts: Fonts::load(),
             icons: Icons::load(),
             whisper_seen: HashMap::new(),
+            outside_whisper: HashMap::new(),
+            roster_scroll: 0.0,
             pending: None,
             saved_margins: None,
             dragging: false,
@@ -313,11 +324,38 @@ impl Overlay {
 
         let all = roster_rows(&state.users, &a);
         let linger = (a.whisper_delay.max(0.0) * 1000.0) as u64;
-        let (rows, whisperers) = if a.show_whispers {
+        let (rows, mut whisperers) = if a.show_whispers {
             split_whisper(all, &mut self.whisper_seen, now_ms, linger)
         } else {
             (all, Vec::new())
         };
+        if a.show_whispers {
+            // v1.4.12: people whispering from ANOTHER channel never reach the
+            // roster — merge them into the whisper section with the same linger.
+            for u in state.whisperers.iter() {
+                self.outside_whisper.insert(u.id.clone(), (u.clone(), now_ms));
+            }
+            self.outside_whisper
+                .retain(|_, (_, at)| now_ms.saturating_sub(*at) <= linger.max(crate::model::WHISPER_GRACE_MS));
+            let mut outsiders: Vec<UserState> = self.outside_whisper.values().map(|(u, _)| u.clone()).collect();
+            outsiders.sort_by(|a, b| a.nickname.cmp(&b.nickname));
+            for u in outsiders.iter_mut() {
+                // sub-line: where the whisper comes from (web shows a tooltip)
+                if let Some(ch) = u.whisper_channel.clone() {
+                    if !ch.is_empty() {
+                        u.away_message = if lang == "en" {
+                            format!("Whisper from «{}»", ch)
+                        } else {
+                            format!("Шёпот из канала «{}»", ch)
+                        };
+                        u.away = true; // sub row styling
+                    }
+                }
+            }
+            whisperers.extend(outsiders);
+        } else {
+            self.outside_whisper.clear();
+        }
         let groups: Vec<(i64, String)> = state
             .groups
             .iter()
@@ -351,9 +389,12 @@ impl Overlay {
             lang,
             move_mode,
             now_ms,
+            roster_scroll: self.roster_scroll,
             work_h: host.work_area().3 as f32,
         };
         let frame = render_frame(&inp);
+        // auto-follow the first talking row inside a capped panel
+        self.roster_scroll = frame.scroll_to;
 
         // placement (css px margins; frame sizes are scaled css px)
         let work = host.work_area();
@@ -367,7 +408,27 @@ impl Overlay {
         self.last_size = (pw, ph);
         // window rect includes the shadow margin
         let pad = (SHADOW_PAD * a.scale.clamp(0.5, 3.0) as f32) as f64;
-        host.present(&frame.buf, frame.panel_w, frame.panel_h, px - pad, py - pad);
+        let origin = (px - pad, py - pad);
+        let layer = self
+            .app
+            .store
+            .lock()
+            .unwrap()
+            .get()
+            .desktop
+            .overlay_layer
+            .clone();
+        if layer == "panel" {
+            // v1.4.5 memory saver: the window hugs the panel
+            host.present(&frame.buf, frame.panel_w, frame.panel_h, origin.0, origin.1);
+        } else {
+            // 'screen'/'fullscreen': the window covers the WHOLE monitor, so
+            // Windows keeps it above borderless/fullscreen games (v1.4.13).
+            let (ax, ay, aw, ah) = host.screen_area();
+            let mut big = crate::render::Buf::new(aw as i32, ah as i32);
+            big.blit_buf((origin.0 - ax).round() as i32, (origin.1 - ay).round() as i32, &frame.buf);
+            host.present(&big, aw as f32, ah as f32, ax, ay);
+        }
 
         // input
         let events = host.pump();
@@ -377,8 +438,10 @@ impl Overlay {
         for ev in events {
             match ev {
                 Ev::Click(x, y) => {
+                    let lx = x as f64 - origin.0;
+                    let ly = y as f64 - origin.1;
                     for (rect, hit) in &frame.hits {
-                        if rect.contains(x, y) {
+                        if rect.contains(lx as f32, ly as f32) {
                             match hit {
                                 Hit::Gear => {
                                     #[cfg(any(windows, tsn_win32))]
@@ -407,6 +470,9 @@ impl Overlay {
                     let (mmx, mmy) = margins_from_pos(work, &a.corner, npx, npy, pw, ph);
                     let (mmx, mmy) = clamp_margins(work, pw, ph, mmx, mmy);
                     self.pending = Some((mmx, mmy));
+                }
+                Ev::Wheel(dy) => {
+                    self.roster_scroll = (self.roster_scroll - dy).max(0.0);
                 }
                 Ev::DragEnd => {
                     if self.dragging {
@@ -626,6 +692,11 @@ pub(crate) mod win32 {
         fn ReleaseDC(w: *mut c_void, dc: *mut c_void) -> i32;
         fn SystemParametersInfoW(a: u32, u: u32, p: *mut c_void, w: u32) -> i32;
         fn ClientToScreen(w: *mut c_void, p: *mut POINT) -> i32;
+        fn MonitorFromWindow(w: *mut c_void, flags: u32) -> *mut c_void;
+        fn SetWindowsHookExW(id: i32, proc: *mut c_void, inst: *mut c_void, tid: u32) -> *mut c_void;
+        fn CallNextHookEx(h: *mut c_void, code: i32, w: usize, l: isize) -> isize;
+        fn UnhookWindowsHookEx(h: *mut c_void) -> i32;
+        fn GetMonitorInfoW(m: *mut c_void, info: *mut MONITORINFO) -> i32;
         fn GetMessageW(m: *mut MSG, w: *mut c_void, min: u32, max: u32) -> i32;
         fn LoadIconW(inst: *mut c_void, name: *const u16) -> *mut c_void;
         fn CreateIconIndirect(info: *const ICONINFO) -> *mut c_void;
@@ -637,6 +708,17 @@ pub(crate) mod win32 {
     }
 
     const HWND_MESSAGE: *mut c_void = -3isize as *mut c_void;
+    const MONITOR_DEFAULTTOPRIMARY: u32 = 2;
+    const WH_MOUSE_LL: i32 = 14;
+    const WM_MOUSEWHEEL: u32 = 0x020A;
+
+    #[repr(C)]
+    struct MONITORINFO {
+        cb_size: u32,
+        rc_monitor: RECT,
+        rc_work: RECT,
+        dw_flags: u32,
+    }
 
     #[cfg_attr(windows, link(name = "kernel32"))]
     extern "system" {
@@ -755,8 +837,34 @@ pub(crate) mod win32 {
     const SPI_GETWORKAREA: u32 = 0x0030;
     const IDC_ARROW: usize = 32512;
 
+    /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta).
+    static WHEELS: std::sync::Mutex<Vec<(POINT, f32)>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "system" fn mouse_ll_proc(code: i32, w: usize, l: isize) -> isize {
+        if code >= 0 && w as u32 == WM_MOUSEWHEEL {
+            let info = &*(l as *const MSLLHOOKSTRUCT);
+            let delta = ((info.mouse_data >> 16) & 0xffff) as u16 as i16 as f32;
+            let mut q = WHEELS.lock().unwrap();
+            if q.len() < 32 {
+                q.push((POINT { x: info.pt.x, y: info.pt.y }, delta / 120.0 * 40.0));
+            }
+        }
+        CallNextHookEx(std::ptr::null_mut(), code, w, l)
+    }
+
+    #[repr(C)]
+    struct MSLLHOOKSTRUCT {
+        pt: POINT,
+        mouse_data: u32,
+        flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
+
     struct WinHost {
         hwnd: *mut c_void,
+        hook: *mut c_void,
+        last_rect: (f64, f64, f64, f64),
         mem_dc: *mut c_void,
         dib: *mut c_void,
         dib_bits: *mut u8,
@@ -810,8 +918,16 @@ pub(crate) mod win32 {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
+            let hook = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                mouse_ll_proc as usize as *mut c_void,
+                std::ptr::null_mut(),
+                0,
+            );
             WinHost {
                 hwnd,
+                hook,
+                last_rect: (0.0, 0.0, 0.0, 0.0),
                 mem_dc: std::ptr::null_mut(),
                 dib: std::ptr::null_mut(),
                 dib_bits: std::ptr::null_mut(),
@@ -866,6 +982,7 @@ pub(crate) mod win32 {
 
     impl Host for WinHost {
         fn present(&mut self, buf: &Buf, _pw: f32, _ph: f32, win_x: f64, win_y: f64) {
+            self.last_rect = (win_x, win_y, buf.w as f64, buf.h as f64);
             unsafe {
                 self.ensure_surface(buf.w, buf.h);
                 // RGBA -> BGRA
@@ -913,6 +1030,23 @@ pub(crate) mod win32 {
 
         fn pump(&mut self) -> Vec<Ev> {
             let mut out = Vec::new();
+            {
+                // wheel captured by the LL hook — only events over OUR window
+                let mut kept: Vec<(POINT, f32)> = Vec::new();
+                let (rx, ry, rw, rh) = self.last_rect;
+                for (pt, delta) in std::mem::take(&mut *WHEELS.lock().unwrap()) {
+                    let inside = pt.x as f64 >= rx
+                        && pt.x as f64 <= rx + rw
+                        && pt.y as f64 >= ry
+                        && pt.y as f64 <= ry + rh;
+                    if inside {
+                        out.push(Ev::Wheel(delta));
+                    } else if kept.len() < 32 {
+                        kept.push((pt, delta));
+                    }
+                }
+                *WHEELS.lock().unwrap() = kept;
+            }
             unsafe {
                 let mut msg: MSG = std::mem::zeroed();
                 while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
@@ -974,6 +1108,23 @@ pub(crate) mod win32 {
                     std::ptr::null(),
                     1,
                 );
+            }
+        }
+
+        fn screen_area(&self) -> (f64, f64, f64, f64) {
+            unsafe {
+                let mon = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY);
+                let mut mi = MONITORINFO {
+                    cb_size: std::mem::size_of::<MONITORINFO>() as u32,
+                    rc_monitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                    rc_work: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                    dw_flags: 0,
+                };
+                if !mon.is_null() && GetMonitorInfoW(mon, &mut mi) != 0 {
+                    let r = mi.rc_monitor;
+                    return (r.left as f64, r.top as f64, (r.right - r.left) as f64, (r.bottom - r.top) as f64);
+                }
+                self.work_area()
             }
         }
 

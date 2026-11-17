@@ -218,6 +218,21 @@ impl Buf {
     }
 
     /// CSS-like opacity over a backdrop: lerp colors+alpha toward `towards`.
+    /// Blit another buffer with straight-alpha blending (screen-layer mode).
+    pub fn blit_buf(&mut self, dx: i32, dy: i32, src: &Buf) {
+        for y in 0..src.h {
+            for x in 0..src.w {
+                let idx = ((y * src.w + x) * 4) as usize;
+                let a = src.px[idx + 3];
+                if a == 0 {
+                    continue;
+                }
+                let c = crate::theme::Rgba([src.px[idx], src.px[idx + 1], src.px[idx + 2], a]);
+                self.blend_px(dx + x, dy + y, c);
+            }
+        }
+    }
+
     pub fn fade_rect(&mut self, x: f32, y: f32, w: f32, h: f32, f: f32, towards: Rgba) {
         let f = f.clamp(0.0, 1.0);
         if f >= 1.0 {

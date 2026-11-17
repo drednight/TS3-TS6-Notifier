@@ -9,6 +9,18 @@
   const rows = new Map(); // userId -> { el, avatar, ini, pip, nick, sub, badges, eq, sig }
   const leavingTimers = new Map();
 
+  /* v1.4.12: how the desktop overlay window is layered. 'panel' hugs the panel
+   * (memory saver) and is covered by any borderless/fullscreen game; the
+   * fullscreen modes keep the window display-sized so it stays on top. */
+  function overlayLayer() {
+    const v = config?.desktop?.overlayLayer;
+    return v === 'panel' || v === 'fullscreen' ? v : 'screen';
+  }
+  /** True when the window covers the whole display (no cropping allowed). */
+  function fullLayerMode() {
+    return overlayLayer() !== 'panel';
+  }
+
   /* ---------------- static icon injection ---------------- */
 
   function injectIcons() {
@@ -115,6 +127,7 @@
       u.talking, u.whispering, u.inputMuted, u.outputMuted, u.away, u.awayMessage,
       u.channelCommander, u.prioritySpeaker, u.isSelf, u.nickname,
       u.avatarHash, u.serverGroups, iconUrl, classKey, a.eqStyle, a.showBadges, a.compact, window.I18N.lang,
+      u.whisperChannel,
     ].join('|');
     if (sig === pack.sig) return;
     pack.sig = sig;
@@ -150,6 +163,8 @@
 
     pack.nick.textContent = u.nickname;
     pack.nick.dataset.you = t('you');
+    // An outside whisperer is not in your channel — say where they speak from.
+    pack.el.title = u.whisperChannel ? t('whisperFrom').replace('{c}', u.whisperChannel) : '';
 
     const sub = u.away && u.awayMessage && !a.compact ? u.awayMessage : '';
     pack.sub.hidden = !sub;
@@ -175,6 +190,31 @@
   }
 
   const whisperSeen = new Map(); // id -> last moment the user whispered
+  // v1.4.12: people who whisper from ANOTHER channel never reach the roster —
+  // keep their last known record so the row can fade out like any other.
+  const whisperCache = new Map(); // id -> UserState of an outside whisperer
+  let whisperTick = 0;
+
+  /**
+   * Outside whisperers (`state.whisperers`) merged with the local fade cache:
+   * they keep the same «whisperDelay» linger as in-channel whisperers even
+   * after the connector drops them from the state.
+   */
+  function outsideWhisperers(nowTs, whisperMs) {
+    const live = state?.whisperers || [];
+    for (const u of live) {
+      if (u && u.id) {
+        whisperCache.set(u.id, u);
+        whisperSeen.set(u.id, nowTs);
+      }
+    }
+    const out = [];
+    for (const [id, u] of whisperCache) {
+      if (nowTs - (whisperSeen.get(id) || 0) < whisperMs) out.push({ ...u, whispering: true });
+      else whisperCache.delete(id);
+    }
+    return out;
+  }
 
   function render() {
     const a = Settings.appearance;
@@ -217,11 +257,23 @@
       if (u.whispering) whisperSeen.set(u.id, nowTs);
       return u.whispering || nowTs - (whisperSeen.get(u.id) || 0) < whisperMs;
     };
-    const whisperActive = a.showWhispers && users.some(whisperNow);
+    // Outside whisperers (another channel) join the whisper section only —
+    // they are NOT part of the channel roster or the user count.
+    const outsiders = a.showWhispers ? outsideWhisperers(nowTs, whisperMs) : (whisperCache.clear(), []);
+    // No state event may follow the last whisper — re-render once so the row
+    // really fades out instead of hanging around.
+    if (outsiders.length && !whisperTick) {
+      whisperTick = setTimeout(() => {
+        whisperTick = 0;
+        render();
+      }, Math.max(300, whisperMs));
+    }
+    const shown = outsiders.length ? users.concat(outsiders) : users;
+    const whisperActive = a.showWhispers && shown.some(whisperNow);
     whisperBlock.hidden = !whisperActive;
     const containerFor = (u) => (a.showWhispers && whisperNow(u) ? whisperList : list);
     const seen = new Set();
-    for (const u of users) {
+    for (const u of shown) {
       seen.add(u.id);
       let pack = rows.get(u.id);
       if (!pack) {
@@ -239,7 +291,7 @@
     }
 
     // Keep DOM order in sync with the sorted list (talking-first etc.).
-    for (const u of users) {
+    for (const u of shown) {
       const pack = rows.get(u.id);
       if (pack) containerFor(u).appendChild(pack.el);
     }
@@ -599,6 +651,8 @@
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
     $('overlayWindowToggle').checked = config.desktop?.overlayWindow !== false;
+    const layerSel = $('overlayLayerSelect');
+    if (layerSel) layerSel.value = overlayLayer();
     const obsUrl = `${location.origin}/?clean=1`;
     const obs = $('obsHint');
     if (obs) obs.textContent = t('obsHint').replace('{url}', obsUrl);
@@ -656,6 +710,16 @@
     $('overlayWindowToggle').addEventListener('change', () => {
       putConfig({ desktop: { overlayWindow: $('overlayWindowToggle').checked } });
     });
+
+    // v1.4.13: 'panel' saves memory, the display-wide modes stay above games.
+    const layerSel = $('overlayLayerSelect');
+    if (layerSel) {
+      layerSel.addEventListener('change', () => {
+        const v = layerSel.value;
+        if (config) config.desktop = { ...(config.desktop || {}), overlayLayer: v };
+        putConfig({ desktop: { overlayLayer: v } });
+      });
+    }
   }
 
   function wireMoreTab() {
@@ -863,6 +927,21 @@
         // Appearance flags (events feed, unread badge, elements) take effect
         // immediately — one rAF-coalesced re-render.
         scheduleRender();
+        // A size/appearance change coming from another window: re-measure the
+        // panel so the cropped desktop window follows it.
+        if (isCleanMode) {
+          // A layer switch moves the window itself (cropped ↔ whole display),
+          // so the old crop offset is meaningless — start from zero and let
+          // the shell answer with the new one.
+          if (lastLayer !== null && lastLayer !== overlayLayer()) {
+            cropX = 0;
+            cropY = 0;
+            applyCropVars();
+          }
+          lastLayer = overlayLayer();
+          lastBoundsSig = '';
+          scheduleBounds();
+        }
       } else if (msg.type === 'move-mode') {
         const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
         if (want) enterMoveMode();
@@ -915,6 +994,7 @@
    * transparent layer is never composited. The page reports the panel rect in
    * screen-work-area coordinates; the shell answers with the crop applied. */
   const isCleanMode = Settings.clean;
+  let lastLayer = null; // last known overlay layer mode (see overlayLayer())
   // Desktop window token (?w=...). OBS browser sources load the same page
   // without it and must never be cropped.
   const winToken = new URLSearchParams(location.search).get('w') || '';
@@ -958,6 +1038,11 @@
           if (b.screenW) document.documentElement.style.setProperty('--screen-w', `${b.screenW}px`);
           if (b.screenH) document.documentElement.style.setProperty('--screen-h', `${b.screenH}px`);
           applyCropVars();
+          // The window is cropped to the panel, so the viewport is NOT the
+          // placement surface anymore — hand the real work area to the
+          // settings model or every apply() would clamp the panel back into
+          // its corner.
+          Settings.setSurface(b.screenW, b.screenH);
         }
       })
       .catch(() => {});
@@ -979,6 +1064,16 @@
       subtree: true,
       attributes: true,
       characterData: true,
+    });
+    // Size changes (panel width / max height, fonts, scale…) are layout or
+    // CSS-var changes the observer above never sees — without a fresh report
+    // the cropped desktop window keeps its old size and clips the panel.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(scheduleBounds).observe($('panel'));
+    }
+    Settings.onChange(() => {
+      lastBoundsSig = '';
+      scheduleBounds();
     });
     window.addEventListener('resize', () => {
       lastBoundsSig = '';
@@ -1013,7 +1108,10 @@
   function enterMoveMode() {
     moveMode = true;
     document.body.classList.add('move-mode');
-    if (isCleanMode) {
+    // In 'panel' mode the shell re-fits the window to the whole work area, so
+    // the crop is zero while dragging. A display-sized window keeps its own
+    // (work-area ↔ monitor) offset — zeroing it would shift the panel away.
+    if (isCleanMode && !fullLayerMode()) {
       cropX = 0;
       cropY = 0;
       applyCropVars();
@@ -1046,13 +1144,13 @@
   function applyPendingPosition(save) {
     const moved = pendingX !== null || pendingY !== null;
     if (save && moved) {
-      Settings.appearance.marginX = pendingX;
-      Settings.appearance.marginY = pendingY;
-      putConfig({ appearance: { ...Settings.appearance, marginX: pendingX, marginY: pendingY } });
+      // Save through the settings model: the value lands in the local cache,
+      // in CSS and on the server in one step, so a later config echo cannot
+      // roll the panel back to the corner it was dragged away from.
+      Settings.setMany({ marginX: pendingX, marginY: pendingY });
     } else if (moved) {
       // Snap back to the last saved position.
-      document.documentElement.style.setProperty('--margin-x', `${Number(Settings.appearance.marginX) || 0}px`);
-      document.documentElement.style.setProperty('--margin-y', `${Number(Settings.appearance.marginY) || 0}px`);
+      Settings.reapply();
     }
     exitMoveMode();
   }
@@ -1091,8 +1189,11 @@
         const bottomSide = corner === 'bl' || corner === 'br';
         // The panel bumps into the screen edges and never leaves them — the
         // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
-        const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
-        const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
+        // NOTE: the surface, not the viewport — the desktop window is cropped
+        // to the panel, so innerWidth/innerHeight are far too small here.
+        const surf = Settings.surfaceSize();
+        const maxX = Math.max(0, surf.w - (panel?.offsetWidth || 0));
+        const maxY = Math.max(0, surf.h - (panel?.offsetHeight || 0));
         curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
         // Bottom-anchored corners measure the margin from the bottom edge —
         // dragging down must shrink it (the panel follows the mouse).
