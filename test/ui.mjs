@@ -297,14 +297,29 @@ try {
 
     // v1.0.2 feature round
     check('settings: margin X/Y sliders', !!doc.querySelector('[data-slider="marginX"]') && !!doc.querySelector('[data-slider="marginY"]'));
-    check('settings: margin sliders follow the screen size', (() => {
+    check('settings: margin sliders bounded by screen minus panel', (() => {
       const ix = doc.querySelector('[data-slider="marginX"] input[type="range"]');
       const iy = doc.querySelector('[data-slider="marginY"] input[type="range"]');
-      return Number(ix?.max) >= 500 && Number(iy?.max) >= 500 && Number(ix.max) === Math.round(dom.window.screen.availWidth || 1920);
+      const sw = Math.round(dom.window.screen.availWidth || 1920);
+      return Number(ix?.max) >= 500 && Number(ix.max) <= sw && Number(iy?.max) >= 500;
     })(), `x=${doc.querySelector('[data-slider="marginX"] input')?.max} y=${doc.querySelector('[data-slider="marginY"] input')?.max}`);
-    check('settings: move-hotkey field present', !!doc.getElementById('moveHotkey'));
-    check('settings: overlay-window toggle present', !!doc.getElementById('overlayWindowToggle'));
+    // v1.1.14: the move hotkey was replaced by a button on the Appearance tab
+    check('settings: move-overlay button under the position controls', !!doc.getElementById('moveOverlayBtn') && !doc.getElementById('moveHotkey'));
+    // «Ещё» tab: updates + OBS
+    check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
+    check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
+    check('settings: OBS launch button + toggle in «Ещё»', !!doc.getElementById('copyObsUrlBtn') && !!doc.getElementById('overlayWindowToggle'));
     check('settings: OBS browser-source hint shows the URL', /\/\?clean=1/.test(doc.getElementById('obsHint')?.textContent || ''), doc.getElementById('obsHint')?.textContent);
+
+    // v1.1.14: placement is clamped so the panel never leaves the screen
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, marginX: 99999, marginY: 99999 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const clampedX = parseFloat(doc.documentElement.style.getPropertyValue('--margin-x'));
+    const clampedY = parseFloat(doc.documentElement.style.getPropertyValue('--margin-y'));
+    check('settings: margins clamp to the screen bounds', clampedX > 0 && clampedX < 99999 && clampedY > 0 && clampedY < 99999, `x=${clampedX} y=${clampedY}`);
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
@@ -387,7 +402,17 @@ try {
     h2.close();
   }
 
-  /* ---- 6. overlay click-through endpoint (desktop hook contract) ---- */
+  /* ---- 6. move-mode + update endpoints (desktop hook contracts) ---- */
+  {
+    const mv = await fetch(`${BASE}/api/overlay/move`, { method: 'POST' });
+    const mvBody = await mv.json();
+    check('server: overlay move endpoint answers', mv.ok && mvBody.ok === true, JSON.stringify(mvBody));
+    const up = await fetch(`${BASE}/api/update/check`, { method: 'POST' });
+    const upBody = await up.json();
+    check('server: update-check endpoint answers', up.ok && upBody.ok === true && upBody.applied === false, JSON.stringify(upBody));
+  }
+
+  /* ---- 7. overlay click-through endpoint (desktop hook contract) ---- */
   {
     const res = await fetch(`${BASE}/api/overlay/clickthrough`, {
       method: 'POST',

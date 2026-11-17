@@ -180,9 +180,12 @@
     root.setProperty('--radius', `${a.radius}px`);
     root.setProperty('--scale', a.scale);
     root.setProperty('--font-size', `${a.fontSize}px`);
-    root.setProperty('--margin', `${a.marginX}px`);
-    root.setProperty('--margin-x', `${a.marginX}px`);
-    root.setProperty('--margin-y', `${a.marginY}px`);
+    const clamp = panelClamp();
+    const mx = Math.min(Number(a.marginX) || 0, clamp.maxX);
+    const my = Math.min(Number(a.marginY) || 0, clamp.maxY);
+    root.setProperty('--margin', `${mx}px`);
+    root.setProperty('--margin-x', `${mx}px`);
+    root.setProperty('--margin-y', `${my}px`);
 
     document.body.dataset.theme = a.theme;
     document.body.dataset.corner = a.corner;
@@ -234,7 +237,8 @@
     if (boundsCache) return boundsCache;
     const sw = Number(window.screen?.availWidth) || 1920;
     const sh = Number(window.screen?.availHeight) || 1080;
-    boundsCache = { maxX: Math.round(sw), maxY: Math.round(sh) };
+    const c = panelClamp();
+    boundsCache = { maxX: Math.min(Math.round(sw), c.maxX), maxY: Math.min(Math.round(sh), c.maxY) };
     try {
       fetch('/api/displays')
         .then((r) => r.json())
@@ -242,7 +246,13 @@
           const list = body?.displays || [];
           const d = list.find((x) => x.primary) || list[0];
           if (d?.width && d?.height) {
-            boundsCache = { maxX: Math.round(d.width), maxY: Math.round(d.height) };
+            const panel = document.getElementById('panel');
+            const panelW = panel?.offsetWidth || 292;
+            const panelH = panel?.offsetHeight || 140;
+            boundsCache = {
+              maxX: Math.max(0, Math.round(d.width) - panelW),
+              maxY: Math.max(0, Math.round(d.height) - panelH),
+            };
             paintControls();
           }
         })
@@ -251,6 +261,19 @@
       /* plain web — screen fallback stays */
     }
     return boundsCache;
+  }
+
+  /** Screen bounds minus the panel size — the panel must never leave the screen. */
+  function panelClamp() {
+    const panel = document.getElementById('panel');
+    const screenW = Number(window.screen?.availWidth) || 1920;
+    const screenH = Number(window.screen?.availHeight) || 1080;
+    const panelW = panel?.offsetWidth || 292;
+    const panelH = panel?.offsetHeight || 140;
+    return {
+      maxX: Math.max(0, screenW - panelW),
+      maxY: Math.max(0, screenH - panelH),
+    };
   }
 
   function paintControls() {

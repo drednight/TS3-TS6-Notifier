@@ -442,7 +442,6 @@
     $('ts3Fields').classList.toggle('visible', config.source === 'ts3');
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
-    $('moveHotkey').value = config.desktop?.moveHotkey || 'CommandOrControl+Shift+M';
     $('overlayWindowToggle').checked = config.desktop?.overlayWindow !== false;
     const obsUrl = `${location.origin}/?clean=1`;
     const obs = $('obsHint');
@@ -487,14 +486,55 @@
       putConfig({ desktop: { elevate: $('elevateToggle').checked } });
     });
 
-    $('moveHotkey').addEventListener('change', () => {
-      const value = $('moveHotkey').value.trim() || 'CommandOrControl+Shift+M';
-      $('moveHotkey').value = value;
-      putConfig({ desktop: { moveHotkey: value } });
-    });
-
     $('overlayWindowToggle').addEventListener('change', () => {
       putConfig({ desktop: { overlayWindow: $('overlayWindowToggle').checked } });
+    });
+  }
+
+  function wireMoreTab() {
+    // version line
+    const ver = document.querySelector('.about-title .ver')?.textContent?.trim() || '';
+    $('updateVersion').textContent = ver;
+
+    $('checkUpdateBtn').addEventListener('click', () => {
+      $('updateStatus').textContent = t('updChecking');
+      fetch('/api/update/check', { method: 'POST' }).catch(() => {
+        $('updateStatus').textContent = t('updError');
+      });
+    });
+
+    $('copyObsUrlBtn').addEventListener('click', async () => {
+      const url = `${location.origin}/?clean=1`;
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        ok = true;
+      } catch {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = url;
+          document.body.appendChild(ta);
+          ta.select();
+          ok = document.execCommand('copy');
+          ta.remove();
+        } catch {
+          ok = false;
+        }
+      }
+      const btn = $('copyObsUrlBtn');
+      btn.textContent = ok ? '✓' : '!';
+      setTimeout(() => {
+        btn.textContent = t('copyObsUrlBtn');
+      }, 1500);
+    });
+
+    $('moveOverlayBtn').addEventListener('click', () => {
+      fetch('/api/overlay/move', { method: 'POST' }).catch(() => {});
+      const btn = $('moveOverlayBtn');
+      btn.textContent = '✓';
+      setTimeout(() => {
+        btn.textContent = t('moveOverlayBtn');
+      }, 1500);
     });
   }
 
@@ -545,6 +585,12 @@
       } else if (msg.type === 'move-mode') {
         if (moveMode) exitMoveMode();
         else enterMoveMode();
+      } else if (msg.type === 'update-status') {
+        const el = $('updateStatus');
+        if (el) {
+          const key = { checking: 'updChecking', available: 'updAvailable', latest: 'updLatest', downloaded: 'updDownloaded' }[msg.status] || 'updError';
+          el.textContent = t(key).replace('{v}', msg.version || '');
+        }
       } else if (msg.type === 'sound') {
         // Only the overlay page (clean mode) plays hotkey triggers —
         // otherwise open windows would double-play.
@@ -561,6 +607,7 @@
   injectIcons();
   Settings.init();
   wireConnectionTab();
+  wireMoreTab();
   /* ---------------- overlay move mode (drag with hotkey) ---------------- */
 
   function postClickthrough(ignore) {

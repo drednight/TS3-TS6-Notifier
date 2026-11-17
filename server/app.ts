@@ -23,6 +23,8 @@ export interface AppOptions {
   setOverlayClickThrough?: (ignore: boolean) => void;
   /** Try this port first (stable URL for OBS browser sources); falls back to a random one. */
   preferredPort?: number;
+  /** Desktop only: trigger an update check in the shell. */
+  checkUpdates?: () => void;
 }
 
 export interface AppHandle {
@@ -200,6 +202,24 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url.startsWith('/api/reconnect') && method === 'POST') {
       startConnector();
       json(res, 200, { ok: true });
+      return;
+    }
+
+    // The settings window arms overlay move mode (same signal as the tray).
+    if (url.startsWith('/api/overlay/move') && method === 'POST') {
+      broadcast({ type: 'move-mode' });
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    // Update check runs in the desktop shell (electron-updater).
+    if (url.startsWith('/api/update/check') && method === 'POST') {
+      try {
+        opts.checkUpdates?.();
+      } catch (err) {
+        log(`[server] update check failed: ${err}`);
+      }
+      json(res, 200, { ok: true, applied: !!opts.checkUpdates });
       return;
     }
 

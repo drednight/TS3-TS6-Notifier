@@ -15,6 +15,7 @@ import {
   globalShortcut,
   Menu,
   nativeImage,
+  Notification,
   screen,
   Tray,
 } from 'electron';
@@ -112,12 +113,35 @@ function setupAutoUpdate(): void {
     autoUpdater.setFeedURL({ provider: 'github', owner: 'drednight', repo: 'TS3-TS6-Notifier' });
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.on('checking-for-update', () => log('[update] checking for updates'));
-    autoUpdater.on('update-available', (info) => log(`[update] available: ${info.version}`));
-    autoUpdater.on('update-not-available', () => log('[update] already up to date'));
-    autoUpdater.on('update-downloaded', (info) => log(`[update] ${info.version} downloaded — installs on quit`));
-    autoUpdater.on('error', (err) => log('[update] error: ' + err));
-    void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+    autoUpdater.on('checking-for-update', () => {
+      log('[update] checking for updates');
+      handle?.broadcast({ type: 'update-status', status: 'checking' });
+    });
+    autoUpdater.on('update-available', (info) => {
+      log(`[update] available: ${info.version}`);
+      handle?.broadcast({ type: 'update-status', status: 'available', version: info.version });
+    });
+    autoUpdater.on('update-not-available', () => {
+      log('[update] already up to date');
+      handle?.broadcast({ type: 'update-status', status: 'latest' });
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      log(`[update] ${info.version} downloaded — installs on quit`);
+      handle?.broadcast({ type: 'update-status', status: 'downloaded', version: info.version });
+      try {
+        new Notification({
+          title: tr('updTitle'),
+          body: tr('updDownloaded').replace('{v}', info.version),
+        }).show();
+      } catch {
+        /* notification unavailable */
+      }
+    });
+    autoUpdater.on('error', (err) => {
+      log('[update] error: ' + err);
+      handle?.broadcast({ type: 'update-status', status: 'error' });
+    });
+    void autoUpdater.checkForUpdates().catch((err) => log('[update] check failed: ' + err));
     setInterval(() => {
       void autoUpdater.checkForUpdates().catch(() => {});
     }, 4 * 60 * 60 * 1000);
@@ -129,9 +153,10 @@ function setupAutoUpdate(): void {
 function checkForUpdatesNow(): void {
   if (!app.isPackaged) {
     log('[update] dev build — nothing to check');
+    handle?.broadcast({ type: 'update-status', status: 'error' });
     return;
   }
-  void autoUpdater.checkForUpdatesAndNotify().catch((err) => log('[update] check failed: ' + err));
+  void autoUpdater.checkForUpdates().catch((err) => log('[update] check failed: ' + err));
 }
 
 /* ---------------- elevation (Windows) ---------------- */
@@ -494,20 +519,72 @@ function registerSoundHotkeys(): void {
   }
 }
 
+/* ---------------- tray i18n ---------------- */
+
+const TRAY_STRINGS: Record<string, Record<string, string>> = {
+  ru: {
+    settings: 'Настройки…',
+    checkUpdates: 'Проверить обновления',
+    overlayWindow: 'Оверлей-окно',
+    copyUrl: 'Скопировать ссылку оверлея',
+    dataSource: 'Источник данных',
+    demo: 'Демо-режим',
+    ts3: 'TeamSpeak 3 (ClientQuery)',
+    ts6: 'TeamSpeak 6 (Remote Apps)',
+    reconnect: 'Переподключиться',
+    clickThrough: 'Клик-сквозной (закрепить оверлей)',
+    autostart: 'Запускать со старта',
+    showOverlay: 'Показывать оверлей',
+    quit: 'Выход',
+    updTitle: 'TS3-TS6 Notifier — обновление',
+    updDownloaded: 'Версия {v} скачана и установится при выходе из приложения.',
+  },
+  en: {
+    settings: 'Settings…',
+    checkUpdates: 'Check for updates',
+    overlayWindow: 'Overlay window',
+    copyUrl: 'Copy overlay URL',
+    dataSource: 'Data source',
+    demo: 'Demo mode',
+    ts3: 'TeamSpeak 3 (ClientQuery)',
+    ts6: 'TeamSpeak 6 (Remote Apps)',
+    reconnect: 'Reconnect',
+    clickThrough: 'Click-through (lock overlay)',
+    autostart: 'Launch at startup',
+    showOverlay: 'Show overlay',
+    quit: 'Quit',
+    updTitle: 'TS3-TS6 Notifier — update',
+    updDownloaded: 'Version {v} downloaded — installs when you quit the app.',
+  },
+};
+
+function tr(key: string): string {
+  const raw = handle?.store.get().appearance.language ?? 'auto';
+  let lang: string = raw === 'en' || raw === 'ru' ? raw : 'en';
+  if (raw !== 'en' && raw !== 'ru') {
+    try {
+      if (typeof app.getLocale === 'function' && app.getLocale().startsWith('ru')) lang = 'ru';
+    } catch {
+      /* locale unavailable */
+    }
+  }
+  return TRAY_STRINGS[lang]?.[key] ?? TRAY_STRINGS.en?.[key] ?? key;
+}
+
 function buildTrayMenu(): void {
   if (!tray || !handle) return;
   const cfg = handle.store.get();
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: 'Settings…',
+      label: tr('settings'),
       click: () => openSettings(),
     },
     {
-      label: 'Проверить обновления',
+      label: tr('checkUpdates'),
       click: () => checkForUpdatesNow(),
     },
     {
-      label: 'Оверлей-окно',
+      label: tr('overlayWindow'),
       type: 'checkbox',
       checked: handle?.store.get().desktop.overlayWindow !== false,
       click: () => {
@@ -518,7 +595,7 @@ function buildTrayMenu(): void {
       },
     },
     {
-      label: 'Скопировать ссылку оверлея',
+      label: tr('copyUrl'),
       click: () => copyOverlayUrl(),
     },
     // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
@@ -532,39 +609,39 @@ function buildTrayMenu(): void {
         ]),
     { type: 'separator' },
     {
-      label: 'Data source',
+      label: tr('dataSource'),
       submenu: [
-        { label: 'Demo mode', type: 'radio', checked: cfg.source === 'mock', click: () => setSource('mock') },
-        { label: 'TeamSpeak 3 (ClientQuery)', type: 'radio', checked: cfg.source === 'ts3', click: () => setSource('ts3') },
-        { label: 'TeamSpeak 6 (Remote Apps)', type: 'radio', checked: cfg.source === 'ts6', click: () => setSource('ts6') },
+        { label: tr('demo'), type: 'radio', checked: cfg.source === 'mock', click: () => setSource('mock') },
+        { label: tr('ts3'), type: 'radio', checked: cfg.source === 'ts3', click: () => setSource('ts3') },
+        { label: tr('ts6'), type: 'radio', checked: cfg.source === 'ts6', click: () => setSource('ts6') },
       ],
     },
     {
-      label: 'Reconnect',
+      label: tr('reconnect'),
       click: () => handle?.restartConnector(),
     },
     { type: 'separator' },
     {
-      label: 'Click-through (lock overlay)',
+      label: tr('clickThrough'),
       type: 'checkbox',
       checked: cfg.desktop.clickThrough,
       click: () => toggleClickThrough(),
     },
     {
-      label: 'Launch at startup',
+      label: tr('autostart'),
       type: 'checkbox',
       checked: cfg.desktop.autostart,
       click: () => toggleAutostart(),
     },
     {
-      label: 'Show overlay',
+      label: tr('showOverlay'),
       type: 'checkbox',
       checked: overlayVisible,
       click: () => setOverlayVisible(!overlayVisible),
     },
     { type: 'separator' },
     {
-      label: 'Quit',
+      label: tr('quit'),
       click: () => app.quit(),
     },
   ];
@@ -622,6 +699,7 @@ async function boot(): Promise<void> {
         overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
       }
     },
+    checkUpdates: () => checkForUpdatesNow(),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
@@ -640,6 +718,7 @@ async function boot(): Promise<void> {
   handle.events.on('config', () => fitOverlay());
   handle.events.on('config', () => registerMoveHotkey());
   handle.events.on('config', () => applyOverlayWindow());
+  handle.events.on('config', () => buildTrayMenu());
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });
