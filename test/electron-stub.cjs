@@ -31,8 +31,20 @@ class BrowserWindow {
     }));
   }
   setMenuBarVisibility() {}
-  setAlwaysOnTop() {}
+  setAlwaysOnTop(flag, level) {
+    console.log('[stub] alwaysOnTop =', !!flag, level || '');
+  }
   setVisibleOnAllWorkspaces() {}
+  setFullScreen(flag) {
+    this.fullscreen = !!flag;
+    console.log('[stub] fullscreen =', !!flag);
+  }
+  isFullScreen() {
+    return !!this.fullscreen;
+  }
+  isVisible() {
+    return this.visible !== false;
+  }
   setIgnoreMouseEvents(flag) {
     console.log('[stub] click-through =', !!flag);
   }
@@ -47,11 +59,15 @@ class BrowserWindow {
     if (ev === 'ready-to-show') setTimeout(cb, 50);
   }
   on() {}
-  show() {}
+  show() {
+    this.visible = true;
+  }
   showInactive() {
+    this.visible = true;
     console.log('[stub] overlay shown');
   }
   hide() {
+    this.visible = false;
     console.log('[stub] overlay hidden');
   }
   focus() {}
@@ -113,7 +129,8 @@ const electron = {
   Notification: class { show() {} on() {} },
   shell: { openExternal: async () => {} },
   screen: {
-    getPrimaryDisplay: () => ({ workArea }),
+    getPrimaryDisplay: () => ({ workArea, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, id: 1 }),
+    getAllDisplays: () => [{ workArea, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, id: 1, label: 'Stub', primary: true }],
     on: noop,
   },
   shell: { openExternal: noop },

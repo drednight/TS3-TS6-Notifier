@@ -139,6 +139,40 @@ try {
     check('overlay: whisper/chat containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed'));
     check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 18);
 
+    // v1.4.12: a whisper from ANOTHER channel — the speaker is not in the
+    // roster, so it must land in the whisper section under the channel list.
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        whisperers: [
+          { id: '900', nickname: 'Сосед', channelId: 77, talking: true, whispering: true, inputMuted: false, outputMuted: false, away: false, awayMessage: '', prioritySpeaker: false, channelCommander: false, isSelf: false, isQuery: false, avatarHash: '', serverGroups: '', whisperChannel: 'Соседний канал' },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    check('overlay: outside whisperer shows in the whisper section', !!doc.querySelector('#whisperList .row') && [...doc.querySelectorAll('#whisperList .nick')].some((n) => n.textContent === 'Сосед'), JSON.stringify([...doc.querySelectorAll('#whisperList .nick')].map((n) => n.textContent)));
+    check('overlay: whisper block opened by an outside whisperer', doc.getElementById('whisperBlock').hidden === false);
+    check('overlay: outside whisperer labelled with its channel', /Соседний канал/.test(doc.querySelector('#whisperList .row')?.title || ''), doc.querySelector('#whisperList .row')?.title);
+    check('overlay: outside whisperer is not in the channel roster', ![...doc.querySelectorAll('#userList .nick')].some((n) => n.textContent === 'Сосед'));
+    check('overlay: outside whisperer does not inflate the user count', doc.getElementById('userCount').textContent === '2', doc.getElementById('userCount').textContent);
+    // whisper section off → no outside rows at all
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showWhispers: false } } });
+    await new Promise((r) => setTimeout(r, 450));
+    check('overlay: whisper section toggle hides outside whisperers', doc.getElementById('whisperBlock').hidden === true && !doc.querySelector('#whisperList .row'));
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showWhispers: true, whisperDelay: 1 } } });
+    await new Promise((r) => setTimeout(r, 80));
+    // the connector drops it → the row lingers «whisperDelay», then fades out
+    FakeWS.last._emit({ type: 'state', state: { ...fakeState, whisperers: [] } });
+    await new Promise((r) => setTimeout(r, 80));
+    check('overlay: outside whisper row lingers after the state drops it', !!doc.querySelector('#whisperList .row'));
+    await new Promise((r) => setTimeout(r, 1400));
+    FakeWS.last._emit({ type: 'state', state: { ...fakeState, whisperers: [] } });
+    await new Promise((r) => setTimeout(r, 450)); // row-out animation
+    check('overlay: outside whisper row gone after the delay', !doc.querySelector('#whisperList .row') && doc.getElementById('whisperBlock').hidden === true, `rows=${doc.querySelectorAll('#whisperList .row').length}`);
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig } });
+    await new Promise((r) => setTimeout(r, 60));
+
     // v1.1.1: chat must be visible even in clean mode (the overlay window)
     FakeWS.last._emit({
       type: 'state',
@@ -399,6 +433,27 @@ try {
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
     check('settings: version line present', /v?\d+\.\d+\.\d+/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    // v1.4.13: «поверх всех окон» — the overlay must not sink behind a game
+    {
+      const sel = doc.getElementById('overlayLayerSelect');
+      const values = sel ? [...sel.options].map((o) => o.value).join(',') : '';
+      check('layer: three overlay modes offered', values === 'panel,screen,fullscreen', values);
+      check('layer: defaults to a display-sized window', sel?.value === 'screen', sel?.value);
+      if (sel) {
+        // fetch is stubbed in this harness — catch the outgoing PATCH instead.
+        let sent = '';
+        const realFetch = dom.window.fetch;
+        dom.window.fetch = (input, init) => {
+          if (String(input).includes('/api/config') && init && init.method === 'PUT') sent = String(init.body || '');
+          return realFetch(input, init);
+        };
+        sel.value = 'fullscreen';
+        sel.dispatchEvent(new dom.window.Event('change'));
+        await new Promise((r) => setTimeout(r, 700)); // putConfig debounces
+        dom.window.fetch = realFetch;
+        check('layer: the choice is sent to the server', /"overlayLayer":"fullscreen"/.test(sent), sent);
+      }
+    }
     // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
     check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
     check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
@@ -484,6 +539,78 @@ try {
     dom.window.close();
   }
 
+  /* ---- 4. v1.4.11: placement survives the cropped overlay window ---- */
+  {
+    const { dom, errors } = await bootPage(`${BASE}/?clean=1&w=tok-uitest`);
+    const doc = dom.window.document;
+    const S = dom.window.Settings;
+    check('v1.4.11: overlay page boots with a window token', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+    // Pretend the desktop shell already cropped the window down to the panel
+    // (v1.4.5): the viewport is tiny, the real work area arrives with the
+    // /api/overlay/bounds reply and is fed into the settings model.
+    try {
+      Object.defineProperty(dom.window, 'innerWidth', { value: 388, configurable: true });
+      Object.defineProperty(dom.window, 'innerHeight', { value: 236, configurable: true });
+    } catch {
+      /* jsdom refuses the override — the checks below simply use the default */
+    }
+    S.setSurface(1920, 1080);
+    const surf = S.surfaceSize();
+    check('v1.4.11: surface comes from the shell, not the cropped viewport', surf.w === 1920 && surf.h === 1080, JSON.stringify(surf));
+
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, marginX: 900, marginY: 700 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const appliedX = doc.documentElement.style.getPropertyValue('--margin-x');
+    const appliedY = doc.documentElement.style.getPropertyValue('--margin-y');
+    check(
+      'v1.4.11: a saved position is not dragged back into the corner by the crop',
+      appliedX === '900px' && appliedY === '700px',
+      `x=${appliedX} y=${appliedY}`,
+    );
+
+    // Drag + ✓ inside the cropped window: the new spot must stick.
+    FakeWS.last._emit({ type: 'move-mode', active: true });
+    await new Promise((r) => setTimeout(r, 30));
+    doc.getElementById('moveHandle').dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 140, clientY: 130 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 140, clientY: 130 }));
+    FakeWS.last._emit({ type: 'move-confirm' });
+    await new Promise((r) => setTimeout(r, 60));
+    check(
+      'v1.4.11: save keeps the dragged spot (clamp uses the surface)',
+      Number(S.appearance.marginX) === 960 && doc.documentElement.style.getPropertyValue('--margin-x') === '960px',
+      `model=${S.appearance.marginX} css=${doc.documentElement.style.getPropertyValue('--margin-x')}`,
+    );
+
+    // v1.4.11: user-tunable panel size
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, panelWidth: 420, panelMaxHeight: 320 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const rootStyle = doc.documentElement.style;
+    check(
+      'v1.4.11: panel width + max height apply as CSS vars',
+      rootStyle.getPropertyValue('--panel-w') === '420px' && rootStyle.getPropertyValue('--panel-max-h') === '320px' && rootStyle.getPropertyValue('--list-max-h') === 'none',
+      `w=${rootStyle.getPropertyValue('--panel-w')} h=${rootStyle.getPropertyValue('--panel-max-h')} list=${rootStyle.getPropertyValue('--list-max-h')}`,
+    );
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, panelMaxHeight: 0 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check(
+      'v1.4.11: max height 0 = auto (no cap, list caps itself)',
+      doc.documentElement.style.getPropertyValue('--panel-max-h') === 'none' && !doc.documentElement.style.getPropertyValue('--list-max-h'),
+      `h=${doc.documentElement.style.getPropertyValue('--panel-max-h')} list=${doc.documentElement.style.getPropertyValue('--list-max-h')}`,
+    );
+    dom.window.close();
+  }
+
   /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
   {
     const h2 = await startServer({
@@ -559,6 +686,77 @@ try {
   check('themes: duplicate theme selector removed', !/id="themeSeg"/.test(html) && !/themeGlass/.test(i18n));
   check('about: OBS tip line removed', !/aboutTip/.test(html) && !/aboutTip/.test(i18n));
   check('whisper: linger delay setting wired', !!/data-slider="whisperDelay"/.test(html) && !!DEFAULT_APPEARANCE.whisperDelay && /whisperSeen/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+}
+
+// v1.4.11: user-tunable panel size + placement that survives the cropped window
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('../public/css/overlay.css', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const stg = await fs.readFile(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const { DEFAULT_APPEARANCE } = await import('../server/model.ts');
+  const ru = i18n.indexOf('panelWidth');
+  const en = i18n.indexOf('panelWidth', ru + 1);
+  check('size: width + max-height sliders in the panel group', !!/data-slider="panelWidth"/.test(html) && !!/data-slider="panelMaxHeight"/.test(html));
+  check('size: defaults exist on the server (otherwise PUT drops them)', DEFAULT_APPEARANCE.panelWidth === 292 && DEFAULT_APPEARANCE.panelMaxHeight === 0);
+  check('size: labels exist in ru and en', ru > 0 && en > ru && /sizeAuto/.test(i18n));
+  check('size: panel width/max-height drive CSS vars', /--panel-w/.test(css) && /--panel-max-h/.test(css) && /#panel > \.user-list \{ flex: 1 1 auto/.test(css));
+  check('size: roster height is measured against the screen, not the cropped viewport', /--screen-h, 100vh/.test(css) && !/max-height: min\(52vh/.test(css));
+  check('size: settings model knows the new keys', /panelWidth: \[200, 600\]/.test(stg) && /panelMaxHeight: \[0, 1000\]/.test(stg));
+  // the bug: clamping the placement against the CROPPED window viewport
+  check('placement: shell surface replaces the viewport in the clamp', /function panelClamp\(\)[\s\S]{0,200}surfaceSize\(\)/.test(stg));
+  check('placement: bounds reply feeds the surface back', /Settings\.setSurface\(b\.screenW, b\.screenH\)/.test(appjs));
+  check('placement: drag clamp uses the surface too', /const surf = Settings\.surfaceSize\(\)/.test(appjs));
+  check('placement: saving a drag goes through the settings model', /Settings\.setMany\(\{ marginX: pendingX, marginY: pendingY \}\)/.test(appjs));
+  // a wider/taller panel must re-crop the desktop window, or it gets clipped
+  check('size: a resized panel re-reports its rect to the shell', /new ResizeObserver\(scheduleBounds\)/.test(appjs) && /Settings\.onChange\(\(\) => \{\s*lastBoundsSig = ''/.test(appjs));
+  check('size: appearance pushed from another window re-measures too', /config = msg\.config;[\s\S]{0,900}isCleanMode\)\s*\{[\s\S]{0,600}lastBoundsSig = ''/.test(appjs));
+}
+
+// v1.4.13: the overlay must stay above EVERY window, not only framed ones
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const main = await fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8');
+  const feat = await fs.readFile(new URL('../public/js/features.js', import.meta.url), 'utf8');
+  const { DEFAULT_CONFIG } = await import('../server/model.ts');
+  // the bug: a borderless/fullscreen game covers any NORMAL topmost window,
+  // so only a display-sized window stays visible over it
+  check('layer: default is a display-sized window', DEFAULT_CONFIG.desktop.overlayLayer === 'screen', String(DEFAULT_CONFIG.desktop.overlayLayer));
+  check('layer: mode select in the desktop-only field', /id="layerField"[^>]*hidden/.test(html) && /id="overlayLayerSelect"/.test(html));
+  check('layer: field is revealed only in the desktop shell', /getElementById\('layerField'\)/.test(feat));
+  const ru = i18n.indexOf('layerLabel');
+  const en = i18n.indexOf('layerLabel', ru + 1);
+  check('layer: labels exist in ru and en', ru > 0 && en > ru);
+  // a game steals the top slot on launch / alt-tab and never gives it back
+  check('layer: topmost z-order is re-claimed on a timer', /function assertOverlayTop\(\)/.test(main) && /setInterval\(assertOverlayTop/.test(main) && /setAlwaysOnTop\(true, 'screen-saver'\)/.test(main));
+  check('layer: fullscreen modes cover the whole display', /function overlayArea\(\)[\s\S]{0,300}d\.bounds/.test(main) && /overlayLayer\(\) === 'panel' \? d\.workArea : d\.bounds/.test(main));
+  check('layer: «fullscreen» uses the native fullscreen window', /win\.setFullScreen\(true\)/.test(main) && /win\.isFullScreen\(\)/.test(main) && /fullscreenable: true/.test(main));
+  // a cropped window drops out of the fullscreen z-band — never crop it there
+  check('layer: display-sized windows are never cropped', /overlayLayer\(\) !== 'panel'[\s\S]{0,500}return \{ cropX: bd\.x - wa\.x/.test(main));
+  check('layer: the page keeps the work-area offset instead', /fullLayerMode\(\)/.test(appjs) && /isCleanMode && !fullLayerMode\(\)/.test(appjs));
+  check('layer: switching modes resets the crop offset', /lastLayer !== overlayLayer\(\)/.test(appjs));
+}
+
+// v1.4.12: whispers must be visible — even from another channel
+{
+  const fs = await import('node:fs/promises');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const ts6 = await fs.readFile(new URL('../server/connectors/ts6.ts', import.meta.url), 'utf8');
+  const ts3 = await fs.readFile(new URL('../server/connectors/ts3.ts', import.meta.url), 'utf8');
+  const bridge = await fs.readFile(new URL('../server/connectors/plugin-bridge.ts', import.meta.url), 'utf8');
+  const model = await fs.readFile(new URL('../server/model.ts', import.meta.url), 'utf8');
+  // TS6 really sends «isWhisper» — the old check only knew «whisper»/targetMode
+  check('whisper: ts6 parses the isWhisper flag', /jBool\(payload, 'isWhisper'\)/.test(ts6));
+  check('whisper: state carries outside whisperers', /whisperers: UserState\[\]/.test(model));
+  check('whisper: every source fills them', /whisperers: this\.buildWhisperers\(users\)/.test(ts6) && /whisperers: this\.buildWhisperers\(users\)/.test(ts3) && /whisperers: this\.buildWhisperers\(users\)/.test(bridge));
+  check('whisper: ts3 plugin forwards isReceivedWhisper', /\\"w\\":%d/.test(await fs.readFile(new URL('../plugin/ts3plugin_tsn.c', import.meta.url), 'utf8')) && /num\(msg\['w'\]\)/.test(bridge));
+  check('whisper: overlay renders them in the whisper section', /outsideWhisperers\(nowTs, whisperMs\)/.test(appjs) && /users\.concat\(outsiders\)/.test(appjs));
+  check('whisper: outside whisperers do not join the roster count', /count\.textContent = users\.length/.test(appjs));
 }
 
 // v1.4.6: one data source at a time + tray ↔ Связь sync
