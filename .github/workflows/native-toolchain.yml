@@ -1,0 +1,26 @@
+# Manual bootstrap: packs a Rust toolchain + cargo registry cache as an
+# artifact so the sandbox (no crates.io access) can build natively offline.
+# NOT a release — no tags, no binaries published.
+name: native-toolchain (manual bootstrap)
+on:
+  workflow_dispatch:
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch crate dependencies
+        run: cargo fetch
+        working-directory: native
+      - name: Pack toolchain + registry
+        run: |
+          tar -C "$HOME" -I 'zstd -T0 -9' -cf /tmp/rust-toolchain.tar.zst .rustup .cargo/bin
+          tar -C "$HOME" -I 'zstd -T0 -9' -cf /tmp/cargo-registry.tar.zst .cargo/registry
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-toolchain
+          path: |
+            /tmp/rust-toolchain.tar.zst
+            /tmp/cargo-registry.tar.zst
+          retention-days: 14

@@ -1,0 +1,16 @@
+# Build + test the native Rust core on every push. CI validation only —
+# releases are built separately from tags.
+name: ci-native
+on:
+  push:
+    paths: ['native/**', '.github/workflows/ci-native.yml', '.github/workflows/native-toolchain.yml']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked
+        working-directory: native
+      - run: cargo test --locked
+        working-directory: native
