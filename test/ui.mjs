@@ -217,6 +217,23 @@ try {
     const sysRow = [...doc.querySelectorAll('#chatFeed .chat-toast.kind-system')].map((el) => el.textContent).join(' | ');
     check('overlay: system event row localised (join)', /Мария/.test(sysRow) && /UI Test Channel/.test(sysRow) && !/…:/.test(sysRow), sysRow);
     check('overlay: system rows are not counted as unread', badge.hidden === false && doc.getElementById('chatUnreadCount').textContent === '1', doc.getElementById('chatUnreadCount').textContent);
+    // v1.3.0: persistent events feed (independent of chat toasts)
+    const evFeed = doc.getElementById('eventsFeed');
+    const evRows = doc.querySelectorAll('#eventsList .event-row');
+    check('overlay: events feed shows join/system events', evFeed.hidden === false && evRows.length >= 1, `rows=${evRows.length}`);
+    check('overlay: events feed row text localised', /Мария/.test(doc.getElementById('eventsList').textContent), doc.getElementById('eventsList').textContent);
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showEvents: false } },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: events feed disableable', evFeed.hidden === true);
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showUnreadBadge: false } },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: unread badge hideable via setting', badge.hidden === true);
 
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
@@ -336,7 +353,16 @@ try {
     // v1.1.15: «Ещё» is a single tab — About/profiles merged in
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
-    check('settings: version line shows 1.2.0', /1\.2\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: version line shows 1.3.0', /1\.3\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
+    check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
+    check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
+    check('settings: chip toggles wired', doc.querySelectorAll('[data-panel="elements"] .chip-toggle input[data-toggle]').length >= 16);
+    check('settings: source cards drive the source', !!doc.getElementById('sourceCards') && doc.querySelectorAll('#sourceCards .source-card').length === 3 && doc.getElementById('sourceSelect').hidden === true);
+    check('settings: tile buttons in «Ещё»', !!doc.getElementById('checkUpdateBtn').closest('.tile-btn') && !!doc.getElementById('copyObsUrlBtn').closest('.tile-btn'));
+    // v1.3.0 — new notification/event settings
+    check('settings: unread badge toggle present', !!doc.querySelector('[data-toggle="showUnreadBadge"]'));
+    check('settings: events settings present', !!doc.querySelector('[data-toggle="showEvents"]') && !!doc.querySelector('[data-toggle="showEvJoin"]') && !!doc.querySelector('[data-toggle="showEvChat"]') && !!doc.querySelector('[data-slider="eventsCount"]'));
     check('settings: update check button in «Ещё»', !!doc.getElementById('checkUpdateBtn') && !!doc.getElementById('updateStatus') && !!doc.getElementById('updateVersion'));
     // v1.2.0: «Запустить вещание» removed — OBS Browser Source only needs the
     // copied URL (the launch button was not required to show TS in OBS)

@@ -254,6 +254,7 @@
     $('panel').style.display = empty && a.hideEmpty && state.status === 'live' ? 'none' : '';
 
     renderChat();
+    renderEvents();
 
     // connection tab
     const pill = $('statusPill');
@@ -265,6 +266,98 @@
   /* ---------------- chat toasts ---------------- */
 
   const chatRows = new Map(); // id -> { el, timer }
+
+  /* ---------------- events feed (recent server events) ---------------- */
+
+  // Persistent «Последние события» block (v1.3.0): independent from the chat
+  // toasts, filterable per event kind, expires after eventsDelay seconds.
+  const evSeen = new Set();
+  let evTickTimer = 0;
+
+  function evText(m) {
+    const clean = cleanChat;
+    const name = clean(m.nickname || m.text || '…');
+    const detail = clean(m.detail || '');
+    if (m.event === 'join') return detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
+    if (m.event === 'leave') return detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
+    if (m.event === 'move') return t('evMove').replace('{n}', name).replace('{c}', detail || '…');
+    return '';
+  }
+
+  function renderEvents() {
+    const a = Settings.appearance;
+    const feed = $('eventsFeed');
+    if (!feed) return;
+    const list = $('eventsList');
+    const show = a.showEvents;
+    feed.hidden = !show;
+    if (!show || !state) {
+      if (list) list.textContent = '';
+      return;
+    }
+    const allow = (kind) =>
+      (kind === 'join' && a.showEvJoin) ||
+      (kind === 'leave' && a.showEvLeave) ||
+      (kind === 'move' && a.showEvMove) ||
+      (kind === 'poke' && a.showEvPoke) ||
+      (kind === 'chat' && a.showEvChat);
+    const delayMs = Math.max(5, Number(a.eventsDelay) || 20) * 1000;
+    const maxRows = Math.min(10, Math.max(1, Number(a.eventsCount) || 5));
+    const now = Date.now();
+
+    // Collect: structured system events + (optionally) chat lines.
+    const items = [];
+    for (const m of state.chat || []) {
+      let kind = '';
+      if (m.kind === 'system' && (m.event === 'join' || m.event === 'leave' || m.event === 'move')) kind = m.event;
+      else if ((m.kind === 'poke' && m.event === 'poke') || m.kind === 'poke') kind = 'poke';
+      else if (m.kind !== 'system') kind = 'chat';
+      if (!kind || !allow(kind)) continue;
+      if (kind === 'chat' && m.kind === 'private' && !a.chatPrivate) continue;
+      if (now - (m.at || 0) > delayMs) continue;
+      const text = kind === 'chat' || kind === 'poke'
+        ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
+        : evText(m);
+      if (!text) continue;
+      items.push({ id: m.id || `${kind}-${m.at}`, kind, text, at: m.at || now });
+    }
+    items.sort((x, y) => y.at - x.at);
+    const shown = items.slice(0, maxRows);
+
+    // Rebuild cheaply: keyed diff by id string.
+    const want = new Set(shown.map((i) => i.id));
+    for (const [id, el] of [...list.children].map((el) => [el.dataset.evId, el])) {
+      if (!want.has(id)) el.remove();
+    }
+    const have = new Set([...list.children].map((el) => el.dataset.evId));
+    for (const item of shown) {
+      if (have.has(item.id)) continue;
+      const el = document.createElement('div');
+      el.className = `event-row ${item.kind === 'chat' ? 'ev-chat' : 'ev-' + item.kind}`;
+      el.dataset.evId = item.id;
+      const tag = document.createElement('span');
+      tag.className = 'ev-tag';
+      tag.textContent = t(item.kind === 'chat' ? 'evTagChat' : item.kind === 'join' ? 'evTagJoin' : item.kind === 'leave' ? 'evTagLeave' : item.kind === 'move' ? 'evTagMove' : 'evTagPoke');
+      const txt = document.createElement('span');
+      txt.textContent = item.text;
+      el.appendChild(tag);
+      el.appendChild(txt);
+      list.prepend(el);
+    }
+    // Keep DOM order newest-first.
+    const byId = new Map(shown.map((i) => [i.id, i]));
+    for (const el of [...list.children]) {
+      const item = byId.get(el.dataset.evId);
+      if (item) list.appendChild(el);
+    }
+    // Expiry tick: re-render as rows age out (cheap, coalesced).
+    if (!evTickTimer && list.children.length) {
+      evTickTimer = setTimeout(() => {
+        evTickTimer = 0;
+        renderEvents();
+      }, 2500);
+    }
+  }
 
   /* ---------------- unread-message badge ---------------- */
 
@@ -296,6 +389,7 @@
   function clearUnread() {
     // "Read" is explicit only: the badge never fades on its own, it clears
     // when the user clicks it.
+    if (!Settings.appearance.showUnreadBadge) return;
     unreadCount = 0;
     const el = $('chatUnread');
     if (el) el.hidden = true;
@@ -322,6 +416,10 @@
       unreadCount += 1;
     }
     if (unreadCount <= 0) return;
+    if (!Settings.appearance.showUnreadBadge) {
+      el.hidden = true;
+      return;
+    }
     el.hidden = false;
     el.title = t('unreadTitle');
     $('chatUnreadCount').textContent = unreadCount > 99 ? '99+' : String(unreadCount);
@@ -430,9 +528,18 @@
     }, 400);
   }
 
+  function syncSourceCards() {
+    const sel = $('sourceSelect');
+    if (!sel) return;
+    document.querySelectorAll('#sourceCards .source-card').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.source === sel.value);
+    });
+  }
+
   function fillConnectionTab() {
     if (!config) return;
     $('sourceSelect').value = config.source;
+    syncSourceCards();
     $('ts3Host').value = config.ts3.host;
     $('ts3Port').value = config.ts3.port;
     $('ts3ApiKey').value = config.ts3.apiKey;
@@ -477,6 +584,17 @@
     ['ts6Host', 'ts6Port', 'ts6ApiKey'].forEach((id) => {
       $(id).addEventListener('change', () => putConfig(ts6Patch()));
     });
+
+    // v1.3.0: big source cards drive the hidden select
+    document.querySelectorAll('#sourceCards .source-card').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sel = $('sourceSelect');
+        sel.value = btn.dataset.source;
+        sel.dispatchEvent(new Event('change'));
+      });
+    });
+    $('sourceSelect').addEventListener('change', syncSourceCards);
+    syncSourceCards();
 
     $('reconnectBtn').addEventListener('click', () => {
       fetch('/api/reconnect', { method: 'POST' }).catch(() => {});
@@ -606,6 +724,9 @@
           fillConnectionTab();
           syncFeatures();
         }
+        // Appearance flags (events feed, unread badge, elements) take effect
+        // immediately — one rAF-coalesced re-render.
+        scheduleRender();
       } else if (msg.type === 'move-mode') {
         const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
         if (want) enterMoveMode();

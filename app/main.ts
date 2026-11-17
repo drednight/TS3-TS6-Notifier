@@ -384,10 +384,10 @@ function openSettings(): void {
   }
   // Settings open in their own window; the overlay stays visible on top.
   settingsWin = new BrowserWindow({
-    width: 392,
-    height: 780,
-    minWidth: 340,
-    minHeight: 520,
+    width: 480,
+    height: 880,
+    minWidth: 400,
+    minHeight: 640,
     autoHideMenuBar: true,
     icon: nativeImage.createFromPath(join(ICONS_DIR, 'icon.png')),
     title: 'TS3-TS6 Notifier — Settings',

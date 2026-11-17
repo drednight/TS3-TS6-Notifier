@@ -126,6 +126,17 @@ export interface Appearance {
   showChat: boolean;
   chatDelay: number;
   chatPrivate: boolean;
+  /** Unread-message badge on the overlay. */
+  showUnreadBadge: boolean;
+  /** Recent server events block (join/leave/move/poke/chat). */
+  showEvents: boolean;
+  showEvJoin: boolean;
+  showEvLeave: boolean;
+  showEvMove: boolean;
+  showEvPoke: boolean;
+  showEvChat: boolean;
+  eventsCount: number;
+  eventsDelay: number;
 }
 
 export interface AppConfig {
@@ -223,6 +234,15 @@ export const DEFAULT_APPEARANCE: Appearance = {
   showChat: true,
   chatDelay: 8,
   chatPrivate: true,
+  showUnreadBadge: true,
+  showEvents: true,
+  showEvJoin: true,
+  showEvLeave: true,
+  showEvMove: true,
+  showEvPoke: true,
+  showEvChat: true,
+  eventsCount: 5,
+  eventsDelay: 20,
 };
 
 export const DEFAULT_CONFIG: AppConfig = {

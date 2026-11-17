@@ -1626,3 +1626,266 @@ body.no-anim .board-btn { transition: none; }
   cursor: pointer;
 }
 .pop-close:hover { color: var(--danger); border-color: var(--danger); }
+
+
+/* ==================================================================
+   Settings UI — Concept 3 «Превью-стек» (v1.3.0)
+   ================================================================== */
+
+/* ---- grouped option cards ---- */
+.opt-group {
+  margin: 0 0 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 5%, rgba(255, 255, 255, 0.025));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.06));
+}
+.opt-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 80%, #fff);
+  margin-bottom: 12px;
+}
+.group-ico { display: inline-flex; width: 16px; height: 16px; }
+.group-ico svg { width: 16px; height: 16px; }
+.sub-title {
+  margin: 14px 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted, #9aa0b4);
+}
+
+/* ---- live preview strip ---- */
+.preview-strip {
+  margin: 0 0 14px;
+  padding: 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 120% at 20% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, rgba(255, 255, 255, 0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.preview-panel {
+  width: 100%;
+  max-width: 280px;
+  border-radius: var(--radius, 16px);
+  background: rgba(16, 18, 34, var(--panel-opacity, 0.72));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 0 calc(var(--glow, 0.7) * 26px) color-mix(in srgb, var(--accent) calc(var(--glow, 0.7) * 45%), transparent);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pp-header { display: flex; align-items: center; gap: 8px; }
+.pp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.pp-lines { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.pp-l1 { height: 6px; width: 62%; border-radius: 3px; background: rgba(255, 255, 255, 0.75); }
+.pp-l2 { height: 4px; width: 40%; border-radius: 3px; background: rgba(255, 255, 255, 0.3); }
+.pp-count {
+  font-size: 10px; font-weight: 700; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 999px; padding: 2px 8px;
+}
+.pp-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 7px; border-radius: calc(var(--radius, 16px) * 0.5);
+  background: rgba(255, 255, 255, 0.045);
+}
+.pp-row.talking {
+  background: color-mix(in srgb, var(--accent) 16%, rgba(255, 255, 255, 0.05));
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.pp-ava {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 30%, #fff));
+  flex: none;
+}
+.pp-name { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.55); width: 55%; }
+.pp-name.short { width: 38%; }
+.pp-eq { margin-left: auto; display: inline-flex; gap: 2px; align-items: flex-end; height: 12px; }
+.pp-eq i {
+  width: 3px; border-radius: 2px; background: var(--accent);
+  animation: ppEq 0.9s ease-in-out infinite alternate;
+}
+.pp-eq i:nth-child(1) { height: 6px; animation-delay: 0s; }
+.pp-eq i:nth-child(2) { height: 11px; animation-delay: 0.18s; }
+.pp-eq i:nth-child(3) { height: 8px; animation-delay: 0.36s; }
+@keyframes ppEq { to { height: 3px; } }
+body.no-anim .pp-eq i { animation: none; }
+.preview-cap { font-size: 11px; color: var(--muted, #9aa0b4); text-align: center; }
+
+/* ---- theme tiles ---- */
+.theme-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.theme-tiles button {
+  height: 44px;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.theme-tiles button:hover { transform: translateY(-1px); }
+.theme-tiles button.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.theme-tiles button[data-value="glass"] { background: linear-gradient(135deg, #7c6cff44, #7c6cff18), #191b30; }
+.theme-tiles button[data-value="midnight"] { background: linear-gradient(135deg, #4f7dff44, #101427), #101427; }
+.theme-tiles button[data-value="frost"] { background: linear-gradient(135deg, #0ea5e944, #12203a), #12203a; }
+.theme-tiles button[data-value="neon"] { background: linear-gradient(135deg, #ff2d9544, #1c0f2a), #1c0f2a; }
+.theme-tiles button[data-value="emerald"] { background: linear-gradient(135deg, #10b98144, #0f2420), #0f2420; }
+.theme-tiles button[data-value="carmine"] { background: linear-gradient(135deg, #f43f5e44, #26121a), #26121a; }
+.theme-tiles button[data-value="amber"] { background: linear-gradient(135deg, #f59e0b44, #241a0c), #241a0c; }
+.theme-tiles button[data-value="mono"] { background: linear-gradient(135deg, #e5e5e533, #17181c), #17181c; }
+
+/* ---- chip toggles ---- */
+.chip-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted, #aab0c4);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+.chip-toggle:hover { transform: translateY(-1px); }
+.chip-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.chip-ico { display: inline-flex; width: 15px; height: 15px; }
+.chip-ico svg { width: 15px; height: 15px; }
+.chip-toggle:has(input:checked) {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 70%, transparent), color-mix(in srgb, var(--accent) 38%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 80%, transparent);
+  color: #fff;
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.chip-toggle.small { padding: 6px 11px; font-size: 11.5px; }
+
+/* ---- source cards ---- */
+.source-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.source-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 14px 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted, #aab0c4);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.13s ease;
+}
+.source-card:hover { transform: translateY(-2px); }
+.source-card .sc-ico { display: inline-flex; width: 22px; height: 22px; }
+.source-card .sc-ico svg { width: 22px; height: 22px; }
+.source-card.active {
+  background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 60%, transparent), color-mix(in srgb, var(--accent) 25%, transparent));
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ---- tile buttons ---- */
+.tile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile-btn {
+  padding: 14px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.13s ease;
+}
+.tile-btn:hover { transform: translateY(-2px); filter: brightness(1.08); }
+.tile-btn.accent {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
+  border-color: transparent;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.btn.wide { width: 100%; }
+
+/* ---- events feed (overlay) ---- */
+.events-feed {
+  margin: 8px 0 2px;
+  border-radius: calc(var(--radius, 16px) * 0.7);
+  background: color-mix(in srgb, var(--accent) 7%, rgba(255, 255, 255, 0.03));
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, rgba(255, 255, 255, 0.07));
+  padding: 8px 10px;
+}
+.events-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 85%, #fff);
+  margin-bottom: 6px;
+}
+.events-head .events-ico {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--accent);
+}
+.events-list { display: flex; flex-direction: column; gap: 3px; }
+.event-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted, #aab0c4);
+  padding: 2px 2px;
+  animation: evIn 0.25s ease;
+}
+@keyframes evIn { from { opacity: 0; transform: translateY(-3px); } }
+body.no-anim .event-row { animation: none; }
+.event-row .ev-tag {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: color-mix(in srgb, var(--accent) 90%, #fff);
+}
+.event-row.ev-join .ev-tag { background: color-mix(in srgb, #34d399 26%, transparent); color: #9df3cf; }
+.event-row.ev-leave .ev-tag { background: color-mix(in srgb, #f87171 24%, transparent); color: #fecaca; }
+.event-row.ev-move .ev-tag { background: color-mix(in srgb, #60a5fa 26%, transparent); color: #bfdbfe; }
+.event-row.ev-poke .ev-tag { background: color-mix(in srgb, #fbbf24 26%, transparent); color: #fde68a; }
+.event-row.ev-chat .ev-tag { background: color-mix(in srgb, var(--accent) 26%, transparent); color: color-mix(in srgb, var(--accent) 92%, #fff); }

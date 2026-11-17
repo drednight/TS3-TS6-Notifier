@@ -37,6 +37,15 @@
     showChat: true,
     chatDelay: 8,
     chatPrivate: true,
+    showUnreadBadge: true,
+    showEvents: true,
+    showEvJoin: true,
+    showEvLeave: true,
+    showEvMove: true,
+    showEvPoke: true,
+    showEvChat: true,
+    eventsCount: 5,
+    eventsDelay: 20,
   };
 
   const THEME_ACCENTS = {
@@ -67,12 +76,16 @@
     marginX: [0, 20000],
     marginY: [0, 20000],
     chatDelay: [2, 60],
+    eventsCount: [1, 10],
+    eventsDelay: [5, 60],
   };
 
   const BOOLS = [
     'showHeader', 'showServerName', 'showUserCount', 'showBanner', 'showAvatars',
     'showBadges', 'showSelf', 'hideQuery', 'animations', 'talkingFirst',
     'onlyTalking', 'compact', 'hideEmpty', 'showWhispers', 'showChat', 'chatPrivate',
+    'showUnreadBadge', 'showEvents', 'showEvJoin', 'showEvLeave', 'showEvMove',
+    'showEvPoke', 'showEvChat',
   ];
 
   let local = {};
