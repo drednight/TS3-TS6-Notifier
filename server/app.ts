@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ConfigStore } from './config.js';
@@ -290,7 +290,45 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           json(res, 200, { ok: false, error: 'windows-only' });
         } else {
           mkdirSync(join(dst, '..'), { recursive: true });
-          copyFileSync(src, dst);
+          // Already installed and identical → nothing to do (the file is
+          // locked while TS3 has the plugin loaded — that is not an error).
+          if (existsSync(dst)) {
+            const a = readFileSync(src);
+            const b = readFileSync(dst);
+            if (a.length === b.length && a.equals(b)) {
+              json(res, 200, { ok: true, same: true, path: dst });
+              return;
+            }
+          }
+          try {
+            copyFileSync(src, dst);
+          } catch (err) {
+            // Windows locks a loaded DLL — rename it aside (allowed even while
+            // mapped) and drop the new one in place.
+            const code = (err as NodeJS.ErrnoException).code || '';
+            if (!existsSync(dst) || !/EBUSY|EPERM|EACCES/.test(code)) throw err;
+            try {
+              renameSync(dst, `${dst}.old-${Date.now()}`);
+            } catch {
+              json(res, 200, { ok: false, error: 'locked' });
+              return;
+            }
+            copyFileSync(src, dst);
+          }
+          // Best-effort cleanup of leftovers from previous updates.
+          try {
+            for (const f of readdirSync(join(dst, '..'))) {
+              if (f.startsWith('ts3plugin_tsn_win64.dll.old')) {
+                try {
+                  unlinkSync(join(dst, '..', f));
+                } catch {
+                  /* still mapped by TS3 — removed on the next install */
+                }
+              }
+            }
+          } catch {
+            /* listing failed — not important */
+          }
           diag('plugin', `installed to ${dst}`);
           json(res, 200, { ok: true, path: dst });
         }

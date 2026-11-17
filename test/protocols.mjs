@@ -386,6 +386,42 @@ psock2.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid:
 await new Promise((r) => setTimeout(r, 350));
 check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.detail === 'TS3 plugin' && st.users.length === 1), JSON.stringify(autoStates.map((st) => st.detail)));
 
+// Swap-hold: when the plugin goes away the last plugin picture must survive
+// until ClientQuery boots — no blank overlay during the swap.
+{
+  const held = autoStates.filter((st) => st.detail === 'TS3 plugin' && st.users.length === 1).length;
+  psock2.destroy();
+  await new Promise((r) => setTimeout(r, 900));
+  const after = autoStates.slice(-6);
+  check('plugin: state held through the fallback swap', held > 0 && after.some((st) => st.users.length === 1), JSON.stringify(after.map((st) => `${st.status}:${st.users.length}`)));
+}
+
+// Heartbeat semantics: pings keep the plugin counted as alive; a silent
+// socket eventually marks it idle (short window via constructor).
+{
+  const hBridge = new PluginBridge(0, 400);
+  let hActive = 0;
+  let hIdle = 0;
+  hBridge.on('active', () => { hActive += 1; });
+  hBridge.on('idle', () => { hIdle += 1; });
+  hBridge.start();
+  await new Promise((r) => setTimeout(r, 150));
+  const hs = net.createConnection({ host: '127.0.0.1', port: hBridge.getPort() });
+  await new Promise((r) => hs.on('connect', r));
+  hs.write(JSON.stringify({ e: 'hello', v: '1.1.0' }) + '\n');
+  await new Promise((r) => setTimeout(r, 150));
+  check('bridge: hello marks the plugin active', hActive === 1 && hBridge.active() === true);
+  for (let i = 0; i < 4; i++) {
+    hs.write('{"e":"ping"}\n');
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  check('bridge: heartbeats keep the plugin active', hIdle === 0 && hBridge.active() === true);
+  hs.destroy();
+  await new Promise((r) => setTimeout(r, 1000));
+  check('bridge: dead plugin marked idle after the quiet window', hIdle === 1 && hBridge.active() === false);
+  hBridge.stop();
+}
+
 psock.destroy();
 psock2.destroy();
 bridge.stop();

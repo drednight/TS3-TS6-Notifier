@@ -244,6 +244,7 @@ static DWORD WINAPI tsn_reader(LPVOID arg);
 
 static DWORD WINAPI tsn_worker(LPVOID arg) {
     (void)arg;
+    int tick = 0;
     while (tsn_running) {
         EnterCriticalSection(&tsn_lock);
         int was = (tsn_sock != INVALID_SOCKET);
@@ -257,8 +258,19 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
                 ok = 0;
             }
         }
+        if (ok && was && (tick % 5) == 0) {
+            /* Heartbeat: the app uses traffic recency to tell a live plugin
+             * from a dead one — without it the overlay fell back to
+             * ClientQuery every quiet minute and flickered. */
+            if (send(tsn_sock, "{\"e\":\"ping\"}\n", 13, 0) != 13) {
+                closesocket(tsn_sock);
+                tsn_sock = INVALID_SOCKET;
+                ok = 0;
+            }
+        }
         LeaveCriticalSection(&tsn_lock);
         if (ok && !was) send_snapshot_all();
+        tick++;
         Sleep(ok ? 1000 : 3000);
     }
     return 0;

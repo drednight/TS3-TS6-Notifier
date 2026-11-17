@@ -703,9 +703,13 @@
       try {
         const res = await fetch('/api/plugin/install', { method: 'POST' });
         const body = await res.json();
-        if (body.ok) {
+        if (body.ok && body.same) {
+          el.textContent = t('pluginSame');
+        } else if (body.ok) {
           el.textContent = t('pluginInstalled');
           setTimeout(refreshPluginStatus, 1500);
+        } else if (body.error === 'locked') {
+          el.textContent = t('pluginLocked');
         } else if (body.error === 'dll-missing') {
           el.textContent = t('pluginNoDll');
         } else if (body.error === 'windows-only') {

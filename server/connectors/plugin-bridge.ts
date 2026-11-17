@@ -52,12 +52,18 @@ export class PluginBridge extends EventEmitter {
   private idleTimer: NodeJS.Timeout | null = null;
   private wasActive = false;
 
-  constructor(private port = 48912) {
+  constructor(
+    private port = 48912,
+    /** Quiet seconds before the plugin counts as gone (the plugin heartbeats
+     * every ~5s, so this is generous on purpose — swap hysteresis keeps the
+     * overlay from flickering between the plugin and ClientQuery). */
+    private idleAfterMs = 45000,
+  ) {
     super();
   }
 
   active(): boolean {
-    return this.wasActive && Date.now() - this.lastSeen < 15000;
+    return this.wasActive && Date.now() - this.lastSeen < this.idleAfterMs;
   }
 
   start(): void {
@@ -90,12 +96,15 @@ export class PluginBridge extends EventEmitter {
       diag('plugin', `bridge listening on 127.0.0.1:${this.port}`);
     });
     this.server = server;
-    this.idleTimer = setInterval(() => {
-      if (this.wasActive && !this.active()) {
-        this.wasActive = false;
-        this.emit('idle');
-      }
-    }, 5000);
+    this.idleTimer = setInterval(
+      () => {
+        if (this.wasActive && !this.active()) {
+          this.wasActive = false;
+          this.emit('idle');
+        }
+      },
+      Math.min(5000, this.idleAfterMs),
+    );
   }
 
   stop(): void {
@@ -132,6 +141,8 @@ export class PluginBridge extends EventEmitter {
       diag('plugin', `bad line: ${line.slice(0, 120)}`);
       return;
     }
+    // Heartbeats keep the link marked alive — never let them flood the log.
+    if (str(msg['e']) === 'ping') return;
     diag('plugin', line.slice(0, 240));
     this.emit('line', msg);
   }
@@ -153,9 +164,10 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
     private port: number,
     private apiKey: string,
     bridgePort = 48912,
+    idleAfterMs = 45000,
   ) {
     super();
-    this.bridge = new PluginBridge(bridgePort);
+    this.bridge = new PluginBridge(bridgePort, idleAfterMs);
   }
 
   start(): void {
@@ -171,6 +183,7 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
         this.usingPlugin = true;
         this.query?.stop();
         this.query = null;
+        this.holdUntil = 0;
         this.pluginState = new PluginState(() => this.emit('state', this.pluginState!.buildState()));
         console.log('[ts3] plugin bridge active — ClientQuery connector paused');
         // Ask for a fresh snapshot so the panel fills instantly.
@@ -181,7 +194,10 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
       if (this.stopped) return;
       if (this.usingPlugin) {
         this.usingPlugin = false;
-        this.pluginState = null;
+        // Keep the last plugin state warm for a few seconds so the overlay
+        // does not blank while the ClientQuery connector boots.
+        this.holdUntil = Date.now() + 6000;
+        this.queryLive = false;
         console.log('[ts3] plugin bridge idle — falling back to ClientQuery');
       }
       this.ensureQuery();
@@ -208,12 +224,22 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
   }
 
   private pluginState: PluginState | null = null;
+  private holdUntil = 0;
+  private queryLive = false;
 
   private ensureQuery(): void {
     if (this.stopped || this.query) return;
     const q = new Ts3Connector(this.host, this.port, this.apiKey);
     q.on('state', (s: OverlayState) => {
-      if (!this.usingPlugin) this.emit('state', s);
+      if (this.usingPlugin) return;
+      if (s.status === 'live') this.queryLive = true;
+      // Swap gap: hold the last plugin picture instead of an empty shell.
+      if (!this.queryLive && this.pluginState && Date.now() < this.holdUntil) {
+        this.emit('state', this.pluginState.buildState());
+        return;
+      }
+      this.pluginState = null;
+      this.emit('state', s);
     });
     this.query = q;
     q.start();

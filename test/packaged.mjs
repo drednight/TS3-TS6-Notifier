@@ -34,6 +34,10 @@ await cp(join(ROOT, 'public'), join(APP_DIR, 'public'), { recursive: true });
 await cp(join(ROOT, 'app', 'dist', 'main.cjs'), join(APP_DIR, 'app', 'dist', 'main.cjs'));
 await cp(join(ROOT, 'app', 'icons'), join(RES_DIR, 'icons'), { recursive: true });
 await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-notifier', main: 'app/dist/main.cjs' }));
+// Fake bundled plugin DLL + a scratch APPDATA so /api/plugin/install is testable
+await mkdir(join(RES_DIR, 'plugin'), { recursive: true });
+await writeFile(join(RES_DIR, 'plugin', 'ts3plugin_tsn_win64.dll'), 'fake-dll-bytes');
+await mkdir(join(PKG, 'appdata'), { recursive: true });
 
 // v1.3.1: the Ctrl+Shift+M move hotkey is gone for good
 {
@@ -50,7 +54,7 @@ await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-n
 // Boot the bundled main against that layout (electron stubbed)
 const proc = spawn('node', ['-r', './test/electron-stub.cjs', 'app/dist/main.cjs'], {
   cwd: ROOT,
-  env: { ...process.env, TSN_APP_PATH: APP_DIR, TSN_RESOURCES_PATH: RES_DIR, TSN_SMOKE_EXIT: '0' },
+  env: { ...process.env, TSN_APP_PATH: APP_DIR, TSN_RESOURCES_PATH: RES_DIR, TSN_SMOKE_EXIT: '0', APPDATA: join(PKG, 'appdata') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -92,7 +96,10 @@ try {
     check('packaged: /api/plugin/status works', pst.status === 200 && typeof pstBody.active === 'boolean' && typeof pstBody.dll === 'boolean', JSON.stringify(pstBody));
     const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
     const pinsBody = await pins.json();
-    check('packaged: /api/plugin/install responds safely', pins.status === 200 && (pinsBody.ok === true || typeof pinsBody.error === 'string'), JSON.stringify(pinsBody));
+    check('packaged: /api/plugin/install copies the DLL', pins.status === 200 && pinsBody.ok === true && /ts3plugin_tsn_win64\.dll/.test(pinsBody.path || ''), JSON.stringify(pinsBody));
+    const pins2 = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
+    const pins2Body = await pins2.json();
+    check('packaged: reinstall of an identical DLL reports "same" (no EBUSY)', pins2.status === 200 && pins2Body.ok === true && pins2Body.same === true, JSON.stringify(pins2Body));
     const diag = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagText = await diag.text();
     check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3-TS6 Notifier diagnostics/.test(diagText) && /--- TS3 \(ClientQuery \/ plugin\) ---/.test(diagText) && /--- TS6 \(Remote Apps\) ---/.test(diagText), `len=${diagText.length}`);
