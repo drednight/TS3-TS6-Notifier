@@ -16,6 +16,7 @@ mod mock;
 mod overlay;
 mod plugin;
 mod render;
+mod settings;
 mod theme;
 mod ts3;
 mod ts6;

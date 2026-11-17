@@ -216,6 +216,7 @@ pub enum Ev {
     DragStart(f32, f32),
     DragMove(f32, f32),
     DragEnd,
+    Wheel(f32),
 }
 
 pub trait Host {
@@ -379,6 +380,9 @@ impl Overlay {
                         if rect.contains(x, y) {
                             match hit {
                                 Hit::Gear => {
+                                    #[cfg(windows)]
+                                    crate::settings::spawn_once(self.app.clone(), self.port);
+                                    #[cfg(not(windows))]
                                     host.open_url(&format!("http://127.0.0.1:{}/", self.port));
                                 }
                                 Hit::Save => self.confirm_move(),
@@ -908,6 +912,15 @@ mod win32 {
 
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOSIZE: u32 = 0x0001;
+
+    pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
+        let mut host = unsafe { WinHost::new() };
+        let cfg = app.store.lock().unwrap().clone_config();
+        let mut m = crate::settings::SettingsModel::new(cfg.appearance.clone(), app.version);
+        let fonts = crate::font::Fonts::load();
+        let icons = crate::icons::Icons::load();
+        crate::settings::run_loop(&mut m, &app, &fonts, &icons, &mut host);
+    }
 
     pub fn run(ov: &mut Overlay) {
         let mut host = unsafe { WinHost::new() };

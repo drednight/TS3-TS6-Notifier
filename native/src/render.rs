@@ -7,17 +7,36 @@ pub struct Buf {
     pub w: i32,
     pub h: i32,
     pub px: Vec<u8>, // RGBA
+    clip: Option<(i32, i32, i32, i32)>,
 }
 
 impl Buf {
     pub fn new(w: i32, h: i32) -> Buf {
-        Buf { w, h, px: vec![0u8; (w * h * 4) as usize] }
+        Buf { w, h, px: vec![0u8; (w * h * 4) as usize], clip: None }
+    }
+
+    /// Restrict drawing to a rect (scrollable panes). One level; `pop_clip` restores.
+    pub fn set_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let x0 = x.floor().max(0.0) as i32;
+        let y0 = y.floor().max(0.0) as i32;
+        let x1 = (x + w).ceil().min(self.w as f32) as i32;
+        let y1 = (y + h).ceil().min(self.h as f32) as i32;
+        self.clip = Some((x0, y0, x1, y1));
+    }
+
+    pub fn clear_clip(&mut self) {
+        self.clip = None;
     }
 
     #[inline]
     pub fn blend_px(&mut self, x: i32, y: i32, c: Rgba) {
         if x < 0 || y < 0 || x >= self.w || y >= self.h || c.0[3] == 0 {
             return;
+        }
+        if let Some((cx0, cy0, cx1, cy1)) = self.clip {
+            if x < cx0 || y < cy0 || x >= cx1 || y >= cy1 {
+                return;
+            }
         }
         let i = ((y * self.w + x) * 4) as usize;
         let a = c.0[3] as u32;
