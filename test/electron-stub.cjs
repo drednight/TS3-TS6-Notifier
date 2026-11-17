@@ -105,6 +105,7 @@ const electron = {
   },
   nativeImage: { createFromPath: () => ({}) },
   globalShortcut: { register: () => true, unregisterAll: noop, isRegistered: () => false },
+  clipboard: { writeText: noop, readText: () => '' },
   screen: {
     getPrimaryDisplay: () => ({ workArea }),
     on: noop,

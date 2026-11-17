@@ -193,6 +193,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
       });
       socket.on('data', (chunk: string) => {
         this.buffer += chunk;
+        // A line without terminators must never grow the buffer unbounded.
+        if (this.buffer.length > 1_000_000) this.buffer = '';
         let idx: number;
         while ((idx = this.buffer.indexOf('\n')) >= 0) {
           const line = this.buffer.slice(0, idx).replace(/\r$/, '');

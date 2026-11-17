@@ -161,6 +161,19 @@
 
   /* ---------------- main render ---------------- */
 
+  // State events can arrive in bursts (talk flaps, big servers) — coalesce
+  // renders to at most one per animation frame so the DOM is not rebuilt
+  // dozens of times per second (CPU + garbage churn).
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      render();
+    });
+  }
+
   function render() {
     const a = Settings.appearance;
     if (!state) return;
@@ -292,6 +305,13 @@
   function trackUnread() {
     const el = $('chatUnread');
     if (!el) return;
+    if (seenChatIds.size > 500) {
+      let n = 0;
+      for (const id of seenChatIds) {
+        if (n++ < 250) seenChatIds.delete(id);
+        else break;
+      }
+    }
     for (const m of state.chat || []) {
       if (!m.id || seenChatIds.has(m.id)) continue;
       seenChatIds.add(m.id);
@@ -423,6 +443,10 @@
     $('ts6Fields').classList.toggle('visible', config.source === 'ts6');
     $('elevateToggle').checked = config.desktop?.elevate !== false;
     $('moveHotkey').value = config.desktop?.moveHotkey || 'CommandOrControl+Shift+M';
+    $('overlayWindowToggle').checked = config.desktop?.overlayWindow !== false;
+    const obsUrl = `${location.origin}/?clean=1`;
+    const obs = $('obsHint');
+    if (obs) obs.textContent = t('obsHint').replace('{url}', obsUrl);
   }
 
   function wireConnectionTab() {
@@ -468,6 +492,10 @@
       $('moveHotkey').value = value;
       putConfig({ desktop: { moveHotkey: value } });
     });
+
+    $('overlayWindowToggle').addEventListener('change', () => {
+      putConfig({ desktop: { overlayWindow: $('overlayWindowToggle').checked } });
+    });
   }
 
   /* ---------------- websocket ---------------- */
@@ -503,12 +531,12 @@
         if (msg.state) {
           state = msg.state;
           syncFeatures();
-          render();
+          scheduleRender();
         }
       } else if (msg.type === 'state') {
         state = msg.state;
         syncFeatures();
-        render();
+        scheduleRender();
       } else if (msg.type === 'config') {
         config = msg.config;
         Settings.syncServer(config);

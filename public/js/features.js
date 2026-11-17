@@ -660,11 +660,16 @@
 
   /* ---------------- TS6 group → class map ---------------- */
 
+  let ts6GroupMapSig = '';
   function renderTs6GroupMap() {
     const host = document.getElementById('ts6GroupMap');
     if (!host) return;
     const groups = TSN.state?.groups || [];
     const map = TSN.config?.classes?.map || {};
+    // Runs on every state event — only touch the DOM when something changed.
+    const sig = groups.map((g) => `${g.id}:${g.name}:${map[String(g.id)] || ''}`).join('|');
+    if (sig === ts6GroupMapSig) return;
+    ts6GroupMapSig = sig;
     if (!groups.length) {
       host.innerHTML = `<div class="hint">${t('ts6GroupsWaiting')}</div>`;
       return;

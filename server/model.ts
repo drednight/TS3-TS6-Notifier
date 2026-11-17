@@ -146,6 +146,10 @@ export interface AppConfig {
     elevate: boolean;
     /** Global hotkey that arms overlay move mode, e.g. "Ctrl+Shift+M". */
     moveHotkey: string;
+    /** Show the in-game overlay window (off = server-only mode, e.g. for OBS). */
+    overlayWindow: boolean;
+    /** Preferred local port for the web server (stable URL for OBS). 0 = random. */
+    port: number;
   };
   /** Game class icons: map TS server groups / icon ids to class keys. */
   classes: {
@@ -226,7 +230,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   ts3: { host: '127.0.0.1', port: 25639, apiKey: '' },
   ts6: { host: '127.0.0.1', port: 5899, apiKey: '' },
   appearance: DEFAULT_APPEARANCE,
-  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, moveHotkey: 'CommandOrControl+Shift+M' },
+  desktop: { clickThrough: true, autostart: false, visible: true, seen: false, display: 'primary', elevate: true, moveHotkey: 'CommandOrControl+Shift+M', overlayWindow: true, port: 48911 },
   classes: {
     enabled: false,
     // Default group-id → class mapping (the user's server). Override in

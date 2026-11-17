@@ -303,6 +303,8 @@ try {
       return Number(ix?.max) >= 500 && Number(iy?.max) >= 500 && Number(ix.max) === Math.round(dom.window.screen.availWidth || 1920);
     })(), `x=${doc.querySelector('[data-slider="marginX"] input')?.max} y=${doc.querySelector('[data-slider="marginY"] input')?.max}`);
     check('settings: move-hotkey field present', !!doc.getElementById('moveHotkey'));
+    check('settings: overlay-window toggle present', !!doc.getElementById('overlayWindowToggle'));
+    check('settings: OBS browser-source hint shows the URL', /\/\?clean=1/.test(doc.getElementById('obsHint')?.textContent || ''), doc.getElementById('obsHint')?.textContent);
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
     check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
@@ -371,7 +373,21 @@ try {
     check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
     dom.window.close();
   }
-  /* ---- 5. overlay click-through endpoint (desktop hook contract) ---- */
+  /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
+  {
+    const h2 = await startServer({
+      port: 0,
+      preferredPort: handle.port(),
+      host: '127.0.0.1',
+      dataDir: join(tmpdir(), 'tsn-ui-test'),
+      publicDir: join(ROOT, 'public'),
+      log: () => {},
+    });
+    check('server: preferred port falls back when busy', h2.port() > 0 && h2.port() !== handle.port(), `main=${handle.port()} fallback=${h2.port()}`);
+    h2.close();
+  }
+
+  /* ---- 6. overlay click-through endpoint (desktop hook contract) ---- */
   {
     const res = await fetch(`${BASE}/api/overlay/clickthrough`, {
       method: 'POST',

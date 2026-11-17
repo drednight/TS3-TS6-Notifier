@@ -21,6 +21,8 @@ export interface AppOptions {
   listDisplays?: () => Array<{ id: string; label: string; primary: boolean; width?: number; height?: number }>;
   /** Desktop only: temporarily take/release mouse input on the overlay window. */
   setOverlayClickThrough?: (ignore: boolean) => void;
+  /** Try this port first (stable URL for OBS browser sources); falls back to a random one. */
+  preferredPort?: number;
 }
 
 export interface AppHandle {
@@ -81,7 +83,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
   /* ---------------- ws hub ---------------- */
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
 
   function broadcast(message: unknown): void {
     const raw = JSON.stringify(message);
@@ -301,13 +303,13 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(opts.port, opts.host, () => {
-      const addr = server.address();
-      const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
-      log(`[server] TS3-TS6 Notifier running at http://${opts.host}:${actualPort}`);
-      startConnector();
-      resolve({
+    const start = () => {
+      server.listen(currentPort, opts.host, () => {
+        const addr = server.address();
+        const actualPort = typeof addr === 'object' && addr ? addr.port : currentPort;
+        log(`[server] TS3-TS6 Notifier running at http://${opts.host}:${actualPort}`);
+        startConnector();
+        resolve({
         events,
         store,
         state: () => latestState,
@@ -317,12 +319,32 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           const addr = server.address();
           return typeof addr === 'object' && addr ? addr.port : opts.port;
         },
-        close: () => {
-          connector?.stop();
-          wss.close();
-          server.close();
-        },
+          close: () => {
+            connector?.stop();
+            wss.close();
+            server.close();
+          },
+        });
       });
-    });
+    };
+    // A stable port makes the overlay URL copyable into OBS browser sources;
+    // if it is busy we silently fall back to a random port.
+    let currentPort = opts.port;
+    if (opts.preferredPort) {
+      currentPort = opts.preferredPort;
+      server.once('error', (err) => {
+        if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          log(`[server] port ${opts.preferredPort} busy — falling back to a random port`);
+          currentPort = 0;
+          server.once('error', reject);
+          start();
+        } else {
+          reject(err);
+        }
+      });
+    } else {
+      server.once('error', reject);
+    }
+    start();
   });
 }

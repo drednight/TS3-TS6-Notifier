@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   app,
   BrowserWindow,
+  clipboard,
   globalShortcut,
   Menu,
   nativeImage,
@@ -391,6 +392,34 @@ function openBoard(): void {
 
 /* ---------------- tray ---------------- */
 
+/**
+ * The overlay window is optional: in "server-only" mode the app keeps just the
+ * small Node core (HTTP/WS + connector) running and the overlay is rendered
+ * on demand elsewhere — e.g. as an OBS browser source. That saves a whole
+ * renderer process plus the fullscreen compositor window.
+ */
+function applyOverlayWindow(): void {
+  const want = handle?.store.get().desktop.overlayWindow !== false;
+  if (want && !overlayWin) {
+    createOverlay();
+    log('[app] overlay window created');
+  } else if (!want && overlayWin) {
+    overlayWin.destroy();
+    overlayWin = null;
+    log('[app] overlay window closed (server-only mode)');
+  }
+}
+
+function copyOverlayUrl(): void {
+  const url = `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1`;
+  try {
+    clipboard.writeText(url);
+    log(`[app] overlay URL copied: ${url}`);
+  } catch {
+    log(`[app] overlay URL: ${url}`);
+  }
+}
+
 function setOverlayVisible(visible: boolean): void {
   overlayVisible = visible;
   if (!overlayWin) return;
@@ -477,6 +506,21 @@ function buildTrayMenu(): void {
       label: 'Проверить обновления',
       click: () => checkForUpdatesNow(),
     },
+    {
+      label: 'Оверлей-окно',
+      type: 'checkbox',
+      checked: handle?.store.get().desktop.overlayWindow !== false,
+      click: () => {
+        const current = handle?.store.get().desktop.overlayWindow !== false;
+        handle?.store.update({ desktop: { overlayWindow: !current } });
+        applyOverlayWindow();
+        buildTrayMenu();
+      },
+    },
+    {
+      label: 'Скопировать ссылку оверлея',
+      click: () => copyOverlayUrl(),
+    },
     // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
     ...(SOUNDS_UI_HIDDEN
       ? []
@@ -547,8 +591,20 @@ async function boot(): Promise<void> {
   log('=== TS3-TS6 Notifier starting ===');
   verifyAssets();
 
+  // A stable port keeps the overlay URL usable in OBS browser sources.
+  let preferredPort = 48911;
+  try {
+    const raw = JSON.parse(readFileSync(join(DATA_DIR, 'config.json'), 'utf8')) as {
+      desktop?: { port?: number };
+    };
+    if (typeof raw?.desktop?.port === 'number') preferredPort = raw.desktop.port;
+  } catch {
+    /* defaults apply */
+  }
+
   handle = await startServer({
     port: 0,
+    preferredPort,
     host: '127.0.0.1',
     dataDir: DATA_DIR,
     publicDir: PUBLIC_DIR,
@@ -574,8 +630,8 @@ async function boot(): Promise<void> {
   const cfg = handle.store.get();
   const firstRun = !cfg.desktop.seen;
 
-  createOverlay();
   createTray();
+  applyOverlayWindow();
   applyAutostart();
   setupAutoUpdate();
   registerMoveHotkey();
@@ -583,6 +639,7 @@ async function boot(): Promise<void> {
   handle.events.on('config', () => registerSoundHotkeys());
   handle.events.on('config', () => fitOverlay());
   handle.events.on('config', () => registerMoveHotkey());
+  handle.events.on('config', () => applyOverlayWindow());
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });
