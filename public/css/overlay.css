@@ -167,6 +167,35 @@ html, body {
   transition: border-radius 0.25s ease;
 }
 
+/* Move-mode drag handle: a grab strip at the panel top (works even when the
+ * header is hidden). Shown only while move mode is armed. */
+.move-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 22%, rgba(12, 14, 26, 0.92));
+  border: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  color: var(--text, #eef0ff);
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+}
+.move-handle .grip {
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--accent);
+}
+body.move-mode .move-handle { display: flex; }
+body.dragging .move-handle { cursor: grabbing; }
+
 body[data-corner="tl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }
 body[data-corner="tr"] #panel { top: var(--margin-y); right: var(--margin-x); transform-origin: top right; }
 body[data-corner="bl"] #panel { top: var(--margin-y); left: var(--margin-x); transform-origin: top left; }

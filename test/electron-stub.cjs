@@ -108,6 +108,7 @@ const electron = {
   globalShortcut: { register: () => true, unregisterAll: noop, isRegistered: () => false },
   clipboard: { writeText: noop, readText: () => '' },
   Notification: class { show() {} },
+  shell: { openExternal: async () => {} },
   screen: {
     getPrimaryDisplay: () => ({ workArea }),
     on: noop,

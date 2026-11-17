@@ -25,6 +25,8 @@ export interface AppOptions {
   preferredPort?: number;
   /** Desktop only: trigger an update check in the shell. */
   checkUpdates?: () => void;
+  /** Desktop only: open a URL in the user's browser (OBS broadcast launch). */
+  openExternal?: (url: string) => void;
 }
 
 export interface AppHandle {
@@ -86,6 +88,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   /* ---------------- ws hub ---------------- */
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
+
+  let moveModeActive = false;
+  let panelSize: { w: number; h: number } | null = null;
 
   function broadcast(message: unknown): void {
     const raw = JSON.stringify(message);
@@ -195,7 +200,11 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     }
 
     if (url.startsWith('/api/displays') && method === 'GET') {
-      json(res, 200, { ok: true, displays: opts.listDisplays ? opts.listDisplays() : [] });
+      json(res, 200, {
+        ok: true,
+        displays: opts.listDisplays ? opts.listDisplays() : [],
+        panelSize,
+      });
       return;
     }
 
@@ -206,9 +215,63 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     }
 
     // The settings window arms overlay move mode (same signal as the tray).
-    if (url.startsWith('/api/overlay/move') && method === 'POST') {
-      broadcast({ type: 'move-mode' });
+    // NOTE: exact match — /move-confirm and friends are separate routes.
+    if (url === '/api/overlay/move' && method === 'POST') {
+      moveModeActive = !moveModeActive;
+      broadcast({ type: 'move-mode', active: moveModeActive });
+      json(res, 200, { ok: true, moveMode: moveModeActive });
+      return;
+    }
+
+    // The overlay finished a drag: position is pending until confirmed.
+    if (url === '/api/overlay/moved' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { marginX?: number; marginY?: number } | null;
+        broadcast({ type: 'move-pending', marginX: b?.marginX, marginY: b?.marginY });
+        json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    if (url === '/api/overlay/move-confirm' && method === 'POST') {
+      moveModeActive = false;
+      broadcast({ type: 'move-confirm' });
       json(res, 200, { ok: true });
+      return;
+    }
+
+    if (url === '/api/overlay/move-cancel' && method === 'POST') {
+      moveModeActive = false;
+      broadcast({ type: 'move-cancel' });
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    // The overlay reports its real panel size so the settings sliders can
+    // bound margins by "screen minus panel" exactly.
+    if (url === '/api/overlay/size' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { w?: number; h?: number } | null;
+        if (Number.isFinite(b?.w) && Number.isFinite(b?.h)) {
+          panelSize = { w: Math.round(Number(b?.w)), h: Math.round(Number(b?.h)) };
+        }
+        json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    // «Запустить вещание»: open the clean overlay page in the user's browser
+    // so OBS can capture it (or the URL can be pasted into a browser source).
+    if (url === '/api/obs/launch' && method === 'POST') {
+      const addr = server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : (opts.port ?? 0);
+      const target = `http://127.0.0.1:${port}/?clean=1`;
+      try {
+        opts.openExternal?.(target);
+      } catch (err) {
+        log(`[server] openExternal failed: ${err}`);
+      }
+      json(res, 200, { ok: true, url: target, applied: !!opts.openExternal });
       return;
     }
 
@@ -319,7 +382,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   });
 
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState }));
+    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive }));
   });
 
   return new Promise((resolve, reject) => {

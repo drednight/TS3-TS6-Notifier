@@ -536,6 +536,24 @@
         btn.textContent = t('moveOverlayBtn');
       }, 1500);
     });
+
+    $('moveConfirmBtn').addEventListener('click', () => {
+      fetch('/api/overlay/move-confirm', { method: 'POST' }).catch(() => {});
+    });
+    $('moveCancelBtn').addEventListener('click', () => {
+      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
+    });
+
+    $('obsLaunchBtn').addEventListener('click', () => {
+      fetch('/api/obs/launch', { method: 'POST' })
+        .then((r) => r.json())
+        .catch(() => {});
+      const btn = $('obsLaunchBtn');
+      btn.textContent = '✓';
+      setTimeout(() => {
+        btn.textContent = t('obsLaunchBtn');
+      }, 1500);
+    });
   }
 
   /* ---------------- websocket ---------------- */
@@ -551,6 +569,8 @@
       /* ignore */
     }
   }
+
+  let lastConnSig = '';
 
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -568,6 +588,7 @@
         Settings.syncServer(config);
         fillConnectionTab();
         syncFeatures();
+        if (msg.moveMode) enterMoveMode();
         if (msg.state) {
           state = msg.state;
           syncFeatures();
@@ -580,11 +601,27 @@
       } else if (msg.type === 'config') {
         config = msg.config;
         Settings.syncServer(config);
-        fillConnectionTab();
-        syncFeatures();
+        // Heavy tab refills only when non-appearance config changed — plain
+        // look tweaks must not re-render the whole settings surface.
+        const sig = JSON.stringify({ ...config, appearance: undefined });
+        if (sig !== lastConnSig) {
+          lastConnSig = sig;
+          fillConnectionTab();
+          syncFeatures();
+        }
       } else if (msg.type === 'move-mode') {
-        if (moveMode) exitMoveMode();
-        else enterMoveMode();
+        const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
+        if (want) enterMoveMode();
+        else exitMoveMode();
+      } else if (msg.type === 'move-pending') {
+        // A drag finished somewhere — wait for confirm/cancel.
+        showMoveConfirm(true);
+        const hint = $('moveHint');
+        if (hint) hint.textContent = t('moveHintPending');
+      } else if (msg.type === 'move-confirm') {
+        applyPendingPosition(true);
+      } else if (msg.type === 'move-cancel') {
+        applyPendingPosition(false);
       } else if (msg.type === 'update-status') {
         const el = $('updateStatus');
         if (el) {
@@ -624,37 +661,73 @@
 
   let moveMode = false;
   let moveModeTimer = 0;
+  let pendingX = null;
+  let pendingY = null;
+
+  function showMoveConfirm(on) {
+    const row = $('moveConfirmRow');
+    if (row) row.hidden = !on;
+    const btn = $('moveOverlayBtn');
+    if (btn) btn.hidden = !!on;
+  }
 
   function exitMoveMode() {
     if (!moveMode) return;
     moveMode = false;
     if (moveModeTimer) clearTimeout(moveModeTimer);
     moveModeTimer = 0;
+    pendingX = null;
+    pendingY = null;
     document.body.classList.remove('move-mode');
+    const handle = $('moveHandle');
+    if (handle) handle.hidden = true;
     const hint = $('moveHint');
     if (hint) hint.hidden = true;
+    showMoveConfirm(false);
     postClickthrough(clickThroughWanted());
   }
 
   function enterMoveMode() {
-    if (document.body.classList.contains('bare')) return;
     moveMode = true;
     document.body.classList.add('move-mode');
+    const handle = $('moveHandle');
+    if (handle) handle.hidden = false;
     const hint = $('moveHint');
     if (hint) {
       hint.hidden = false;
       hint.textContent = t('moveHint');
     }
+    showMoveConfirm(true);
     // The overlay is click-through for gameplay — take the mouse only while
-    // move mode is armed so the panel (and its buttons) can be used.
+    // move mode is armed so the handle (and buttons) can be used.
     postClickthrough(false);
     if (moveModeTimer) clearTimeout(moveModeTimer);
-    moveModeTimer = setTimeout(exitMoveMode, 60000);
+    // Unconfirmed moves die on timeout — nothing is saved without consent.
+    moveModeTimer = setTimeout(() => {
+      fetch('/api/overlay/move-cancel', { method: 'POST' }).catch(() => {});
+      applyPendingPosition(false);
+    }, 120000);
+  }
+
+  /** Confirm (save) or cancel (restore) the dragged position. */
+  function applyPendingPosition(save) {
+    const moved = pendingX !== null || pendingY !== null;
+    if (save && moved) {
+      Settings.appearance.marginX = pendingX;
+      Settings.appearance.marginY = pendingY;
+      putConfig({ appearance: { ...Settings.appearance, marginX: pendingX, marginY: pendingY } });
+    } else if (moved) {
+      // Snap back to the last saved position.
+      document.documentElement.style.setProperty('--margin-x', `${Number(Settings.appearance.marginX) || 0}px`);
+      document.documentElement.style.setProperty('--margin-y', `${Number(Settings.appearance.marginY) || 0}px`);
+    }
+    exitMoveMode();
   }
 
   function wireOverlayDrag() {
+    const handle = $('moveHandle');
     const header = $('panelHeader');
-    if (!header) return;
+    if (!handle && !header) return;
     let dragging = false;
     let startX = 0;
     let startY = 0;
@@ -663,9 +736,10 @@
     let curX = 0;
     let curY = 0;
 
-    header.addEventListener('mousedown', (e) => {
-      // Dragging is ONLY possible in move mode (armed via the "Переместить
-      // оверлей" hotkey) so the game never loses the mouse by accident.
+    const startDrag = (e) => {
+      // Dragging is ONLY possible in move mode so the game never loses the
+      // mouse by accident. The dedicated «⠿» handle works even when the
+      // header (channel name) is hidden by the user.
       if (!moveMode || e.target.closest('button')) return;
       e.preventDefault();
       dragging = true;
@@ -681,9 +755,8 @@
         const dy = ev.clientY - startY;
         const corner = document.body.dataset.corner || 'tr';
         const rightSide = corner === 'tr' || corner === 'br';
-        // No arbitrary limits: the panel can travel to any point of the
-        // screen — only clamped so it stays fully visible. The top edge is
-        // anchored, so the panel fills downward as users join.
+        // The panel bumps into the screen edges and never leaves them — the
+        // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
         const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
         const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
         curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
@@ -696,15 +769,25 @@
         document.body.classList.remove('dragging');
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
-        Settings.appearance.marginX = curX;
-        Settings.appearance.marginY = curY;
-        putConfig({ appearance: { ...Settings.appearance, marginX: curX, marginY: curY } });
-        // A finished drag ends move mode right away — the key is a one-shot.
-        exitMoveMode();
+        // Nothing is saved yet: the user confirms with the «Подтвердить»
+        // button («Отмена» snaps the panel back to the saved spot).
+        pendingX = curX;
+        pendingY = curY;
+        showMoveConfirm(true);
+        const hint = $('moveHint');
+        if (hint) hint.textContent = t('moveHintPending');
+        fetch('/api/overlay/moved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ marginX: curX, marginY: curY }),
+        }).catch(() => {});
       };
       document.addEventListener('mousemove', move);
       document.addEventListener('mouseup', up);
-    });
+    };
+
+    if (handle) handle.addEventListener('mousedown', startDrag);
+    if (header) header.addEventListener('mousedown', startDrag);
   }
 
   wireOverlayDrag();

@@ -11,6 +11,9 @@
   <!-- ======================= OVERLAY ======================= -->
   <div id="stage">
     <section id="panel" aria-label="TeamSpeak overlay">
+      <div id="moveHandle" class="move-handle" hidden>
+        <span class="grip">⠿</span><span data-i18n="moveHandleText"></span>
+      </div>
       <div id="moveHint" hidden></div>
       <header id="panelHeader">
         <span class="conn-dot" id="connDot" title=""></span>
@@ -71,7 +74,6 @@
       <button class="tab" data-tab="sound" data-i18n="tabSound" hidden></button>
       <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
       <button class="tab" data-tab="more" data-i18n="tabMore"></button>
-      <button class="tab" data-tab="about" data-i18n="tabAbout"></button>
     </nav>
 
     <div class="drawer-body">
@@ -156,6 +158,10 @@
 
         <div class="field">
           <button class="btn" id="moveOverlayBtn" data-i18n="moveOverlayBtn"></button>
+          <div class="btn-row" id="moveConfirmRow" hidden>
+            <button class="btn primary" id="moveConfirmBtn" data-i18n="moveConfirmBtn"></button>
+            <button class="btn" id="moveCancelBtn" data-i18n="moveCancelBtn"></button>
+          </div>
           <div class="hint" data-i18n="moveOverlayHint"></div>
         </div>
 
@@ -347,15 +353,8 @@
         <div class="hint block" data-i18n="overlayWindowHint"></div>
         <div class="hint block" id="obsHint"></div>
         <div class="btn-row">
+          <button class="btn primary" id="obsLaunchBtn" data-i18n="obsLaunchBtn"></button>
           <button class="btn" id="copyObsUrlBtn" data-i18n="copyObsUrlBtn"></button>
-        </div>
-      </section>
-
-      <!-- ---------- About ---------- -->
-      <section class="tab-panel" data-panel="about">
-        <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.13</span></div>
-          <div class="hint" data-i18n="aboutText"></div>
         </div>
 
         <div class="field">
@@ -368,6 +367,10 @@
           <input type="file" id="importFile" accept="application/json" hidden />
         </div>
 
+        <div class="card about-card">
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.1.15</span></div>
+          <div class="hint" data-i18n="aboutText"></div>
+        </div>
         <div class="hint block" data-i18n="aboutTip"></div>
       </section>
     </div>

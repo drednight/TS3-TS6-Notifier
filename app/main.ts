@@ -17,6 +17,7 @@ import {
   nativeImage,
   Notification,
   screen,
+  shell,
   Tray,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
@@ -63,6 +64,7 @@ let settingsWin: BrowserWindow | null = null;
 let boardWin: BrowserWindow | null = null;
 const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
+let screenHooksInstalled = false;
 let overlayVisible = true;
 
 app.setAppUserModelId('dev.tsnotifier.app');
@@ -347,9 +349,12 @@ function createOverlay(): void {
   overlayWin.once('ready-to-show', show);
   setTimeout(show, 1500);
 
-  screen.on('display-metrics-changed', fitOverlay);
-  screen.on('display-added', fitOverlay);
-  screen.on('display-removed', fitOverlay);
+  if (!screenHooksInstalled) {
+    screenHooksInstalled = true;
+    screen.on('display-metrics-changed', fitOverlay);
+    screen.on('display-added', fitOverlay);
+    screen.on('display-removed', fitOverlay);
+  }
   log(`[app] overlay bounds ${workArea.width}x${workArea.height}+${workArea.x}+${workArea.y}`);
 }
 
@@ -700,6 +705,9 @@ async function boot(): Promise<void> {
       }
     },
     checkUpdates: () => checkForUpdatesNow(),
+    openExternal: (url: string) => {
+      void shell.openExternal(url).catch((err) => log('[app] openExternal failed: ' + err));
+    },
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
@@ -714,11 +722,32 @@ async function boot(): Promise<void> {
   setupAutoUpdate();
   registerMoveHotkey();
   registerSoundHotkeys();
-  handle.events.on('config', () => registerSoundHotkeys());
-  handle.events.on('config', () => fitOverlay());
-  handle.events.on('config', () => registerMoveHotkey());
-  handle.events.on('config', () => applyOverlayWindow());
-  handle.events.on('config', () => buildTrayMenu());
+  // One guarded listener: heavy shell work only when its own slice changed.
+  // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
+  let lastFitSig = '';
+  let lastTraySig = '';
+  handle.events.on('config', () => {
+    const cfg = handle!.store.get();
+    const fitSig = String(cfg.desktop.display ?? 'primary');
+    if (fitSig !== lastFitSig) {
+      lastFitSig = fitSig;
+      fitOverlay();
+    }
+    const traySig = JSON.stringify([
+      cfg.appearance.language,
+      cfg.desktop.autostart,
+      cfg.desktop.clickThrough,
+      cfg.desktop.visible,
+      cfg.desktop.overlayWindow,
+    ]);
+    if (traySig !== lastTraySig) {
+      lastTraySig = traySig;
+      buildTrayMenu();
+    }
+    applyOverlayWindow();
+    registerMoveHotkey();
+    registerSoundHotkeys();
+  });
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });

@@ -207,19 +207,34 @@
   }
 
   let saveTimer = null;
-  function notifyChange() {
+  function pushConfig() {
+    fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appearance }),
+    }).catch(() => {});
+  }
+
+  /** immediate: toggles/buttons save at once (no debounce flicker); sliders
+   *  stay debounced while dragging. */
+  function notifyChange(immediate) {
     recompute();
     apply();
     persistLocal();
+    // The in-memory server mirror follows the effective appearance so a later
+    // broadcast echo can never roll back what the user just did.
+    server = sanitize(appearance);
     for (const cb of saveListeners) cb(appearance);
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      fetch('/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appearance }),
-      }).catch(() => {});
-    }, 450);
+    saveTimer = null;
+    if (immediate) {
+      pushConfig();
+    } else {
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        pushConfig();
+      }, 250);
+    }
   }
 
   /* ---------------- drawer UI ---------------- */
@@ -237,8 +252,10 @@
     if (boundsCache) return boundsCache;
     const sw = Number(window.screen?.availWidth) || 1920;
     const sh = Number(window.screen?.availHeight) || 1080;
-    const c = panelClamp();
-    boundsCache = { maxX: Math.min(Math.round(sw), c.maxX), maxY: Math.min(Math.round(sh), c.maxY) };
+    boundsCache = {
+      maxX: Math.max(0, Math.round(sw) - (panelW || 292)),
+      maxY: Math.max(0, Math.round(sh) - (panelH || 140)),
+    };
     try {
       fetch('/api/displays')
         .then((r) => r.json())
@@ -246,12 +263,11 @@
           const list = body?.displays || [];
           const d = list.find((x) => x.primary) || list[0];
           if (d?.width && d?.height) {
-            const panel = document.getElementById('panel');
-            const panelW = panel?.offsetWidth || 292;
-            const panelH = panel?.offsetHeight || 140;
+            const pw = body?.panelSize?.w || panelW || 292;
+            const ph = body?.panelSize?.h || panelH || 140;
             boundsCache = {
-              maxX: Math.max(0, Math.round(d.width) - panelW),
-              maxY: Math.max(0, Math.round(d.height) - panelH),
+              maxX: Math.max(0, Math.round(d.width) - pw),
+              maxY: Math.max(0, Math.round(d.height) - ph),
             };
             paintControls();
           }
@@ -263,16 +279,27 @@
     return boundsCache;
   }
 
-  /** Screen bounds minus the panel size — the panel must never leave the screen. */
-  function panelClamp() {
+  /* Panel metrics are cached: reading offsetWidth/offsetHeight on every apply
+   * forced a synchronous layout each slider tick (visible lag in v1.1.14). */
+  let panelW = 0;
+  let panelH = 0;
+  function measurePanel() {
     const panel = document.getElementById('panel');
-    const screenW = Number(window.screen?.availWidth) || 1920;
-    const screenH = Number(window.screen?.availHeight) || 1080;
-    const panelW = panel?.offsetWidth || 292;
-    const panelH = panel?.offsetHeight || 140;
+    if (panel && panel.offsetWidth) panelW = panel.offsetWidth;
+    if (panel && panel.offsetHeight) panelH = panel.offsetHeight;
+    boundsCache = null;
+  }
+
+  /** Viewport minus the panel size — the panel must never leave the surface
+   *  it lives in. window.innerWidth/innerHeight match the drag handler's
+   *  bounds exactly (the overlay window on desktop, the browser source in
+   *  OBS), so a dropped panel never snaps elsewhere on apply. */
+  function panelClamp() {
+    const vw = Number(window.innerWidth) || Number(window.screen?.availWidth) || 1920;
+    const vh = Number(window.innerHeight) || Number(window.screen?.availHeight) || 1080;
     return {
-      maxX: Math.max(0, screenW - panelW),
-      maxY: Math.max(0, screenH - panelH),
+      maxX: Math.max(0, vw - (panelW || 292)),
+      maxY: Math.max(0, vh - (panelH || 140)),
     };
   }
 
@@ -331,7 +358,7 @@
     if (eqSel) eqSel.value = a.eqStyle;
   }
 
-  function set(key, value) {
+  function set(key, value, immediate) {
     const s = sanitize({ [key]: value });
     if (!(key in s)) return;
     local[key] = s[key];
@@ -339,7 +366,7 @@
       // Themes carry their own signature accent — switch along with the theme.
       local.accent = THEME_ACCENTS[s[key]];
     }
-    notifyChange();
+    notifyChange(immediate !== false);
     paintControls();
     if (key === 'language') I18N.setLanguage(appearance.language);
   }
@@ -348,7 +375,7 @@
     document.querySelectorAll('[data-slider]').forEach((field) => {
       const key = field.getAttribute('data-slider');
       const input = field.querySelector('input[type="range"]');
-      input.addEventListener('input', () => set(key, Number(input.value)));
+      input.addEventListener('input', () => set(key, Number(input.value), false));
     });
 
     document.querySelectorAll('[data-toggle]').forEach((input) => {
@@ -438,12 +465,13 @@
 
     document.getElementById('resetBtn').addEventListener('click', () => {
       local = {};
+      server = { ...DEFAULTS };
       try {
         localStorage.removeItem(LS_KEY);
       } catch {
         /* ignore */
       }
-      notifyChange();
+      notifyChange(true);
       paintControls();
       I18N.setLanguage(appearance.language);
     });
@@ -466,18 +494,40 @@
         local = {};
       }
       urlOverrides = parseUrl();
+      measurePanel();
       recompute();
       apply();
       wireDrawer();
       paintControls();
       I18N.setLanguage(appearance.language);
+      window.addEventListener('resize', () => {
+        measurePanel();
+        paintControls();
+      });
+      // Another window (overlay ↔ settings) changed the appearance: apply it
+      // immediately — no waiting for the server echo.
+      window.addEventListener('storage', (e) => {
+        if (e.key !== LS_KEY) return;
+        try {
+          local = { ...local, ...sanitize(JSON.parse(localStorage.getItem(LS_KEY) || '{}')) };
+        } catch {
+          /* ignore */
+        }
+        recompute();
+        apply();
+        paintControls();
+      });
     },
     /** Server pushed its config (hello / config message). */
     syncServer(cfg) {
-      server = sanitize(cfg?.appearance);
+      const incoming = sanitize(cfg?.appearance);
+      // Server values win over the local cache: what was saved is what shows.
+      local = { ...local, ...incoming };
+      server = incoming;
       recompute();
       apply();
       paintControls();
+      persistLocal();
     },
     onChange(cb) {
       saveListeners.push(cb);
