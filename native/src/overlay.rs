@@ -155,24 +155,34 @@ pub fn build_feed(state: &OverlayState, a: &crate::config::Appearance, lang: &st
     out
 }
 
-/// Whisper-section users with linger (v1.4.9 whisperDelay).
-pub fn whisper_rows(
-    users: &[UserState],
+/// Whisper-section users with linger (v1.4.9 whisperDelay). Rows move to the
+/// whisper block AND OUT of the roster while active (app.js containerFor), and
+/// return to the roster when the linger expires.
+pub fn whisper_now(u: &UserState, seen: &mut HashMap<String, u64>, now: u64, linger_ms: u64) -> bool {
+    if u.whispering {
+        seen.insert(u.id.clone(), now);
+    }
+    let last = seen.get(&u.id).copied().unwrap_or(0);
+    u.whispering || (last > 0 && now.saturating_sub(last) < linger_ms)
+}
+
+/// Split sorted users into (roster, whisper-block) preserving order.
+pub fn split_whisper(
+    users: Vec<UserState>,
     seen: &mut HashMap<String, u64>,
     now: u64,
     linger_ms: u64,
-) -> Vec<(String, String, bool, bool)> {
-    let mut out = Vec::new();
+) -> (Vec<UserState>, Vec<UserState>) {
+    let mut roster = Vec::new();
+    let mut whisper = Vec::new();
     for u in users {
-        if u.whispering {
-            seen.insert(u.id.clone(), now);
-        }
-        let last = seen.get(&u.id).copied().unwrap_or(0);
-        if u.whispering || (last > 0 && now.saturating_sub(last) < linger_ms) {
-            out.push((u.id.clone(), u.nickname.clone(), u.talking, u.is_self));
+        if whisper_now(&u, seen, now, linger_ms) {
+            whisper.push(u);
+        } else {
+            roster.push(u);
         }
     }
-    out
+    (roster, whisper)
 }
 
 /// Visible roster rows: showSelf/hideQuery/onlyTalking/talkingFirst (app.js rules).
@@ -300,24 +310,26 @@ impl Overlay {
             lang
         };
 
-        let rows = roster_rows(&state.users, &a);
+        let all = roster_rows(&state.users, &a);
+        let linger = (a.whisper_delay.max(0.0) * 1000.0) as u64;
+        let (rows, whisperers) = if a.show_whispers {
+            split_whisper(all, &mut self.whisper_seen, now_ms, linger)
+        } else {
+            (all, Vec::new())
+        };
+        let groups: Vec<(i64, String)> = state
+            .groups
+            .iter()
+            .map(|g| (g.id, g.name.clone()))
+            .collect();
         let class_keys: Vec<Option<String>> = rows
             .iter()
-            .map(|u| {
-                let groups: Vec<(i64, String)> = state
-                    .groups
-                    .iter()
-                    .map(|g| (g.id, g.name.clone()))
-                    .collect();
-                class_key_for(&u.server_groups, &groups, &cfg.classes.map)
-            })
+            .map(|u| class_key_for(&u.server_groups, &groups, &cfg.classes.map))
             .collect();
-        let linger = (a.whisper_delay.max(0.0) * 1000.0) as u64;
-        let whisperers = if a.show_whispers {
-            whisper_rows(&state.users, &mut self.whisper_seen, now_ms, linger)
-        } else {
-            Vec::new()
-        };
+        let whisper_keys: Vec<(String, Option<String>)> = whisperers
+            .iter()
+            .map(|u| (u.id.clone(), class_key_for(&u.server_groups, &groups, &cfg.classes.map)))
+            .collect();
         let feed = build_feed(&state, &a, lang);
 
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
@@ -329,9 +341,10 @@ impl Overlay {
             status: state.status,
             server_name: &state.server_name,
             channel_name: &state.channel_name,
-            user_count: rows.len(),
+            user_count: rows.len() + whisperers.len(),
             users: rows,
             class_keys,
+            whisper_keys,
             whisperers,
             feed,
             lang,
@@ -927,23 +940,28 @@ mod tests {
     }
 
     #[test]
-    fn whisper_linger_expires() {
+    fn whisper_split_and_linger() {
         let mut seen = HashMap::new();
         let u = |id: &str, whisper: bool| {
             let mut x = UserState::new(id, "N");
             x.whispering = whisper;
             x.talking = whisper;
+            x.input_muted = true; // full state must survive into the whisper block
             x
         };
-        let users = vec![u("1", true)];
-        let rows = whisper_rows(&users, &mut seen, 1000, 4000);
-        assert_eq!(rows.len(), 1);
-        // stops whispering — lingers 4s then drops
-        let users = vec![u("1", false)];
-        assert_eq!(whisper_rows(&users, &mut seen, 3000, 4000).len(), 1);
-        assert_eq!(whisper_rows(&users, &mut seen, 4900, 4000).len(), 1, "3.9s < 4s linger");
-        assert_eq!(whisper_rows(&users, &mut seen, 5500, 4000).len(), 0, "4.5s past linger");
-        assert_eq!(whisper_rows(&users, &mut seen, 6000, 4000).len(), 0);
+        // whispering user lives in the whisper block ONLY (app.js containerFor)
+        let (roster, whisper) = split_whisper(vec![u("1", true), u("2", false)], &mut seen, 1000, 4000);
+        assert_eq!(roster.len(), 1);
+        assert_eq!(roster[0].id, "2");
+        assert_eq!(whisper.len(), 1);
+        assert!(whisper[0].input_muted, "full UserState preserved");
+        // stops whispering — lingers 4s, then returns to the roster
+        let (roster, whisper) = split_whisper(vec![u("1", false), u("2", false)], &mut seen, 3000, 4000);
+        assert_eq!((roster.len(), whisper.len()), (1, 1));
+        let (roster, whisper) = split_whisper(vec![u("1", false), u("2", false)], &mut seen, 4900, 4000);
+        assert_eq!((roster.len(), whisper.len()), (1, 1), "3.9s < 4s linger");
+        let (roster, whisper) = split_whisper(vec![u("1", false), u("2", false)], &mut seen, 5500, 4000);
+        assert_eq!((roster.len(), whisper.len()), (2, 0), "4.5s past linger — back to roster");
     }
 
     #[test]

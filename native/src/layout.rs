@@ -52,8 +52,10 @@ pub struct FrameInput<'a> {
     pub users: Vec<UserState>,
     /// class keys aligned with `users` (avatar slot art)
     pub class_keys: Vec<Option<String>>,
-    /// whisper-section users (id, nick, talking, self) — linger applied by caller
-    pub whisperers: Vec<(String, String, bool, bool)>,
+    /// class keys aligned with `whisperers`
+    pub whisper_keys: Vec<(String, Option<String>)>,
+    /// whisper-section users (full rows) — split+linger applied by caller
+    pub whisperers: Vec<UserState>,
     pub feed: Vec<FeedItem>,
     pub lang: &'a str,
     pub move_mode: bool,
@@ -338,14 +340,18 @@ fn draw_user_row(
         buf.round_rect(x, y, w, h, radius, pal.talking_bg);
         // v1.4.9 «Обводка говорящего» — 2px outline of the whole row strip
         buf.stroke_round_rect(x, y, w, h, radius, pal.talk_outline, c.s(2.0));
-    } else if whisper {
-        let mut bg = pal.accent.scale_a(14.0);
-        if c.anim {
-            let ph = ((c.now / 2600.0) % 1.0) * std::f64::consts::PI * 2.0;
-            bg = pal.accent.scale_a((10.0 + 8.0 * ph.sin().abs()) as f64);
+    }
+    if whisper {
+        // .whisper-list .row::before — accent wash fading to 70% width
+        let steps = 12;
+        for i in 0..steps {
+            let t = i as f32 / steps as f32;
+            let a = if t < 0.7 { (46.0 * (1.0 - t / 0.7)) as u8 } else { 0 };
+            if a == 0 {
+                continue;
+            }
+            buf.fill_rect(x + w * t, y, w / steps as f32 + 1.0, h, pal.accent.scale_a(a as f64));
         }
-        buf.round_rect(x, y, w, h, radius, bg);
-        buf.round_rect(x, y + h * 0.18, c.s(2.5), h * 0.64, c.s(1.25), pal.accent);
     }
     let av = if h < c.s(36.0) { c.s(24.0) } else { c.s(30.0) };
     let av_x = x + if whisper { c.s(11.0) } else { c.s(8.0) };
@@ -647,12 +653,15 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             inp.pal.accent.scale_a(0.0),
         );
         cy += whisper_head_h + c.s(2.0);
-        for (id, nick, talking, is_self) in &inp.whisperers {
-            let mut u = UserState::new(id.clone(), nick.clone());
-            u.talking = *talking;
-            u.whispering = true;
-            u.is_self = *is_self;
-            draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, &u, None, true, &you_label, &opts);
+        for u in &inp.whisperers {
+            let key = inp.whisper_keys.iter().find(|(id, _)| *id == u.id).and_then(|(_, k)| k.as_deref());
+            draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, &you_label, &opts);
+            // whisperPulse: whole-row opacity 0.55 ↔ 1 (2.6s)
+            if c.anim {
+                let ph = ((c.now / 2600.0) % 1.0) as f32 * std::f32::consts::PI * 2.0;
+                let f = 0.55 + 0.45 * (0.5 + 0.5 * ph.sin());
+                buf.fade_rect(px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, f, inp.pal.panel_bg);
+            }
             cy += row_h + row_gap;
         }
         cy += c.s(4.0);
@@ -674,7 +683,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let nick_w = inp.fonts.measure(&item.nickname, size, true);
             let nick = inp.fonts.truncate(&item.nickname, size, true, w0 * 0.42);
             inp.fonts.draw(&mut buf, x0 + c.s(8.0), baseline, &nick, size, true, inp.pal.nick);
-            let mut tx = x0 + c.s(8.0) + nick_w + c.s(6.0);
+            let tx = x0 + c.s(8.0) + nick_w + c.s(6.0);
             if item.kind == 0 {
                 // minimal action text after the colored nick
                 let rest = inp.fonts.truncate(&item.text, size, false, x0 + w0 - c.s(8.0) - tx);
@@ -682,7 +691,6 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             } else {
                 let rest = inp.fonts.truncate(&format!("— {}", item.text), size, false, x0 + w0 - c.s(8.0) - tx);
                 inp.fonts.draw(&mut buf, tx, baseline, &rest, size, false, inp.pal.msg);
-                tx += 0.0;
             }
             cy += feed_row_h + feed_gap;
         }
@@ -764,7 +772,13 @@ mod tests {
             user_count: 2,
             users: vec![u1, u2],
             class_keys: vec![Some("archer".into()), None],
-            whisperers: vec![("3".into(), "Мыsha".into(), true, false)],
+            whisper_keys: vec![],
+            whisperers: {
+                let mut w = UserState::new("3", "Мыsha");
+                w.whispering = true;
+                w.talking = true;
+                vec![w]
+            },
             feed: vec![FeedItem { nickname: "Alice".into(), text: "привет".into(), kind: 1 }],
             lang: "ru",
             move_mode: true,
@@ -803,6 +817,7 @@ mod tests {
             user_count: 0,
             users: vec![],
             class_keys: vec![],
+            whisper_keys: vec![],
             whisperers: vec![],
             feed: vec![],
             lang: "en",
@@ -857,7 +872,12 @@ mod qa {
             user_count: 4,
             users: vec![alice, me, bob, mk("102", "Мыsha Петров", false, false, false, false)],
             class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into()), None],
-            whisperers: vec![("103".into(), "Ghost".into(), true, false)],
+            whisper_keys: vec![("103".into(), Some("ghost".into()))],
+            whisperers: {
+                let mut w = mk("103", "Ghost", true, true, false, false);
+                w.whispering = true;
+                vec![w]
+            },
             feed: vec![
                 FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 },
                 FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 },
@@ -887,6 +907,7 @@ mod qa {
             user_count: 0,
             users: vec![],
             class_keys: vec![],
+            whisper_keys: vec![],
             whisperers: vec![],
             feed: vec![],
             lang: "en",

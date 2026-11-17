@@ -360,6 +360,7 @@ await new Promise((r) => setTimeout(r, 250));
 sendLine({ e: 'move', clid: 3, from: 11, to: 10, name: 'Дальний', groups: '', cname: 'Лобби' });
 sendLine({ e: 'chat', kind: 'server', clid: 2, name: 'Гость', text: 'Welcome' });
 sendLine({ e: 'talk', clid: 2, s: 1 });
+sendLine({ e: 'talk', clid: 2, s: 1, w: 1 });
 sendLine({ e: 'client', clid: 2, name: 'Гость', groups: '6,12' });
 sendLine({ e: 'poke', clid: 3, name: 'Дальний', text: 'привет' });
 await new Promise((r) => setTimeout(r, 250));
@@ -371,6 +372,13 @@ await new Promise((r) => setTimeout(r, 250));
   check('plugin: poke row', rows.some((m) => m.kind === 'poke' && m.text === 'привет'));
   check('plugin: group-change row', rows.some((m) => m.event === 'group' && m.userId === '2'));
   check('plugin: talk state updates', users.some((u) => u.id === '2' && u.talking === true));
+  check('plugin: whisper flag "w" sets whispering (v2 plugin)', users.some((u) => u.id === '2' && u.whispering === true && u.talking === true), JSON.stringify(users));
+}
+sendLine({ e: 'talk', clid: 2, s: 0, w: 0 });
+await new Promise((r) => setTimeout(r, 150));
+{
+  const users = pStates.at(-1)?.users || [];
+  check('plugin: talk stop clears talking and whisper', users.some((u) => u.id === '2' && u.talking === false && u.whispering === false), JSON.stringify(users));
 }
 
 // The plugin must take over from the ClientQuery fallback while it is alive.

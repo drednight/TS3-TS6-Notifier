@@ -198,6 +198,27 @@ impl Buf {
         }
     }
 
+    /// CSS-like opacity over a backdrop: lerp colors+alpha toward `towards`.
+    pub fn fade_rect(&mut self, x: f32, y: f32, w: f32, h: f32, f: f32, towards: Rgba) {
+        let f = f.clamp(0.0, 1.0);
+        if f >= 1.0 {
+            return;
+        }
+        let x0 = x.floor().max(0.0) as i32;
+        let y0 = y.floor().max(0.0) as i32;
+        let x1 = (x + w).ceil().min(self.w as f32) as i32;
+        let y1 = (y + h).ceil().min(self.h as f32) as i32;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let i = ((yy * self.w + xx) * 4) as usize;
+                for ch in 0..4 {
+                    let v = self.px[i + ch] as f32 * f + towards.0[ch] as f32 * (1.0 - f);
+                    self.px[i + ch] = v.round() as u8;
+                }
+            }
+        }
+    }
+
     /// Bilinear-scaled RGBA blit with optional circle clip (for avatars/icons).
     pub fn blit_rgba(&mut self, dx: f32, dy: f32, dw: f32, dh: f32, src: &[u8], sw: i32, sh: i32, circle_clip: bool) {
         if dw <= 0.0 || dh <= 0.0 {

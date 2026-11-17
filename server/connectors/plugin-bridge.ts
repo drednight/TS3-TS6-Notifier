@@ -405,7 +405,14 @@ export class PluginState {
         const id = num(msg['clid']);
         const prev = this.clients.get(id);
         if (prev) {
-          this.clients.set(id, { ...prev, talking: num(msg['s']) === 1 });
+          // v2 plugin sends "w" (isReceivedWhisper); s==2 marks whispering in
+          // the TS3 SDK — both show in the whisper section (v1.4.9 linger).
+          const whisper = num(msg['w']) === 1 || num(msg['s']) === 2;
+          this.clients.set(id, {
+            ...prev,
+            talking: num(msg['s']) === 1 || whisper,
+            whispering: whisper,
+          });
           this.emitState();
         }
         return;
