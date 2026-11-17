@@ -374,7 +374,7 @@ try {
     check('settings: slider values painted', !!doc.querySelector('[data-slider="opacity"] output')?.textContent.includes('%'), doc.querySelector('[data-slider="opacity"] output')?.textContent);
     check('settings: connection status pill', !!doc.getElementById('statusPill').textContent, doc.getElementById('statusPill').textContent);
 
-    // interaction: click a theme button and a toggle, expect CSS var change
+    // interaction: click an accent swatch and a toggle, expect CSS var change
     const before = doc.documentElement.style.getPropertyValue('--accent');
     doc.querySelector('#accentSwatches .swatch[data-value="#22d3ee"]').click();
     const after = doc.documentElement.style.getPropertyValue('--accent');
@@ -555,7 +555,9 @@ try {
   // v1.4.9: talking outline on the row strip, sticky preview, whisper linger
   check('colors: talking outline highlights the row strip', /\.row\.talking \{ box-shadow: 0 0 0 2px var\(--talk-outline\)/.test(css) && !/\.row\.talking \.avatar \{ outline/.test(css));
   check('preview: live preview pinned while scrolling', /\.preview-strip[\s\S]{0,200}position: sticky/.test(css));
-  check('presets: exactly four preset tiles', (html.match(/id="presetSeg"[\s\S]*?<\/div>/) || [''])[0].match(/data-value=/g).length === 4 && !/presetSoft|presetClassic/.test(i18n));
+  check('presets: all eight looks available as presets', (html.match(/id="presetSeg"[\s\S]*?<\/div>/) || [''])[0].match(/data-value=/g).length === 8 && !/presetSoft|presetClassic/.test(i18n));
+  check('themes: duplicate theme selector removed', !/id="themeSeg"/.test(html) && !/themeGlass/.test(i18n));
+  check('about: OBS tip line removed', !/aboutTip/.test(html) && !/aboutTip/.test(i18n));
   check('whisper: linger delay setting wired', !!/data-slider="whisperDelay"/.test(html) && !!DEFAULT_APPEARANCE.whisperDelay && /whisperSeen/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
 }
 

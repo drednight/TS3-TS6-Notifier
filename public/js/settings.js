@@ -66,6 +66,10 @@
     midnight: { theme: 'midnight', accent: '#4f7dff', nickColor: '#dfe6ff', msgColor: '#98a2c0', talkOutline: '#4f7dff', blur: 14, opacity: 0.85, glow: 0.4 },
     frost: { theme: 'frost', accent: '#38bdf8', nickColor: '#0b2740', msgColor: '#2b5a7d', talkOutline: '#0ea5e9', blur: 10, opacity: 0.9, glow: 0.3 },
     neon: { theme: 'neon', accent: '#ff2fd6', nickColor: '#39ff9c', msgColor: '#c9b8ff', talkOutline: '#39ff9c', blur: 22, opacity: 0.66, glow: 1 },
+    emerald: { theme: 'emerald', accent: '#10b981', nickColor: '#eafff5', msgColor: '#9fd8c2', talkOutline: '#34d399', blur: 12, opacity: 0.8, glow: 0.45 },
+    carmine: { theme: 'carmine', accent: '#f43f5e', nickColor: '#ffe4ec', msgColor: '#e79ab0', talkOutline: '#ff5d8f', blur: 10, opacity: 0.85, glow: 0.5 },
+    amber: { theme: 'amber', accent: '#f59e0b', nickColor: '#fff1d0', msgColor: '#dcbb80', talkOutline: '#ffb224', blur: 8, opacity: 0.88, glow: 0.4 },
+    mono: { theme: 'mono', accent: '#e5e5e5', nickColor: '#f4f4f4', msgColor: '#b3b3b3', talkOutline: '#cfcfcf', blur: 6, opacity: 0.92, glow: 0.15 },
   };
 
   const THEME_ACCENTS = {
@@ -382,10 +386,6 @@
       if (output) output.textContent = fmt(key, Number(input.value));
     }
 
-    document.querySelectorAll('#themeSeg button').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.value === a.theme);
-    });
-
     document.querySelectorAll('[data-color]').forEach((inp) => {
       const key = inp.getAttribute('data-color');
       if (key in a) inp.value = a[key];
@@ -444,10 +444,6 @@
 
     document.querySelectorAll('[data-toggle]').forEach((input) => {
       input.addEventListener('change', () => set(input.getAttribute('data-toggle'), input.checked));
-    });
-
-    document.querySelectorAll('#themeSeg button').forEach((btn) => {
-      btn.addEventListener('click', () => set('theme', btn.dataset.value));
     });
 
     document.querySelectorAll('#presetSeg button').forEach((btn) => {
