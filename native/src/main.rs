@@ -2,15 +2,21 @@
 //! HTTP/WS server for the web overlay. Drop-in replacement for the Node
 //! server (same config.json, same wire protocol).
 
+mod assets;
 mod chatlog;
 mod config;
 mod diag;
 mod http;
 mod icons;
+mod font;
 mod json;
 mod model;
+mod layout;
 mod mock;
+mod overlay;
 mod plugin;
+mod render;
+mod theme;
 mod ts3;
 mod ts6;
 mod wire;
@@ -195,6 +201,12 @@ fn main() {
         }
     };
     println!("[server] TS3-TS6 Notifier running at http://{host}:{port}");
+    // Native overlay window (win32 layered window on Windows; headless loop
+    // elsewhere). TSN_OVERLAY=0 disables it (tests, server-only deployments).
+    if std::env::var("TSN_OVERLAY").map(|v| v != "0").unwrap_or(true) {
+        let _overlay = overlay::spawn(app.clone(), port);
+        println!("[overlay] native overlay started");
+    }
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
