@@ -12,11 +12,13 @@ mod model;
 mod mock;
 mod plugin;
 mod ts3;
+mod ts6;
 mod wire;
 mod wsframe;
 
 use config::ConfigStore;
 use http::App;
+use json::Json;
 use model::{now_ms, OverlayState};
 use plugin::{Emit, Ts3WithPluginConnector};
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ use std::time::Duration;
 enum Handle {
     Ts3Plugin(Ts3WithPluginConnector),
     Mock(mock::MockConnector),
+    Ts6(Arc<AtomicBool>),
     Stub,
 }
 
@@ -37,6 +40,7 @@ impl Handle {
         match self {
             Handle::Ts3Plugin(c) => c.stop(),
             Handle::Mock(c) => c.stop(),
+            Handle::Ts6(stop) => stop.store(true, std::sync::atomic::Ordering::SeqCst),
             Handle::Stub => {}
         }
     }
@@ -95,14 +99,27 @@ fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
             Handle::Ts3Plugin(conn)
         }
         "ts6" => {
-            // TODO(stage 2): TS6 Remote Apps connector.
-            emit(OverlayState::empty(
-                "ts6",
-                "error",
-                "TS6 (Remote Apps) ещё не перенесён в нативную версию — используйте Electron-сборку",
-            ));
-            println!("[server] data source: ts6 (stub)");
-            Handle::Stub
+            let save_key: ts6::SaveKeyFn = {
+                let store = store.clone();
+                Arc::new(move |key: String| {
+                    let patch = crate::json::obj(vec![
+                        ("ts6", crate::json::obj(vec![("apiKey", Json::s(key))])),
+                    ]);
+                    // Persist only — a restart is not triggered here (same as TS).
+                    let _ = store.lock().unwrap().update(&patch);
+                })
+            };
+            let stop = Arc::new(AtomicBool::new(false));
+            {
+                let stop = stop.clone();
+                let host = cfg.ts6.host.clone();
+                let api_key = cfg.ts6.api_key.clone();
+                thread::spawn(move || {
+                    ts6::run(host, cfg.ts6.port, api_key, save_key, stop, move |st| emit(st));
+                });
+            }
+            println!("[server] data source: ts6");
+            Handle::Ts6(stop)
         }
         _ => {
             let conn = mock::MockConnector::start(emit);

@@ -49,6 +49,16 @@ impl Json {
             _ => String::new(),
         }
     }
+    /// bool | number!=0 | "1"/"true" -> bool (matches the TS `jBool()` helper).
+    pub fn loose_bool(&self) -> bool {
+        match self {
+            Json::Bool(b) => *b,
+            Json::Num(n) => *n != 0.0,
+            Json::Str(s) => s == "1" || s.eq_ignore_ascii_case("true"),
+            _ => false,
+        }
+    }
+
     /// number | string(number) -> i64 (matches the TS `num()` helper).
     pub fn loose_i64(&self) -> i64 {
         match self {
