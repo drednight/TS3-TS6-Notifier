@@ -863,6 +863,12 @@
         // Appearance flags (events feed, unread badge, elements) take effect
         // immediately — one rAF-coalesced re-render.
         scheduleRender();
+        // A size/appearance change coming from another window: re-measure the
+        // panel so the cropped desktop window follows it.
+        if (isCleanMode) {
+          lastBoundsSig = '';
+          scheduleBounds();
+        }
       } else if (msg.type === 'move-mode') {
         const want = typeof msg.active === 'boolean' ? msg.active : !moveMode;
         if (want) enterMoveMode();
@@ -958,6 +964,11 @@
           if (b.screenW) document.documentElement.style.setProperty('--screen-w', `${b.screenW}px`);
           if (b.screenH) document.documentElement.style.setProperty('--screen-h', `${b.screenH}px`);
           applyCropVars();
+          // The window is cropped to the panel, so the viewport is NOT the
+          // placement surface anymore — hand the real work area to the
+          // settings model or every apply() would clamp the panel back into
+          // its corner.
+          Settings.setSurface(b.screenW, b.screenH);
         }
       })
       .catch(() => {});
@@ -979,6 +990,16 @@
       subtree: true,
       attributes: true,
       characterData: true,
+    });
+    // Size changes (panel width / max height, fonts, scale…) are layout or
+    // CSS-var changes the observer above never sees — without a fresh report
+    // the cropped desktop window keeps its old size and clips the panel.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(scheduleBounds).observe($('panel'));
+    }
+    Settings.onChange(() => {
+      lastBoundsSig = '';
+      scheduleBounds();
     });
     window.addEventListener('resize', () => {
       lastBoundsSig = '';
@@ -1046,13 +1067,13 @@
   function applyPendingPosition(save) {
     const moved = pendingX !== null || pendingY !== null;
     if (save && moved) {
-      Settings.appearance.marginX = pendingX;
-      Settings.appearance.marginY = pendingY;
-      putConfig({ appearance: { ...Settings.appearance, marginX: pendingX, marginY: pendingY } });
+      // Save through the settings model: the value lands in the local cache,
+      // in CSS and on the server in one step, so a later config echo cannot
+      // roll the panel back to the corner it was dragged away from.
+      Settings.setMany({ marginX: pendingX, marginY: pendingY });
     } else if (moved) {
       // Snap back to the last saved position.
-      document.documentElement.style.setProperty('--margin-x', `${Number(Settings.appearance.marginX) || 0}px`);
-      document.documentElement.style.setProperty('--margin-y', `${Number(Settings.appearance.marginY) || 0}px`);
+      Settings.reapply();
     }
     exitMoveMode();
   }
@@ -1091,8 +1112,11 @@
         const bottomSide = corner === 'bl' || corner === 'br';
         // The panel bumps into the screen edges and never leaves them — the
         // bounds match apply()'s clamp exactly so a dropped panel STAYS put.
-        const maxX = Math.max(0, (window.innerWidth || 0) - (panel?.offsetWidth || 0));
-        const maxY = Math.max(0, (window.innerHeight || 0) - (panel?.offsetHeight || 0));
+        // NOTE: the surface, not the viewport — the desktop window is cropped
+        // to the panel, so innerWidth/innerHeight are far too small here.
+        const surf = Settings.surfaceSize();
+        const maxX = Math.max(0, surf.w - (panel?.offsetWidth || 0));
+        const maxY = Math.max(0, surf.h - (panel?.offsetHeight || 0));
         curX = Math.min(maxX, Math.max(0, baseX + (rightSide ? -dx : dx)));
         // Bottom-anchored corners measure the margin from the bottom edge —
         // dragging down must shrink it (the panel follows the mouse).

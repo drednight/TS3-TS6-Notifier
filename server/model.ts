@@ -124,6 +124,10 @@ export interface Appearance {
   radius: number;
   scale: number;
   fontSize: number;
+  /** Overlay panel width in px. */
+  panelWidth: number;
+  /** Max panel height in px (roster scrolls inside); 0 = auto (content height). */
+  panelMaxHeight: number;
   corner: 'tl' | 'tr' | 'bl' | 'br';
   marginX: number;
   marginY: number;
@@ -210,6 +214,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
   radius: 16,
   scale: 1,
   fontSize: 13,
+  panelWidth: 292,
+  panelMaxHeight: 0,
   corner: 'tr',
   marginX: 18,
   marginY: 18,

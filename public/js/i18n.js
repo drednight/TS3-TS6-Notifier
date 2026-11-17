@@ -117,6 +117,11 @@
     radius: 'Скругление',
     scale: 'Масштаб',
     fontSize: 'Размер шрифта',
+    panelWidth: 'Ширина панели',
+    panelMaxHeight: 'Максимальная высота',
+    sizeAuto: 'авто',
+    panelSizeHint:
+      'Ширина — на любой вкус (на большом экране удобнее шире или уже). Высота ограничивает список участников: лишние строки прокручиваются внутри панели. «авто» — панель сама подстраивается под содержимое.',
     corner: 'Положение на экране',
     margin: 'Отступ от края',
     displayLabel: 'Экран оверлея',
@@ -313,6 +318,11 @@
     radius: 'Corner radius',
     scale: 'Scale',
     fontSize: 'Font size',
+    panelWidth: 'Panel width',
+    panelMaxHeight: 'Max height',
+    sizeAuto: 'auto',
+    panelSizeHint:
+      'Set the width to taste (wider or narrower on a big screen). The height caps the roster: extra rows scroll inside the panel. «auto» lets the panel size itself to its content.',
     corner: 'Screen corner',
     margin: 'Edge margin',
     displayLabel: 'Overlay display',

@@ -484,6 +484,78 @@ try {
     dom.window.close();
   }
 
+  /* ---- 4. v1.4.11: placement survives the cropped overlay window ---- */
+  {
+    const { dom, errors } = await bootPage(`${BASE}/?clean=1&w=tok-uitest`);
+    const doc = dom.window.document;
+    const S = dom.window.Settings;
+    check('v1.4.11: overlay page boots with a window token', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+    // Pretend the desktop shell already cropped the window down to the panel
+    // (v1.4.5): the viewport is tiny, the real work area arrives with the
+    // /api/overlay/bounds reply and is fed into the settings model.
+    try {
+      Object.defineProperty(dom.window, 'innerWidth', { value: 388, configurable: true });
+      Object.defineProperty(dom.window, 'innerHeight', { value: 236, configurable: true });
+    } catch {
+      /* jsdom refuses the override — the checks below simply use the default */
+    }
+    S.setSurface(1920, 1080);
+    const surf = S.surfaceSize();
+    check('v1.4.11: surface comes from the shell, not the cropped viewport', surf.w === 1920 && surf.h === 1080, JSON.stringify(surf));
+
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, marginX: 900, marginY: 700 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const appliedX = doc.documentElement.style.getPropertyValue('--margin-x');
+    const appliedY = doc.documentElement.style.getPropertyValue('--margin-y');
+    check(
+      'v1.4.11: a saved position is not dragged back into the corner by the crop',
+      appliedX === '900px' && appliedY === '700px',
+      `x=${appliedX} y=${appliedY}`,
+    );
+
+    // Drag + ✓ inside the cropped window: the new spot must stick.
+    FakeWS.last._emit({ type: 'move-mode', active: true });
+    await new Promise((r) => setTimeout(r, 30));
+    doc.getElementById('moveHandle').dispatchEvent(new dom.window.MouseEvent('mousedown', { clientX: 200, clientY: 100, bubbles: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 140, clientY: 130 }));
+    doc.dispatchEvent(new dom.window.MouseEvent('mouseup', { clientX: 140, clientY: 130 }));
+    FakeWS.last._emit({ type: 'move-confirm' });
+    await new Promise((r) => setTimeout(r, 60));
+    check(
+      'v1.4.11: save keeps the dragged spot (clamp uses the surface)',
+      Number(S.appearance.marginX) === 960 && doc.documentElement.style.getPropertyValue('--margin-x') === '960px',
+      `model=${S.appearance.marginX} css=${doc.documentElement.style.getPropertyValue('--margin-x')}`,
+    );
+
+    // v1.4.11: user-tunable panel size
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, panelWidth: 420, panelMaxHeight: 320 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const rootStyle = doc.documentElement.style;
+    check(
+      'v1.4.11: panel width + max height apply as CSS vars',
+      rootStyle.getPropertyValue('--panel-w') === '420px' && rootStyle.getPropertyValue('--panel-max-h') === '320px' && rootStyle.getPropertyValue('--list-max-h') === 'none',
+      `w=${rootStyle.getPropertyValue('--panel-w')} h=${rootStyle.getPropertyValue('--panel-max-h')} list=${rootStyle.getPropertyValue('--list-max-h')}`,
+    );
+    FakeWS.last._emit({
+      type: 'config',
+      config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, panelMaxHeight: 0 } },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    check(
+      'v1.4.11: max height 0 = auto (no cap, list caps itself)',
+      doc.documentElement.style.getPropertyValue('--panel-max-h') === 'none' && !doc.documentElement.style.getPropertyValue('--list-max-h'),
+      `h=${doc.documentElement.style.getPropertyValue('--panel-max-h')} list=${doc.documentElement.style.getPropertyValue('--list-max-h')}`,
+    );
+    dom.window.close();
+  }
+
   /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
   {
     const h2 = await startServer({
@@ -559,6 +631,33 @@ try {
   check('themes: duplicate theme selector removed', !/id="themeSeg"/.test(html) && !/themeGlass/.test(i18n));
   check('about: OBS tip line removed', !/aboutTip/.test(html) && !/aboutTip/.test(i18n));
   check('whisper: linger delay setting wired', !!/data-slider="whisperDelay"/.test(html) && !!DEFAULT_APPEARANCE.whisperDelay && /whisperSeen/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+}
+
+// v1.4.11: user-tunable panel size + placement that survives the cropped window
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('../public/css/overlay.css', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const stg = await fs.readFile(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const { DEFAULT_APPEARANCE } = await import('../server/model.ts');
+  const ru = i18n.indexOf('panelWidth');
+  const en = i18n.indexOf('panelWidth', ru + 1);
+  check('size: width + max-height sliders in the panel group', !!/data-slider="panelWidth"/.test(html) && !!/data-slider="panelMaxHeight"/.test(html));
+  check('size: defaults exist on the server (otherwise PUT drops them)', DEFAULT_APPEARANCE.panelWidth === 292 && DEFAULT_APPEARANCE.panelMaxHeight === 0);
+  check('size: labels exist in ru and en', ru > 0 && en > ru && /sizeAuto/.test(i18n));
+  check('size: panel width/max-height drive CSS vars', /--panel-w/.test(css) && /--panel-max-h/.test(css) && /#panel > \.user-list \{ flex: 1 1 auto/.test(css));
+  check('size: roster height is measured against the screen, not the cropped viewport', /--screen-h, 100vh/.test(css) && !/max-height: min\(52vh/.test(css));
+  check('size: settings model knows the new keys', /panelWidth: \[200, 600\]/.test(stg) && /panelMaxHeight: \[0, 1000\]/.test(stg));
+  // the bug: clamping the placement against the CROPPED window viewport
+  check('placement: shell surface replaces the viewport in the clamp', /function panelClamp\(\)[\s\S]{0,200}surfaceSize\(\)/.test(stg));
+  check('placement: bounds reply feeds the surface back', /Settings\.setSurface\(b\.screenW, b\.screenH\)/.test(appjs));
+  check('placement: drag clamp uses the surface too', /const surf = Settings\.surfaceSize\(\)/.test(appjs));
+  check('placement: saving a drag goes through the settings model', /Settings\.setMany\(\{ marginX: pendingX, marginY: pendingY \}\)/.test(appjs));
+  // a wider/taller panel must re-crop the desktop window, or it gets clipped
+  check('size: a resized panel re-reports its rect to the shell', /new ResizeObserver\(scheduleBounds\)/.test(appjs) && /Settings\.onChange\(\(\) => \{\s*lastBoundsSig = ''/.test(appjs));
+  check('size: appearance pushed from another window re-measures too', /config = msg\.config;[\s\S]{0,900}isCleanMode\)\s*\{\s*lastBoundsSig = ''/.test(appjs));
 }
 
 // v1.4.6: one data source at a time + tray ↔ Связь sync
