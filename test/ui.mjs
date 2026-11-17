@@ -537,8 +537,6 @@ try {
   handle.close();
 }
 
-const failed = results.filter((r) => !r).length;
-console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
 
 // v1.4.7: appearance presets + user colors
 {
@@ -554,6 +552,11 @@ console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
   const en = i18n.indexOf('nickColorLabel', ru + 1);
   check('colors: labels exist in ru and en', ru > 0 && en > ru);
   check('colors: event rows color the nickname', /nickSpan/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+  // v1.4.9: talking outline on the row strip, sticky preview, whisper linger
+  check('colors: talking outline highlights the row strip', /\.row\.talking \{ box-shadow: 0 0 0 2px var\(--talk-outline\)/.test(css) && !/\.row\.talking \.avatar \{ outline/.test(css));
+  check('preview: live preview pinned while scrolling', /\.preview-strip[\s\S]{0,200}position: sticky/.test(css));
+  check('presets: exactly four preset tiles', (html.match(/id="presetSeg"[\s\S]*?<\/div>/) || [''])[0].match(/data-value=/g).length === 4 && !/presetSoft|presetClassic/.test(i18n));
+  check('whisper: linger delay setting wired', !!/data-slider="whisperDelay"/.test(html) && !!DEFAULT_APPEARANCE.whisperDelay && /whisperSeen/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
 }
 
 // v1.4.6: one data source at a time + tray ↔ Связь sync
@@ -601,4 +604,6 @@ console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
   hb.close();
 }
 
+const failed = results.filter((r) => !r).length;
+console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
 process.exit(failed ? 1 : 0);

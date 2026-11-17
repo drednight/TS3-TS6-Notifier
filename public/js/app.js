@@ -174,6 +174,8 @@
     });
   }
 
+  const whisperSeen = new Map(); // id -> last moment the user whispered
+
   function render() {
     const a = Settings.appearance;
     if (!state) return;
@@ -204,13 +206,20 @@
       $('bannerDetail').textContent = statusHint();
     }
 
-    // rows — whisperers go to their own fading section
+    // rows — whisperers go to their own fading section; after whispering
+    // stops they linger there for `whisperDelay` seconds (v1.4.9).
     const list = $('userList');
     const whisperList = $('whisperList');
     const whisperBlock = $('whisperBlock');
-    const whisperActive = a.showWhispers && users.some((u) => u.whispering);
+    const nowTs = Date.now();
+    const whisperMs = (Number(a.whisperDelay) || 4) * 1000;
+    const whisperNow = (u) => {
+      if (u.whispering) whisperSeen.set(u.id, nowTs);
+      return u.whispering || nowTs - (whisperSeen.get(u.id) || 0) < whisperMs;
+    };
+    const whisperActive = a.showWhispers && users.some(whisperNow);
     whisperBlock.hidden = !whisperActive;
-    const containerFor = (u) => (whisperActive && u.whispering ? whisperList : list);
+    const containerFor = (u) => (a.showWhispers && whisperNow(u) ? whisperList : list);
     const seen = new Set();
     for (const u of users) {
       seen.add(u.id);
@@ -226,6 +235,7 @@
         pack.el.classList.remove('leaving');
       }
       updateRow(pack, u);
+      pack.el.classList.toggle('whisper', a.showWhispers && whisperNow(u));
     }
 
     // Keep DOM order in sync with the sorted list (talking-first etc.).

@@ -39,6 +39,7 @@
     showWhispers: true,
     showChat: true,
     chatDelay: 8,
+    whisperDelay: 4,
     chatPrivate: true,
     showUnreadBadge: true,
     showEvents: true,
@@ -65,8 +66,6 @@
     midnight: { theme: 'midnight', accent: '#4f7dff', nickColor: '#dfe6ff', msgColor: '#98a2c0', talkOutline: '#4f7dff', blur: 14, opacity: 0.85, glow: 0.4 },
     frost: { theme: 'frost', accent: '#38bdf8', nickColor: '#0b2740', msgColor: '#2b5a7d', talkOutline: '#0ea5e9', blur: 10, opacity: 0.9, glow: 0.3 },
     neon: { theme: 'neon', accent: '#ff2fd6', nickColor: '#39ff9c', msgColor: '#c9b8ff', talkOutline: '#39ff9c', blur: 22, opacity: 0.66, glow: 1 },
-    classic: { theme: 'glass', accent: '#6c7cff', nickColor: '#ffffff', msgColor: '#a7b0c8', talkOutline: '#f5c451', blur: 8, opacity: 0.92, glow: 0.2 },
-    soft: { theme: 'frost', accent: '#b78cff', nickColor: '#3b2f52', msgColor: '#6b5f88', talkOutline: '#b78cff', blur: 16, opacity: 0.8, glow: 0.5 },
   };
 
   const THEME_ACCENTS = {
@@ -103,6 +102,7 @@
     marginX: [0, 20000],
     marginY: [0, 20000],
     chatDelay: [2, 60],
+    whisperDelay: [1, 30],
     eventsCount: [1, 10],
     eventsDelay: [5, 60],
   };

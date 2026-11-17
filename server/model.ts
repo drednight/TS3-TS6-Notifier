@@ -116,6 +116,8 @@ export interface Appearance {
   nickColor: string;
   msgColor: string;
   talkOutline: string;
+  /** Seconds a whisperer lingers in the whisper section after whispering stops. */
+  whisperDelay: number;
   glow: number;
   opacity: number;
   blur: number;
@@ -201,6 +203,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   nickColor: '#e8ecff',
   msgColor: '#b6b6bd',
   talkOutline: '#57e389',
+  whisperDelay: 4,
   glow: 0.7,
   opacity: 0.72,
   blur: 18,

@@ -105,8 +105,6 @@
             <button data-value="midnight" data-i18n="presetMidnight"></button>
             <button data-value="frost" data-i18n="presetFrost"></button>
             <button data-value="neon" data-i18n="presetNeon"></button>
-            <button data-value="classic" data-i18n="presetClassic"></button>
-            <button data-value="soft" data-i18n="presetSoft"></button>
           </div>
 
           <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="colorsTitle"></span></div>
@@ -256,6 +254,11 @@
             <label class="chip-toggle"><input type="checkbox" data-toggle="chatPrivate" /><span class="chip-ico" data-ico="shield"></span><span data-i18n="chatPrivate"></span></label>
             <label class="chip-toggle"><input type="checkbox" data-toggle="showUnreadBadge" /><span class="chip-ico" data-ico="star"></span><span data-i18n="unreadBadge"></span></label>
           </div>
+          <div class="field" data-slider="whisperDelay" data-min="1" data-max="30" data-step="1">
+            <label data-i18n="whisperDelay"></label><output></output>
+            <input type="range" />
+          </div>
+
           <div class="field" data-slider="chatDelay" data-min="2" data-max="60" data-step="1">
             <label data-i18n="chatDelay"></label><output></output>
             <input type="range" />
