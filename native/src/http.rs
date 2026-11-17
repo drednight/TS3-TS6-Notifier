@@ -399,7 +399,7 @@ fn plugin_install(dll: &str) -> Json {
     if dll.is_empty() || !Path::new(dll).exists() {
         return obj(vec![("ok", Json::b(false)), ("error", Json::s("dll-missing"))]);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, tsn_win32))]
     {
         let appdata = std::env::var("APPDATA").unwrap_or_default();
         let dst_dir = format!("{appdata}\\TS3Client\\plugins");
@@ -413,7 +413,7 @@ fn plugin_install(dll: &str) -> Json {
         }
         // copy; on lock errors rename aside first (Windows maps the DLL)
         if std::fs::copy(dll, &dst).is_err() {
-            let old = format!("{dst}.old-{}", now_ms());
+            let old = format!("{dst}.old-{}", crate::model::now_ms());
             if std::fs::rename(&dst, &old).is_err() {
                 return obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
             }
@@ -424,7 +424,7 @@ fn plugin_install(dll: &str) -> Json {
         crate::diag::diag("plugin", &format!("installed to {dst}"));
         obj(vec![("ok", Json::b(true)), ("path", Json::s(dst))])
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, tsn_win32)))]
     {
         obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))])
     }
