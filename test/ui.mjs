@@ -275,6 +275,11 @@ try {
     await new Promise((r) => setTimeout(r, 60));
     check('overlay: own-channel scope hides foreign events', !doc.querySelector('#eventsList .ev-move'));
 
+    // v1.4.1: the update section shows the LIVE version from the hello message
+    FakeWS.last._emit({ type: 'hello', config: fakeConfig, state: fakeState, version: '9.9.9' });
+    await new Promise((r) => setTimeout(r, 40));
+    check('overlay: live version from hello refreshes the label', doc.getElementById('updateVersion')?.textContent === 'v9.9.9', doc.getElementById('updateVersion')?.textContent);
+
     // v1.1.12: dragging is gated behind the "move overlay" hotkey
     const header = doc.getElementById('panelHeader');
     const mxBefore = doc.documentElement.style.getPropertyValue('--margin-x');
@@ -369,7 +374,7 @@ try {
     check('settings: slider values painted', !!doc.querySelector('[data-slider="opacity"] output')?.textContent.includes('%'), doc.querySelector('[data-slider="opacity"] output')?.textContent);
     check('settings: connection status pill', !!doc.getElementById('statusPill').textContent, doc.getElementById('statusPill').textContent);
 
-    // interaction: click a theme button and a toggle, expect CSS var change
+    // interaction: click an accent swatch and a toggle, expect CSS var change
     const before = doc.documentElement.style.getPropertyValue('--accent');
     doc.querySelector('#accentSwatches .swatch[data-value="#22d3ee"]').click();
     const after = doc.documentElement.style.getPropertyValue('--accent');
@@ -393,7 +398,7 @@ try {
     // v1.1.15: «Ещё» is a single tab — About/profiles merged in
     check('settings: «Ещё» tab present', !!doc.querySelector('.tab[data-tab="more"]') && !!doc.querySelector('[data-panel="more"]'));
     check('settings: About merged into «Ещё»', !doc.querySelector('.tab[data-tab="about"]') && !!doc.querySelector('[data-panel="more"] #exportBtn') && !!doc.querySelector('[data-panel="more"] .about-card'));
-    check('settings: version line shows 1.3.0', /1\.3\.0/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
+    check('settings: version line present', /v?\d+\.\d+\.\d+/.test(doc.querySelector('.about-card .ver')?.textContent || ''), doc.querySelector('.about-card .ver')?.textContent);
     // v1.3.0 — Concept 3 redesign: preview strip, chips, source cards, tiles
     check('settings: live preview strip present', !!doc.querySelector('.preview-strip .preview-panel'));
     check('settings: elements grouped into opt-cards', doc.querySelectorAll('[data-panel="elements"] .opt-group').length >= 4);
@@ -407,6 +412,11 @@ try {
     // v1.3.2: per-type scope selectors («Весь сервер» / «Мой канал») + diagnostics
     check('settings: per-type scope selectors present', doc.querySelectorAll('select[data-enum^="evScope"]').length === 6);
     check('settings: diagnostics block present', !!doc.getElementById('diagBtn') && !!doc.getElementById('diagCopyBtn') && !!doc.getElementById('diagOut'));
+    check('settings: TS3 plugin block present', !!doc.getElementById('pluginInstallBtn') && !!doc.getElementById('pluginStatus'));
+    // v1.4.2: plugin install lives in the Connection tab under TS3 (shows with
+    // the TS3 source card); «run as administrator» moved to the More tab
+    check('settings: plugin block follows the TS3 fields', !!doc.querySelector('#ts3Fields #pluginInstallBtn') && !!doc.querySelector('#ts3Fields #pluginStatus'));
+    check('settings: elevate toggle moved to More tab', !doc.querySelector('[data-panel="connection"] #elevateToggle') && !!doc.querySelector('[data-panel="more"] #elevateToggle'));
     // v1.3.1: event sliders show counts/seconds, not px
     check('settings: event slider units (no px)', (() => {
       const c = doc.querySelector('[data-slider="eventsCount"] output')?.textContent || '';
@@ -445,35 +455,14 @@ try {
     check('settings: server config applies instantly over stale cache', followX === '500px', followX);
     check('settings: chat delay slider', !!doc.querySelector('[data-slider="chatDelay"]'));
     check('settings: whisper/chat toggles', !!doc.querySelector('[data-toggle="showWhispers"]') && !!doc.querySelector('[data-toggle="showChat"]') && !!doc.querySelector('[data-toggle="chatPrivate"]'));
-    check('settings: sound tab wired', !!doc.getElementById('soundItems') && !!doc.getElementById('audioOutput') && !!doc.getElementById('stopAllBtn') && !!doc.getElementById('clearHotkeysBtn'));
-    // the whole sound feature is parked: tab button and panel are hidden
-    const soundTabBtn = doc.querySelector('.tab[data-tab="sound"]');
-    const soundPanel = doc.querySelector('[data-panel="sound"]');
-    check('settings: sound tab hidden (feature parked)', soundTabBtn?.hidden === true && soundPanel?.hidden === true);
+    check('settings: sound feature fully removed', !doc.querySelector('.tab[data-tab="sound"]') && !doc.getElementById('soundItems') && !doc.getElementById('openBoardBtn'));
     check('settings: server groups in a collapsed block at the bottom', !!doc.getElementById('ts6GroupsBlock') && doc.getElementById('ts6GroupsBlock').open === false);
     // v1.1.9: chat polish + desktop toggles
     check('settings: header close X removed', !doc.getElementById('closeDrawer'));
     check('settings: run-as-admin toggle present', !!doc.getElementById('elevateToggle'));
     check('overlay: unread-message badge present', !!doc.getElementById('chatUnread') && !!doc.getElementById('chatUnreadCount'));
-    check('settings: adding sounds lives in the board menu only', !doc.getElementById('soundUploadBtn') && !doc.getElementById('addPresetsBtn'));
-    check('settings: sound guide card present', !!doc.querySelector('.guide-card') && !!doc.getElementById('loopbackStatus'));
-
-    // v1.1.1: dual output + hotkey toggle + visible hotkeys + range fill
-    check('settings: dual sound targets (мне/в канал)', !!doc.getElementById('localEnabled') && !!doc.getElementById('audioOutputLocal') && !!doc.getElementById('localVolume') && !!doc.getElementById('soundsEnabled'));
-    check('settings: hotkeys enable toggle', !!doc.getElementById('hotkeysEnabled'));
-    const rangeFill = doc.getElementById('localVolume')?.style.getPropertyValue('--fill');
+    const rangeFill = doc.querySelector('[data-slider="chatDelay"] input[type="range"]')?.style.getPropertyValue('--fill');
     check('settings: range fill painted (not stuck at 50%)', !!rangeFill && rangeFill !== '50%', `fill=${rangeFill}`);
-    // hotkey visible in the sound list
-    dom.window.TSN.config = {
-      ...fakeConfig,
-      sounds: { enabled: true, volume: 0.8, outputDevice: '', hotkeysEnabled: true, localEnabled: true, localVolume: 0.8, localDevice: '', items: [{ id: 's1', name: 'Монета', file: '/presets/coin.wav', hotkey: 'Ctrl+Alt+1', volume: 1 }] },
-    };
-    doc.dispatchEvent(new dom.window.CustomEvent('tsn:config'));
-    await new Promise((r) => setTimeout(r, 60));
-    const cap = doc.querySelector('.sound-row .hotkey-cap');
-    check('settings: sound row shows assigned hotkey', cap?.textContent.includes('Ctrl+Alt+1'), cap?.textContent);
-    check('settings: hotkey can be cleared', !!doc.querySelector('.sound-row .hotkey-clear'));
-    check('settings: sound item editor (group/trim)', !!doc.querySelector('.sound-item .sound-details') && !!doc.querySelector('.sound-item .d-group') && !!doc.querySelector('.sound-item .d-start') && !!doc.querySelector('.sound-item .d-end'));
 
     // TS6 group → class mapping UI
     check('settings: TS6 group map present', !!doc.getElementById('ts6GroupMap'));
@@ -495,22 +484,6 @@ try {
     dom.window.close();
   }
 
-  /* ---- 4. soundboard panel page ---- */
-  {
-    const { dom, errors } = await bootPage(`${BASE}/board.html`);
-    const doc = dom.window.document;
-    check('board: no JS errors', errors.length === 0, errors.slice(0, 3).join(' | '));
-    check('board: grid + controls present', !!doc.getElementById('boardGrid') && !!doc.getElementById('menuStop') && !!doc.getElementById('boardGear'));
-    check('board: top menu present (add/delete/stop/hotkeys/audio)', !!doc.getElementById('menuAdd') && !!doc.getElementById('menuDelete') && !!doc.getElementById('menuStop') && !!doc.getElementById('menuHotkeys') && !!doc.getElementById('menuAudio'));
-    check('board: audio popover with dual outputs', !!doc.getElementById('audioPop') && !!doc.getElementById('popLocalVol') && !!doc.getElementById('popChannelVol') && !!doc.getElementById('popLocalEnabled') && !!doc.getElementById('popChannelEnabled'));
-    check('board: edit popover (group/trim/volume)', !!doc.getElementById('boardEdit') && !!doc.getElementById('editGroup') && !!doc.getElementById('editStart') && !!doc.getElementById('editEnd') && !!doc.getElementById('editVol'));
-    check('board: hotkey assignment in the edit popover', !!doc.getElementById('editKey') && !!doc.getElementById('editKeySet') && !!doc.getElementById('editKeyClear'));
-    check('board: presets removed everywhere', !doc.getElementById('menuPresets') && !doc.getElementById('addPresetsBtn'));
-    check('board: audio popover close button', !!doc.getElementById('popClose'));
-    check('board: theme applied from config', doc.body.dataset.theme === 'glass', doc.body.dataset.theme);
-    check('board: empty state shown without sounds', doc.getElementById('boardEmpty').hidden === false);
-    dom.window.close();
-  }
   /* ---- 5. stable port for OBS sources (fallback when busy) ---- */
   {
     const h2 = await startServer({
@@ -562,6 +535,75 @@ try {
   }
 } finally {
   handle.close();
+}
+
+
+// v1.4.7: appearance presets + user colors
+{
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('../public/css/overlay.css', import.meta.url), 'utf8');
+  const i18n = await fs.readFile(new URL('../public/js/i18n.js', import.meta.url), 'utf8');
+  const { DEFAULT_APPEARANCE } = await import('../server/model.ts');
+  check('colors: appearance keeps the three color keys', !!DEFAULT_APPEARANCE.nickColor && !!DEFAULT_APPEARANCE.msgColor && !!DEFAULT_APPEARANCE.talkOutline);
+  check('colors: settings has preset + color controls', !!/id="presetSeg"/.test(html) && (html.match(/data-color=/g) || []).length === 3);
+  check('colors: overlay paints nick/message/outline from vars', /--nick-color/.test(css) && /--msg-color/.test(css) && /--talk-outline/.test(css) && /ev-nick/.test(css));
+  const ru = i18n.indexOf('nickColorLabel');
+  const en = i18n.indexOf('nickColorLabel', ru + 1);
+  check('colors: labels exist in ru and en', ru > 0 && en > ru);
+  check('colors: event rows color the nickname', /nickSpan/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+  // v1.4.9: talking outline on the row strip, sticky preview, whisper linger
+  check('colors: talking outline highlights the row strip', /\.row\.talking \{ box-shadow: 0 0 0 2px var\(--talk-outline\)/.test(css) && !/\.row\.talking \.avatar \{ outline/.test(css));
+  check('preview: live preview pinned while scrolling', /\.preview-strip[\s\S]{0,200}position: sticky/.test(css));
+  check('presets: all eight looks available as presets', (html.match(/id="presetSeg"[\s\S]*?<\/div>/) || [''])[0].match(/data-value=/g).length === 8 && !/presetSoft|presetClassic/.test(i18n));
+  check('themes: duplicate theme selector removed', !/id="themeSeg"/.test(html) && !/themeGlass/.test(i18n));
+  check('about: OBS tip line removed', !/aboutTip/.test(html) && !/aboutTip/.test(i18n));
+  check('whisper: linger delay setting wired', !!/data-slider="whisperDelay"/.test(html) && !!DEFAULT_APPEARANCE.whisperDelay && /whisperSeen/.test(await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8')));
+}
+
+// v1.4.6: one data source at a time + tray ↔ Связь sync
+{
+  const fs = await import('node:fs/promises');
+  const mainSrc = await fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8');
+  const appSrc = await fs.readFile(new URL('../server/app.ts', import.meta.url), 'utf8');
+  check('single-source: no background TS3 bridge outside the TS3 path', !/diagBridge/.test(appSrc));
+  check('single-source: inactive diagnostics section is stubbed', /раздел выключен — активный источник/.test(appSrc));
+  check('tray sync: menu rebuilds when the source changes', /traySig = JSON\.stringify\(\[\s*cfg\.source/.test(mainSrc));
+  check('tray sync: tray pushes config to open windows', /function setSource[\s\S]{0,400}broadcast\(\{ type: 'config'/.test(mainSrc));
+}
+
+// v1.4.5: overlay window crop endpoint (memory optimization)
+{
+  const crops = [];
+  const hb = await startServer({
+    port: 0,
+    host: '127.0.0.1',
+    dataDir: join(tmpdir(), 'tsn-ui-bounds'),
+    publicDir: join(ROOT, 'public'),
+    setOverlayBounds: (r) => {
+      crops.push(r);
+      return { cropX: r.x, cropY: r.y, screenW: 1920, screenH: 1080 };
+    },
+  });
+  const res = await fetch(`http://127.0.0.1:${hb.port()}/api/overlay/bounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x: 10, y: 20, w: 300, h: 400 }),
+  });
+  const body = await res.json();
+  check(
+    'bounds: /api/overlay/bounds forwards the rect and returns the crop',
+    res.status === 200 && body.ok === true && body.cropX === 10 && body.cropY === 20 && body.screenW === 1920 && body.screenH === 1080 && crops.length === 1 && crops[0].w === 300,
+    JSON.stringify(body),
+  );
+  const bad = await fetch(`http://127.0.0.1:${hb.port()}/api/overlay/bounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x: 'x', w: 1 }),
+  });
+  const badBody = await bad.json();
+  check('bounds: garbage rect is rejected', badBody.ok === false, JSON.stringify(badBody));
+  hb.close();
 }
 
 const failed = results.filter((r) => !r).length;

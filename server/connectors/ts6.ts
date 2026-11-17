@@ -282,17 +282,27 @@ export class Ts6Connector extends EventEmitter implements Connector {
           if (existing) this.pushFeed(existing, 'leave', '');
           this.clients.delete(clientId);
         } else if (existing) {
-          if (
-            clientId !== this.ownClientId &&
-            (newChannel === this.ownChannelId || existing.channelId === this.ownChannelId)
-          ) {
-            this.pushFeed(existing, 'move', this.channels.get(newChannel)?.name ?? '');
+          // v1.4.1: every move on the server is news («весь сервер» scope);
+          // the own flag marks touches of our channel for the scope selectors.
+          if (!existing.isQuery) {
+            this.pushFeed(
+              existing,
+              'move',
+              this.channels.get(newChannel)?.name ?? '',
+              newChannel === this.ownChannelId || existing.channelId === this.ownChannelId,
+            );
           }
           this.clients.set(clientId, { ...existing, channelId: newChannel });
           if (clientId === this.ownClientId) this.ownChannelId = newChannel;
         } else if (oldChannel <= 0) {
           this.resync('client join without properties');
           return;
+        } else {
+          // Not in our map yet (no nickname on the wire) — remember the old
+          // channel and resync: the snapshot diff announces the move with the
+          // proper name once the resync lands.
+          this.clients.set(clientId, makeUser(String(clientId), '', { channelId: oldChannel }));
+          this.resync('client move of unknown client');
         }
         this.emitState();
         return;
@@ -693,14 +703,40 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
     // Diff against the previous snapshot: join/leave events can be missed
     // (e.g. a join payload without a nickname) — announce what changed.
+    // A mass delta is a baseline jump (connect/resync), not real activity —
+    // stay silent (v1.4.7).
     if (this.announcedOnce) {
+      const delta = (a: Map<number, unknown>, b: Map<number, unknown>) =>
+        [...a.keys()].filter((id) => !b.has(id)).length;
+      const moved = [...this.clients].filter(([id, u]) => {
+        const prev = prevClients.get(id);
+        return prev && prev.channelId > 0 && prev.channelId !== u.channelId;
+      }).length;
+      const mass = (n: number) => n > Math.max(5, prevClients.size * 0.3);
+      const quiet = prevClients.size === 0 || mass(delta(this.clients, prevClients)) || mass(delta(prevClients, this.clients)) || mass(moved);
+      if (!quiet) {
       for (const [id, u] of this.clients) {
-        if (prevClients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
-        this.pushFeed(u, 'join', u.channelId === this.ownChannelId ? (this.channels.get(u.channelId)?.name ?? '') : '', u.channelId === this.ownChannelId);
+        const prev = prevClients.get(id);
+        if (!prev) {
+          if (!u.isQuery && !u.isSelf && u.nickname) {
+            this.pushFeed(u, 'join', u.channelId === this.ownChannelId ? (this.channels.get(u.channelId)?.name ?? '') : '', u.channelId === this.ownChannelId);
+          }
+          continue;
+        }
+        // Moves the event stream missed land here with the real nickname.
+        if (!u.isQuery && u.nickname && prev.channelId > 0 && prev.channelId !== u.channelId) {
+          this.pushFeed(
+            u,
+            'move',
+            this.channels.get(u.channelId)?.name ?? '',
+            u.channelId === this.ownChannelId || prev.channelId === this.ownChannelId,
+          );
+        }
       }
       for (const [id, u] of prevClients) {
         if (this.clients.has(id) || u.isQuery || u.isSelf || !u.nickname) continue;
         this.pushFeed(u, 'leave', u.channelId === this.ownChannelId ? (this.channels.get(u.channelId)?.name ?? '') : '', u.channelId === this.ownChannelId);
+      }
       }
     } else {
       this.announcedOnce = true;

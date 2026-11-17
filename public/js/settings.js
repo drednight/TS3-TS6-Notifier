@@ -9,6 +9,9 @@
   const DEFAULTS = {
     theme: 'glass',
     accent: '#7c6cff',
+    nickColor: '#e8ecff',
+    msgColor: '#b6b6bd',
+    talkOutline: '#57e389',
     glow: 0.7,
     opacity: 0.72,
     blur: 18,
@@ -36,6 +39,7 @@
     showWhispers: true,
     showChat: true,
     chatDelay: 8,
+    whisperDelay: 4,
     chatPrivate: true,
     showUnreadBadge: true,
     showEvents: true,
@@ -54,6 +58,18 @@
     evScopeChat: 'all',
     eventsCount: 5,
     eventsDelay: 20,
+  };
+
+  /** v1.4.7: appearance presets — one-click bundles (theme + colors + feel). */
+  const PRESETS = {
+    glass: { theme: 'glass', accent: '#7c6cff', nickColor: '#e8ecff', msgColor: '#b6b6bd', talkOutline: '#57e389', blur: 18, opacity: 0.72, glow: 0.7 },
+    midnight: { theme: 'midnight', accent: '#4f7dff', nickColor: '#dfe6ff', msgColor: '#98a2c0', talkOutline: '#4f7dff', blur: 14, opacity: 0.85, glow: 0.4 },
+    frost: { theme: 'frost', accent: '#38bdf8', nickColor: '#0b2740', msgColor: '#2b5a7d', talkOutline: '#0ea5e9', blur: 10, opacity: 0.9, glow: 0.3 },
+    neon: { theme: 'neon', accent: '#ff2fd6', nickColor: '#39ff9c', msgColor: '#c9b8ff', talkOutline: '#39ff9c', blur: 22, opacity: 0.66, glow: 1 },
+    emerald: { theme: 'emerald', accent: '#10b981', nickColor: '#eafff5', msgColor: '#9fd8c2', talkOutline: '#34d399', blur: 12, opacity: 0.8, glow: 0.45 },
+    carmine: { theme: 'carmine', accent: '#f43f5e', nickColor: '#ffe4ec', msgColor: '#e79ab0', talkOutline: '#ff5d8f', blur: 10, opacity: 0.85, glow: 0.5 },
+    amber: { theme: 'amber', accent: '#f59e0b', nickColor: '#fff1d0', msgColor: '#dcbb80', talkOutline: '#ffb224', blur: 8, opacity: 0.88, glow: 0.4 },
+    mono: { theme: 'mono', accent: '#e5e5e5', nickColor: '#f4f4f4', msgColor: '#b3b3b3', talkOutline: '#cfcfcf', blur: 6, opacity: 0.92, glow: 0.15 },
   };
 
   const THEME_ACCENTS = {
@@ -90,6 +106,7 @@
     marginX: [0, 20000],
     marginY: [0, 20000],
     chatDelay: [2, 60],
+    whisperDelay: [1, 30],
     eventsCount: [1, 10],
     eventsDelay: [5, 60],
   };
@@ -136,7 +153,7 @@
         if (Number.isFinite(n)) out[k] = Math.min(max, Math.max(min, n));
       } else if (BOOLS.includes(k)) {
         out[k] = !!v;
-      } else if (k === 'accent') {
+      } else if (k === 'accent' || k === 'nickColor' || k === 'msgColor' || k === 'talkOutline') {
         if (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) out[k] = v;
       } else if (typeof v === 'string') {
         out[k] = v;
@@ -201,6 +218,9 @@
     const root = document.documentElement.style;
     root.setProperty('--accent', a.accent);
     root.setProperty('--accent-rgb', hexToRgb(a.accent));
+    root.setProperty('--nick-color', a.nickColor);
+    root.setProperty('--msg-color', a.msgColor);
+    root.setProperty('--talk-outline', a.talkOutline);
     root.setProperty('--glow', a.glow);
     root.setProperty('--panel-opacity', a.opacity);
     root.setProperty('--blur', `${a.blur}px`);
@@ -366,8 +386,9 @@
       if (output) output.textContent = fmt(key, Number(input.value));
     }
 
-    document.querySelectorAll('#themeSeg button').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.value === a.theme);
+    document.querySelectorAll('[data-color]').forEach((inp) => {
+      const key = inp.getAttribute('data-color');
+      if (key in a) inp.value = a[key];
     });
 
     document.querySelectorAll('#accentSwatches .swatch').forEach((sw) => {
@@ -389,6 +410,16 @@
     if (langSel) langSel.value = a.language;
     const eqSel = document.getElementById('eqStyleSelect');
     if (eqSel) eqSel.value = a.eqStyle;
+  }
+
+  /** Apply a preset bundle in one save (v1.4.7). */
+  function setMany(patchObj) {
+    const s = sanitize(patchObj);
+    for (const [k, v] of Object.entries(s)) local[k] = v;
+    if ('theme' in s && !('accent' in s) && THEME_ACCENTS[s.theme]) local.accent = THEME_ACCENTS[s.theme];
+    notifyChange(true);
+    paintControls();
+    if ('language' in s) I18N.setLanguage(appearance.language);
   }
 
   function set(key, value, immediate) {
@@ -415,8 +446,15 @@
       input.addEventListener('change', () => set(input.getAttribute('data-toggle'), input.checked));
     });
 
-    document.querySelectorAll('#themeSeg button').forEach((btn) => {
-      btn.addEventListener('click', () => set('theme', btn.dataset.value));
+    document.querySelectorAll('#presetSeg button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = PRESETS[btn.dataset.value];
+        if (p) setMany({ ...p });
+      });
+    });
+
+    document.querySelectorAll('[data-color]').forEach((inp) => {
+      inp.addEventListener('input', () => set(inp.getAttribute('data-color'), inp.value));
     });
 
     document.querySelectorAll('#accentSwatches .swatch').forEach((sw) => {

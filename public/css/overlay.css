@@ -142,11 +142,44 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* v1.4.7: user-tunable colors (Settings → Вид → Цвета) */
+:root {
+  --nick-color: #e8ecff;
+  --msg-color: #b6b6bd;
+  --talk-outline: #57e389;
+}
+
+.row .nick { color: var(--nick-color); }
+.chat-nick { color: var(--nick-color); font-weight: 600; }
+.chat-text { color: var(--msg-color); }
+.ev-nick { color: var(--nick-color); font-weight: 600; }
+.ev-msg { color: var(--msg-color); }
+/* «Обводка говорящего» — подсветка всей полосы пользователя (v1.4.9). */
+.row.talking { box-shadow: 0 0 0 2px var(--talk-outline); }
+
+input[type="color"] {
+  width: 44px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
 /* ============================ stage / panel ============================ */
 
+/* v1.4.5: the desktop shell shrinks the overlay window to the panel rect.
+ * #stage keeps laying out in SCREEN coordinates (screen-w/h) and is shifted
+ * by the applied crop so the panel never moves visually. The transform also
+ * makes #stage the containing block for any fixed-position children. */
 #stage {
   position: fixed;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: var(--screen-w, 100vw);
+  height: var(--screen-h, 100vh);
+  transform: translate(calc(-1px * var(--crop-x, 0)), calc(-1px * var(--crop-y, 0)));
   pointer-events: none;
 }
 
@@ -1669,9 +1702,14 @@ body.no-anim .board-btn { transition: none; }
   margin: 0 0 14px;
   padding: 16px;
   border-radius: 16px;
+  /* v1.4.9: stay visible while scrolling the Appearance tab */
+  position: sticky;
+  top: 0;
+  z-index: 5;
   background:
     radial-gradient(120% 120% at 20% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(16, 18, 30, 0.97);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, rgba(255, 255, 255, 0.08));
   display: flex;
   flex-direction: column;

@@ -12,7 +12,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  globalShortcut,
   Menu,
   nativeImage,
   Notification,
@@ -60,11 +59,11 @@ function verifyAssets(): void {
 let handle: AppHandle | null = null;
 let overlayWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
-let boardWin: BrowserWindow | null = null;
 const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
 let screenHooksInstalled = false;
 let overlayVisible = true;
+let overlayMoveMode = false;
 
 app.setAppUserModelId('dev.tsnotifier.app');
 
@@ -198,6 +197,12 @@ if (tryRelaunchElevated()) {
 
 /* ---------------- single instance ---------------- */
 
+// v1.4.5 memory tuning: skip Chromium's native-occlusion bookkeeping (it
+// burns CPU on always-visible windows) and cap renderer JS heaps so a busy
+// feed can never balloon into hundreds of MB.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128');
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -207,8 +212,13 @@ if (!gotLock) {
 
 /* ---------------- windows ---------------- */
 
+// Random per-window token: the desktop overlay window is the ONLY page whose
+// geometry report may resize the window — an OBS browser source loads the
+// same ?clean=1 page and must never be cropped.
+let overlayToken = '';
+
 function overlayUrl(): string {
-  return `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1`;
+  return `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1${overlayToken ? `&w=${overlayToken}` : ''}`;
 }
 
 function settingsUrl(): string {
@@ -216,19 +226,18 @@ function settingsUrl(): string {
   return `http://127.0.0.1:${handle?.port() ?? 0}/?open=settings&bare=1`;
 }
 
-function boardUrl(): string {
-  return `http://127.0.0.1:${handle?.port() ?? 0}/board.html`;
+function targetDisplay(): Electron.Display {
+  const want = handle?.store.get().desktop.display ?? 'primary';
+  if (want && want !== 'primary') {
+    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
+    if (found) return found;
+  }
+  return screen.getPrimaryDisplay();
 }
 
 function fitOverlay(): void {
   if (!overlayWin) return;
-  const want = handle?.store.get().desktop.display ?? 'primary';
-  let target = screen.getPrimaryDisplay();
-  if (want && want !== 'primary') {
-    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
-    if (found) target = found;
-  }
-  overlayWin.setBounds(target.workArea);
+  overlayWin.setBounds(targetDisplay().workArea);
 }
 
 function applyClickThrough(): void {
@@ -246,7 +255,7 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
     log(`[${tag}] did-fail-load code=${code} ${desc} url=${url}`);
     setTimeout(() => {
       if (!win.isDestroyed()) {
-        win.loadURL(tag === 'overlay' ? overlayUrl() : tag === 'board' ? boardUrl() : settingsUrl());
+        win.loadURL(tag === 'overlay' ? overlayUrl() : settingsUrl());
       }
     }, 1200);
   });
@@ -258,7 +267,7 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
       if (target.origin === new URL(settingsUrl()).origin) {
         const name = frameName || 'tsn-child';
         // Reuse the app's own single-instance windows when possible.
-        const managed = name === 'tsn-board' ? boardWin : name === 'tsn-settings' ? settingsWin : null;
+        const managed = name === 'tsn-settings' ? settingsWin : null;
         const existing = managed && !managed.isDestroyed() ? managed : childWindows.get(name);
         if (existing && !existing.isDestroyed()) {
           if (managed === settingsWin) void existing.loadURL(target.toString());
@@ -266,14 +275,21 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
           return { action: 'deny' };
         }
         const child = new BrowserWindow({
-          width: name === 'tsn-board' ? 540 : 430,
-          height: name === 'tsn-board' ? 560 : 820,
+          width: 430,
+          height: 820,
           autoHideMenuBar: true,
           title: 'TS3-TS6 Notifier',
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            spellcheck: false,
+            devTools: !IS_PACKAGED,
+          },
         });
         childWindows.set(name, child);
         child.on('closed', () => childWindows.delete(name));
-        watchWebContents(child, name === 'tsn-board' ? 'board' : 'settings');
+        watchWebContents(child, 'settings');
         void child.loadURL(target.toString());
         return { action: 'deny' };
       }
@@ -285,13 +301,8 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
 }
 
 function createOverlay(): void {
-  const want = handle?.store.get().desktop.display ?? 'primary';
-  let target = screen.getPrimaryDisplay();
-  if (want && want !== 'primary') {
-    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
-    if (found) target = found;
-  }
-  const workArea = target.workArea;
+  const workArea = targetDisplay().workArea;
+  overlayToken = Math.random().toString(36).slice(2, 10);
   overlayWin = new BrowserWindow({
     x: workArea.x,
     y: workArea.y,
@@ -312,6 +323,8 @@ function createOverlay(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
       devTools: !IS_PACKAGED,
     },
   });
@@ -361,6 +374,8 @@ function openSettings(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
       devTools: !IS_PACKAGED,
     },
   });
@@ -371,38 +386,6 @@ function openSettings(): void {
     settingsWin = null;
   });
   log('[app] settings window opened');
-}
-
-/* ---------------- soundboard window ---------------- */
-
-function openBoard(): void {
-  if (boardWin && !boardWin.isDestroyed()) {
-    boardWin.show();
-    boardWin.focus();
-    return;
-  }
-  boardWin = new BrowserWindow({
-    width: 520,
-    height: 440,
-    minWidth: 340,
-    minHeight: 260,
-    autoHideMenuBar: true,
-    icon: nativeImage.createFromPath(join(ICONS_DIR, 'icon.png')),
-    title: 'TS3-TS6 Notifier — Soundboard',
-    alwaysOnTop: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      devTools: !IS_PACKAGED,
-    },
-  });
-  boardWin.setMenuBarVisibility(false);
-  watchWebContents(boardWin, 'board');
-  boardWin.loadURL(boardUrl());
-  boardWin.on('closed', () => {
-    boardWin = null;
-  });
-  log('[app] soundboard window opened');
 }
 
 /* ---------------- tray ---------------- */
@@ -450,6 +433,8 @@ function setOverlayVisible(visible: boolean): void {
 function setSource(source: 'mock' | 'ts3' | 'ts6'): void {
   handle?.store.update({ source });
   handle?.restartConnector();
+  // Push the change to open windows so Связь switches cards with the tray.
+  handle?.broadcast({ type: 'config', config: handle?.store.get() });
   buildTrayMenu();
   log(`[app] data source → ${source}`);
 }
@@ -478,34 +463,6 @@ function applyAutostart(): void {
     });
   } catch (err) {
     log('[app] autostart error: ' + err);
-  }
-}
-
-/* ---------------- soundboard hotkeys ---------------- */
-
-/**
- * Soundboard + sound settings are parked (hidden in the UI) for now at the
- * user's request — flip this to false together with unhiding the Sound tab
- * in public/index.html to bring the feature back.
- */
-const SOUNDS_UI_HIDDEN = true;
-
-function registerSoundHotkeys(): void {
-  if (!handle || SOUNDS_UI_HIDDEN) return;
-  try {
-    globalShortcut.unregisterAll();
-    const { items, enabled, hotkeysEnabled } = handle.store.get().sounds;
-    if (!enabled || !hotkeysEnabled) return;
-    for (const item of items) {
-      if (!item.hotkey) continue;
-      const ok = globalShortcut.register(item.hotkey, () => {
-        log(`[app] sound hotkey ${item.hotkey} → ${item.name}`);
-        handle?.broadcast({ type: 'sound', id: item.id });
-      });
-      if (!ok) log(`[app] hotkey ${item.hotkey} unavailable`);
-    }
-  } catch (err) {
-    log(`[app] hotkey registration error: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -592,15 +549,6 @@ function buildTrayMenu(): void {
       label: tr('copyUrl'),
       click: () => copyOverlayUrl(),
     },
-    // Soundboard UI is parked for now (SOUNDS_UI_HIDDEN).
-    ...(SOUNDS_UI_HIDDEN
-      ? []
-      : [
-          {
-            label: 'Soundboard',
-            click: () => openBoard(),
-          } as Electron.MenuItemConstructorOptions,
-        ]),
     { type: 'separator' },
     {
       label: tr('dataSource'),
@@ -693,9 +641,70 @@ async function boot(): Promise<void> {
         overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
       }
     },
+    // v1.4.5: the window hugs the panel instead of the whole screen — a
+    // fullscreen transparent layer is the single biggest memory item.
+    setOverlayBounds: (rect) => {
+      const wa = targetDisplay().workArea;
+      if (!rect.token || rect.token !== overlayToken) {
+        // Not our window (OBS source, stale tab) — no crop, keep full layout.
+        return { cropX: 0, cropY: 0, screenW: 0, screenH: 0 };
+      }
+      const w = Math.max(120, Math.min(Math.round(rect.w), wa.width));
+      const h = Math.max(80, Math.min(Math.round(rect.h), wa.height));
+      const x = Math.max(0, Math.min(Math.round(rect.x), wa.width - w));
+      const y = Math.max(0, Math.min(Math.round(rect.y), wa.height - h));
+      if (overlayWin && !overlayWin.isDestroyed() && !overlayMoveMode) {
+        try {
+          overlayWin.setBounds({ x: wa.x + x, y: wa.y + y, width: w, height: h });
+        } catch {
+          /* keep the returned crop anyway — the page must stay in sync */
+        }
+      }
+      return { cropX: x, cropY: y, screenW: wa.width, screenH: wa.height };
+    },
+    setOverlayMoveMode: (on: boolean) => {
+      overlayMoveMode = !!on;
+      if (on) fitOverlay(); // fullscreen again while the user drags
+    },
+    memReport: () => {
+      try {
+        if (typeof app.getAppMetrics !== 'function') return [];
+        const pidOf = (w: BrowserWindow | null): number => {
+          try {
+            return w && !w.isDestroyed() ? w.webContents.getOSProcessId() : -1;
+          } catch {
+            return -1;
+          }
+        };
+        const windows = new Map<number, string>([
+          [pidOf(overlayWin), 'окно «Оверлей»'],
+          [pidOf(settingsWin), 'окно «Настройки»'],
+        ]);
+        const RU: Record<string, string> = {
+          Browser: 'браузер (Chromium)',
+          GPU: 'GPU (композитор)',
+          'Network Service': 'сеть',
+          'Audio Service': 'звук',
+          'Video Capture': 'видеозахват',
+          Utility: 'служебный',
+          Tab: 'вкладка',
+          Zygote: 'загрузчик',
+          'Spare renderer': 'резервный рендерер',
+        };
+        return app.getAppMetrics().map((pr) => {
+          const label = windows.get(pr.pid) ?? RU[pr.name || pr.type] ?? (pr.name || pr.type);
+          return `${label} (pid ${pr.pid}): rss=${Math.round((pr.memory?.workingSetSize ?? 0) / 1024)}MB`;
+        });
+      } catch {
+        return [];
+      }
+    },
     checkUpdates: () => checkForUpdatesNow(),
     restartToUpdate: () => tryQuitAndInstall(),
     version: app.isPackaged && typeof app.getVersion === 'function' ? app.getVersion() : 'dev',
+    pluginDll: IS_PACKAGED
+      ? join(process.resourcesPath, 'plugin', 'ts3plugin_tsn_win64.dll')
+      : join(ROOT, 'plugin', 'dist', 'ts3plugin_tsn_win64.dll'),
   });
 
   overlayVisible = handle.store.get().desktop.visible !== false;
@@ -708,7 +717,6 @@ async function boot(): Promise<void> {
   applyOverlayWindow();
   applyAutostart();
   setupAutoUpdate();
-  registerSoundHotkeys();
   // One guarded listener: heavy shell work only when its own slice changed.
   // (Per-config setBounds + tray rebuilds caused visible lag/freezes.)
   let lastFitSig = '';
@@ -721,6 +729,7 @@ async function boot(): Promise<void> {
       fitOverlay();
     }
     const traySig = JSON.stringify([
+      cfg.source,
       cfg.appearance.language,
       cfg.desktop.autostart,
       cfg.desktop.clickThrough,
@@ -732,8 +741,7 @@ async function boot(): Promise<void> {
       buildTrayMenu();
     }
     applyOverlayWindow();
-    registerSoundHotkeys();
-  });
+    });
 
   if (firstRun) {
     handle.store.update({ desktop: { seen: true } });
@@ -760,11 +768,6 @@ if (gotLock) {
 
   app.on('before-quit', () => {
     log('=== shutting down ===');
-    try {
-      globalShortcut.unregisterAll();
-    } catch {
-      /* ignore */
-    }
     handle?.close();
   });
 }

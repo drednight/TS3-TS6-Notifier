@@ -174,6 +174,8 @@
     });
   }
 
+  const whisperSeen = new Map(); // id -> last moment the user whispered
+
   function render() {
     const a = Settings.appearance;
     if (!state) return;
@@ -204,13 +206,20 @@
       $('bannerDetail').textContent = statusHint();
     }
 
-    // rows — whisperers go to their own fading section
+    // rows — whisperers go to their own fading section; after whispering
+    // stops they linger there for `whisperDelay` seconds (v1.4.9).
     const list = $('userList');
     const whisperList = $('whisperList');
     const whisperBlock = $('whisperBlock');
-    const whisperActive = a.showWhispers && users.some((u) => u.whispering);
+    const nowTs = Date.now();
+    const whisperMs = (Number(a.whisperDelay) || 4) * 1000;
+    const whisperNow = (u) => {
+      if (u.whispering) whisperSeen.set(u.id, nowTs);
+      return u.whispering || nowTs - (whisperSeen.get(u.id) || 0) < whisperMs;
+    };
+    const whisperActive = a.showWhispers && users.some(whisperNow);
     whisperBlock.hidden = !whisperActive;
-    const containerFor = (u) => (whisperActive && u.whispering ? whisperList : list);
+    const containerFor = (u) => (a.showWhispers && whisperNow(u) ? whisperList : list);
     const seen = new Set();
     for (const u of users) {
       seen.add(u.id);
@@ -226,6 +235,7 @@
         pack.el.classList.remove('leaving');
       }
       updateRow(pack, u);
+      pack.el.classList.toggle('whisper', a.showWhispers && whisperNow(u));
     }
 
     // Keep DOM order in sync with the sorted list (talking-first etc.).
@@ -274,10 +284,18 @@
   const evSeen = new Set();
   let evTickTimer = 0;
 
+  function escHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function nickSpan(n) {
+    return `<span class="ev-nick">${escHtml(n)}</span>`;
+  }
+
   function evText(m) {
     const clean = cleanChat;
-    const name = clean(m.nickname || m.text || '…');
-    const detail = clean(m.detail || '');
+    const name = nickSpan(clean(m.nickname || m.text || '…'));
+    const detail = escHtml(clean(m.detail || ''));
     if (m.event === 'join') return detail ? t('evJoinChannel').replace('{n}', name).replace('{c}', detail) : t('evJoinServer').replace('{n}', name);
     if (m.event === 'leave') return detail ? t('evLeaveChannel').replace('{n}', name).replace('{c}', detail) : t('evLeaveServer').replace('{n}', name);
     if (m.event === 'move') return t('evMove').replace('{n}', name).replace('{c}', detail || '…');
@@ -333,9 +351,13 @@
       if (scopeKey && a[scopeKey] === 'own' && !ownFlag) continue;
       if (now - (m.at || 0) > delayMs) continue;
       const text = kind === 'sys'
-        ? cleanChat(m.text)
+        ? escHtml(cleanChat(m.text))
         : kind === 'chat' || kind === 'poke'
-          ? `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text)
+          ? (() => {
+              const raw = `${cleanChat(m.nickname || m.senderName || '')}${m.text ? ': ' + cleanChat(m.text) : ''}`.replace(/^[:\s]+/, '') || cleanChat(m.text);
+              const nick = cleanChat(m.nickname || m.senderName || '');
+              return nick && raw.startsWith(nick) ? nickSpan(nick) + escHtml(raw.slice(nick.length)) : escHtml(raw);
+            })()
           : evText(m);
       if (!text) continue;
       items.push({ id: m.id || `${kind}-${m.at}`, kind, text, at: m.at || now });
@@ -367,7 +389,8 @@
                     : 'evTagPoke',
       );
       const txt = document.createElement('span');
-      txt.textContent = item.text;
+      txt.className = 'ev-msg';
+      txt.innerHTML = item.text;
       el.appendChild(tag);
       el.appendChild(txt);
       // Newest first, inserted by timestamp — existing rows are never moved.
@@ -636,9 +659,10 @@
   }
 
   function wireMoreTab() {
-    // version line
-    const ver = document.querySelector('.about-title .ver')?.textContent?.trim() || '';
-    $('updateVersion').textContent = ver;
+    // Version line — the live value arrives in the ws hello (the static
+    // markup fallback was frozen at an old release and never refreshed).
+    const ver = (window.TSN_VERSION || document.querySelector('.about-title .ver')?.textContent?.trim() || '').replace(/^v/, '');
+    $('updateVersion').textContent = ver ? `v${ver}` : '';
 
     $('checkUpdateBtn').addEventListener('click', () => {
       $('updateStatus').textContent = t('updChecking');
@@ -684,6 +708,43 @@
     $('restartNowBtn').addEventListener('click', () => {
       fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
     });
+
+    // «Плагин TS3»: install the bridge DLL into the client's plugin folder.
+    const refreshPluginStatus = async () => {
+      const el = $('pluginStatus');
+      if (!el) return;
+      try {
+        const st = await (await fetch('/api/plugin/status')).json();
+        el.textContent = st.active ? t('pluginActive') : t('pluginOff');
+      } catch {
+        el.textContent = '';
+      }
+    };
+    $('pluginInstallBtn').addEventListener('click', async () => {
+      const el = $('pluginStatus');
+      el.textContent = '…';
+      try {
+        const res = await fetch('/api/plugin/install', { method: 'POST' });
+        const body = await res.json();
+        if (body.ok && body.same) {
+          el.textContent = t('pluginSame');
+        } else if (body.ok) {
+          el.textContent = t('pluginInstalled');
+          setTimeout(refreshPluginStatus, 1500);
+        } else if (body.error === 'locked') {
+          el.textContent = t('pluginLocked');
+        } else if (body.error === 'dll-missing') {
+          el.textContent = t('pluginNoDll');
+        } else if (body.error === 'windows-only') {
+          el.textContent = t('pluginFail') + ': ' + body.error;
+        } else {
+          el.textContent = t('pluginFail') + ': ' + (body.error || '');
+        }
+      } catch {
+        el.textContent = t('pluginFail');
+      }
+    });
+    refreshPluginStatus();
 
     // «Диагностика»: build the TS3/TS6 capture report and let the user copy it.
     $('diagBtn').addEventListener('click', async () => {
@@ -775,6 +836,15 @@
           syncFeatures();
           scheduleRender();
         }
+        // Live version from the running binary — the static markup fallback
+        // was frozen at an old release and never refreshed after updates.
+        if (msg.version) {
+          window.TSN_VERSION = String(msg.version).replace(/^v/, '');
+          const span = document.querySelector('.about-title .ver');
+          if (span) span.textContent = `v${window.TSN_VERSION}`;
+          const upd = $('updateVersion');
+          if (upd) upd.textContent = `v${window.TSN_VERSION}`;
+        }
       } else if (msg.type === 'state') {
         state = msg.state;
         syncFeatures();
@@ -813,10 +883,6 @@
         }
         const restart = $('restartNowBtn');
         if (restart) restart.hidden = msg.status !== 'downloaded';
-      } else if (msg.type === 'sound') {
-        // Only the overlay page (clean mode) plays hotkey triggers —
-        // otherwise open windows would double-play.
-        if (Settings.clean) window.TSN?.Soundboard?.playById(msg.id);
       }
     };
 
@@ -844,6 +910,82 @@
     }
   }
 
+  /* ---------------- overlay window crop (v1.4.5) ----------------
+   * The desktop shell shrinks the overlay window to the panel so a fullscreen
+   * transparent layer is never composited. The page reports the panel rect in
+   * screen-work-area coordinates; the shell answers with the crop applied. */
+  const isCleanMode = Settings.clean;
+  // Desktop window token (?w=...). OBS browser sources load the same page
+  // without it and must never be cropped.
+  const winToken = new URLSearchParams(location.search).get('w') || '';
+  let cropX = 0;
+  let cropY = 0;
+  let lastBoundsSig = '';
+  let boundsTimer = 0;
+
+  function applyCropVars() {
+    const root = document.documentElement.style;
+    root.setProperty('--crop-x', String(cropX));
+    root.setProperty('--crop-y', String(cropY));
+  }
+
+  function reportBounds() {
+    if (!isCleanMode || !winToken || moveMode || typeof fetch !== 'function') return;
+    const panel = $('panel');
+    if (!panel || !panel.offsetWidth) return; // hidden → keep the last window
+    const r = panel.getBoundingClientRect();
+    const pad = 48; // room for the drop shadow + move-handle glow
+    const rect = {
+      x: Math.round(r.x + cropX - pad),
+      y: Math.round(r.y + cropY - pad),
+      w: Math.round(r.width + pad * 2),
+      h: Math.round(r.height + pad * 2),
+      token: winToken,
+    };
+    const sig = `${rect.x},${rect.y},${rect.w},${rect.h}`;
+    if (sig === lastBoundsSig) return;
+    lastBoundsSig = sig;
+    fetch('/api/overlay/bounds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rect),
+    })
+      .then((resp) => resp.json())
+      .then((b) => {
+        if (b && b.ok) {
+          cropX = b.cropX ?? 0;
+          cropY = b.cropY ?? 0;
+          if (b.screenW) document.documentElement.style.setProperty('--screen-w', `${b.screenW}px`);
+          if (b.screenH) document.documentElement.style.setProperty('--screen-h', `${b.screenH}px`);
+          applyCropVars();
+        }
+      })
+      .catch(() => {});
+  }
+
+  function scheduleBounds() {
+    if (boundsTimer) return;
+    boundsTimer = setTimeout(() => {
+      boundsTimer = 0;
+      reportBounds();
+    }, 250);
+  }
+
+  // Rows appear/expire on their own timers — watch the panel instead of
+  // chasing every render path.
+  if (isCleanMode) {
+    new MutationObserver(scheduleBounds).observe($('panel'), {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
+    window.addEventListener('resize', () => {
+      lastBoundsSig = '';
+      scheduleBounds();
+    });
+  }
+
   let moveMode = false;
   let moveModeTimer = 0;
   let pendingX = null;
@@ -862,11 +1004,20 @@
     const hint = $('moveHint');
     if (hint) hint.hidden = true;
     postClickthrough(clickThroughWanted());
+    if (isCleanMode) {
+      lastBoundsSig = '';
+      scheduleBounds();
+    }
   }
 
   function enterMoveMode() {
     moveMode = true;
     document.body.classList.add('move-mode');
+    if (isCleanMode) {
+      cropX = 0;
+      cropY = 0;
+      applyCropVars();
+    }
     const handle = $('moveHandle');
     if (handle) handle.hidden = false;
     const hint = $('moveHint');

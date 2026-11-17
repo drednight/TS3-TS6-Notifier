@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ConfigStore } from './config.js';
@@ -8,6 +8,7 @@ import { DIAG, OverlayState, diag, emptyState } from './model.js';
 import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
+import { Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
 import { Ts6Connector } from './connectors/ts6.js';
 import { findTs3Icon } from './icons.js';
 
@@ -21,6 +22,21 @@ export interface AppOptions {
   listDisplays?: () => Array<{ id: string; label: string; primary: boolean; width?: number; height?: number }>;
   /** Desktop only: temporarily take/release mouse input on the overlay window. */
   setOverlayClickThrough?: (ignore: boolean) => void;
+  /**
+   * Desktop only: shrink the overlay window to the panel rect (v1.4.5 memory
+   * optimization). Rect is relative to the target display's work area; the
+   * return value tells the page which crop the shell applied.
+   */
+  setOverlayBounds?: (rect: { x: number; y: number; w: number; h: number; token?: string }) => {
+    cropX: number;
+    cropY: number;
+    screenW: number;
+    screenH: number;
+  };
+  /** Desktop only: while move mode is armed the overlay window goes fullscreen. */
+  setOverlayMoveMode?: (on: boolean) => void;
+  /** Desktop only: per-process memory rows for the diagnostics report. */
+  memReport?: () => string[];
   /** Try this port first (stable URL for OBS browser sources); falls back to a random one. */
   preferredPort?: number;
   /** Desktop only: trigger an update check in the shell. */
@@ -29,6 +45,8 @@ export interface AppOptions {
   restartToUpdate?: () => void;
   /** App version for the diagnostics report. */
   version?: string;
+  /** Path of the bundled TS3 plugin DLL (for «Установить плагин»). */
+  pluginDll?: string;
 }
 
 export interface AppHandle {
@@ -36,7 +54,7 @@ export interface AppHandle {
   store: ConfigStore;
   state(): OverlayState;
   restartConnector(): void;
-  /** Push a raw message to every WebSocket client (sound triggers etc.). */
+  /** Push a raw message to every WebSocket client. */
   broadcast(message: unknown): void;
   close(): void;
   port(): number;
@@ -69,7 +87,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
     const next: Connector =
       cfg.source === 'ts3'
-        ? new Ts3Connector(cfg.ts3.host, cfg.ts3.port, cfg.ts3.apiKey)
+        ? // Prefer the in-client TS3 plugin (instant events, no query drops);
+          // falls back to ClientQuery automatically when the plugin is absent.
+          new Ts3WithPluginConnector(cfg.ts3.host, cfg.ts3.port, cfg.ts3.apiKey)
         : cfg.source === 'ts6'
           ? new Ts6Connector(cfg.ts6.host, cfg.ts6.port, cfg.ts6.apiKey, (key) => {
               store.update({ ts6: { apiKey: key } });
@@ -84,6 +104,8 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
     connector = next;
     next.start();
+    // Both TeamSpeak clients may run at once — capture TS3 plugin events for
+    // the diagnostics report even when TS6 is the active source.
     log(`[server] data source: ${cfg.source}`);
   }
 
@@ -93,6 +115,20 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
   let moveModeActive = false;
   let panelSize: { w: number; h: number } | null = null;
+
+  /** «--- memory ---» diagnostics section (v1.4.5): who eats the RAM. */
+  function memoryRows(): string[] {
+    const m = process.memoryUsage();
+    const rows = [
+      `главный процесс (Node/сервер): rss=${(m.rss / 1048576).toFixed(1)}MB heapUsed=${(m.heapUsed / 1048576).toFixed(1)}MB`,
+    ];
+    try {
+      for (const line of opts.memReport?.() ?? []) rows.push(line);
+    } catch {
+      /* metrics unavailable — the main row is still useful */
+    }
+    return rows;
+  }
 
   function broadcast(message: unknown): void {
     const raw = JSON.stringify(message);
@@ -221,6 +257,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move' && method === 'POST') {
       moveModeActive = !moveModeActive;
       broadcast({ type: 'move-mode', active: moveModeActive });
+      opts.setOverlayMoveMode?.(moveModeActive);
       json(res, 200, { ok: true, moveMode: moveModeActive });
       return;
     }
@@ -238,6 +275,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move-confirm' && method === 'POST') {
       moveModeActive = false;
       broadcast({ type: 'move-confirm' });
+      opts.setOverlayMoveMode?.(false);
       json(res, 200, { ok: true });
       return;
     }
@@ -245,6 +283,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move-cancel' && method === 'POST') {
       moveModeActive = false;
       broadcast({ type: 'move-cancel' });
+      opts.setOverlayMoveMode?.(false);
       json(res, 200, { ok: true });
       return;
     }
@@ -262,11 +301,114 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
       return;
     }
 
+    // v1.4.5 memory optimization: the clean overlay reports its content rect
+    // (screen-work-area relative) so the desktop shell can shrink the window
+    // to the panel instead of compositing a fullscreen transparent layer.
+    if (url === '/api/overlay/bounds' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { x?: number; y?: number; w?: number; h?: number; token?: string } | null;
+        const nums = [b?.x, b?.y, b?.w, b?.h].map(Number);
+        if (nums.every((n) => Number.isFinite(n))) {
+          const applied = opts.setOverlayBounds?.({
+            x: nums[0] as number,
+            y: nums[1] as number,
+            w: nums[2] as number,
+            h: nums[3] as number,
+            token: typeof b?.token === 'string' ? b.token : '',
+          });
+          json(res, 200, {
+            ok: true,
+            cropX: applied?.cropX ?? 0,
+            cropY: applied?.cropY ?? 0,
+            screenW: applied?.screenW ?? 0,
+            screenH: applied?.screenH ?? 0,
+          });
+          return;
+        }
+        json(res, 200, { ok: false });
+      });
+      return;
+    }
+
+    // «Плагин TS3»: install the bundled bridge DLL into the client's plugin folder.
+    if (url === '/api/plugin/install' && method === 'POST') {
+      const src = opts.pluginDll ?? '';
+      const dst = process.env.APPDATA
+        ? join(process.env.APPDATA, 'TS3Client', 'plugins', 'ts3plugin_tsn_win64.dll')
+        : '';
+      try {
+        if (!src || !existsSync(src)) {
+          json(res, 200, { ok: false, error: 'dll-missing' });
+        } else if (!dst) {
+          json(res, 200, { ok: false, error: 'windows-only' });
+        } else {
+          mkdirSync(join(dst, '..'), { recursive: true });
+          // Already installed and identical → nothing to do (the file is
+          // locked while TS3 has the plugin loaded — that is not an error).
+          if (existsSync(dst)) {
+            const a = readFileSync(src);
+            const b = readFileSync(dst);
+            if (a.length === b.length && a.equals(b)) {
+              json(res, 200, { ok: true, same: true, path: dst });
+              return;
+            }
+          }
+          try {
+            copyFileSync(src, dst);
+          } catch (err) {
+            // Windows locks a loaded DLL — rename it aside (allowed even while
+            // mapped) and drop the new one in place.
+            const code = (err as NodeJS.ErrnoException).code || '';
+            if (!existsSync(dst) || !/EBUSY|EPERM|EACCES/.test(code)) throw err;
+            try {
+              renameSync(dst, `${dst}.old-${Date.now()}`);
+            } catch {
+              json(res, 200, { ok: false, error: 'locked' });
+              return;
+            }
+            copyFileSync(src, dst);
+          }
+          // Best-effort cleanup of leftovers from previous updates.
+          try {
+            for (const f of readdirSync(join(dst, '..'))) {
+              if (f.startsWith('ts3plugin_tsn_win64.dll.old')) {
+                try {
+                  unlinkSync(join(dst, '..', f));
+                } catch {
+                  /* still mapped by TS3 — removed on the next install */
+                }
+              }
+            }
+          } catch {
+            /* listing failed — not important */
+          }
+          diag('plugin', `installed to ${dst}`);
+          json(res, 200, { ok: true, path: dst });
+        }
+      } catch (err) {
+        json(res, 200, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    if (url === '/api/plugin/status' && method === 'GET') {
+      const holder = connector as unknown as { getBridge?: () => { active(): boolean } };
+      const bridge = typeof holder?.getBridge === 'function' ? holder.getBridge() : null;
+      json(res, 200, {
+        active: !!bridge?.active(),
+        dll: !!(opts.pluginDll && existsSync(opts.pluginDll)),
+      });
+      return;
+    }
+
     // «Диагностика»: a copyable report of what the app caught from TS3/TS6.
     if (url === '/api/diagnostics' && method === 'GET') {
       const cfg = store.get();
+      const ts3Lines = DIAG.filter((l) => l.includes('[ts3]') || l.includes('[plugin]'));
+      const ts6Lines = DIAG.filter((l) => l.includes('[ts6]'));
+      const otherLines = DIAG.filter((l) => !l.includes('[ts3]') && !l.includes('[plugin]') && !l.includes('[ts6]'));
       const report = [
-        `TS3-TS6 Notifier diagnostics — ${new Date().toISOString()}`,
+        `TS3-TS6 Notifier diagnostics — ${new Date().toLocaleString('ru-RU')}`,
         `version: ${opts.version ?? 'dev'}`,
         `source: ${cfg.source} (ts3 ${cfg.ts3.host}:${cfg.ts3.port}, ts6 ${cfg.ts6.host}:${cfg.ts6.port})`,
         `last status: ${latestState.status} — ${latestState.detail || ''}`,
@@ -274,11 +416,22 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
         '',
         '--- recent chat & events ---',
         ...latestState.chat.slice(-30).map(
-          (m) => `${new Date(m.at).toISOString().slice(11, 19)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
+          (m) => `${new Date(m.at).toTimeString().slice(0, 8)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
         ),
         '',
-        `--- raw TS3/TS6 traffic (last ${DIAG.length} lines) ---`,
-        ...DIAG,
+        '--- TS3 (ClientQuery / plugin) ---',
+        ...(ts3Lines.length
+          ? ts3Lines
+          : [cfg.source === 'ts3' ? '(нет данных)' : `(раздел выключен — активный источник ${cfg.source.toUpperCase()})`]),
+        '',
+        '--- TS6 (Remote Apps) ---',
+        ...(ts6Lines.length
+          ? ts6Lines
+          : [cfg.source === 'ts6' ? '(нет данных)' : `(раздел выключен — активный источник ${cfg.source.toUpperCase()})`]),
+        ...(otherLines.length ? ['', '--- other ---', ...otherLines] : []),
+        '',
+        '--- memory ---',
+        ...memoryRows(),
       ].join('\n');
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(report);
@@ -323,66 +476,6 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
       return;
     }
 
-    /* ---------------- soundboard files ---------------- */
-
-    const soundsDir = join(opts.dataDir, 'sounds');
-
-    if (url.startsWith('/sounds/')) {
-      const name = basename(decodeURIComponent(url.split('?')[0] ?? '').slice('/sounds/'.length));
-      const filePath = join(soundsDir, name);
-      try {
-        if (!existsSync(soundsDir) || !filePath.startsWith(soundsDir) || statSync(filePath).isDirectory()) throw new Error('bad');
-        res.writeHead(200, {
-          'Content-Type': MIME[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
-          'Cache-Control': 'no-cache',
-          'Access-Control-Allow-Origin': '*',
-        });
-        res.end(readFileSync(filePath));
-      } catch {
-        res.writeHead(404).end('Not found');
-      }
-      return;
-    }
-
-    if (url.startsWith('/api/sounds') && method === 'GET') {
-      const files = existsSync(soundsDir)
-        ? readdirSync(soundsDir).map((name) => ({ file: `/sounds/${name}`, name }))
-        : [];
-      json(res, 200, { ok: true, files });
-      return;
-    }
-
-    if (url.startsWith('/api/sounds') && method === 'POST') {
-      const body = (await readBody(req)) as { name?: string; data?: string };
-      const rawName = String(body.name ?? '').replace(/[^\w.\- ]/g, '').slice(0, 64) || 'sound';
-      const ext = ['.wav', '.mp3', '.ogg', '.m4a', '.aac', '.opus', '.flac'].includes(extname(rawName).toLowerCase())
-        ? extname(rawName).toLowerCase()
-        : '.wav';
-      const data = String(body.data ?? '');
-      const buf = Buffer.from(data, 'base64');
-      if (!buf.length || buf.length > 8_000_000) {
-        json(res, 400, { ok: false, error: 'empty or too large (8 MB max)' });
-        return;
-      }
-      mkdirSync(soundsDir, { recursive: true });
-      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      writeFileSync(join(soundsDir, id + ext), buf);
-      json(res, 200, { ok: true, file: `/sounds/${id}${ext}`, name: rawName });
-      return;
-    }
-
-    if (url.startsWith('/api/sounds/') && method === 'DELETE') {
-      const name = basename(decodeURIComponent(url.slice('/api/sounds/'.length).split('?')[0] ?? ''));
-      const filePath = join(soundsDir, name);
-      try {
-        if (existsSync(filePath) && filePath.startsWith(soundsDir)) unlinkSync(filePath);
-        json(res, 200, { ok: true });
-      } catch (err) {
-        json(res, 500, { ok: false, error: String(err) });
-      }
-      return;
-    }
-
     if (url.startsWith('/api/')) {
       json(res, 404, { ok: false, error: 'unknown endpoint' });
       return;
@@ -403,7 +496,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   });
 
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive }));
+    ws.send(JSON.stringify({ type: 'hello', config: store.get(), state: latestState, moveMode: moveModeActive, version: opts.version ?? 'dev' }));
   });
 
   return new Promise((resolve, reject) => {

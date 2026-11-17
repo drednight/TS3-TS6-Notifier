@@ -84,7 +84,7 @@ export interface ChatMessage {
 /* ---------------- diagnostics ring buffer ----------------
  * Raw TS3/TS6 traffic + app notes, exposed via GET /api/diagnostics so the
  * user can copy a report. Secrets are redacted on write. */
-const DIAG_LIMIT = 800;
+const DIAG_LIMIT = 400;
 export const DIAG: string[] = [];
 
 export function diag(scope: string, line: string): void {
@@ -92,7 +92,7 @@ export function diag(scope: string, line: string): void {
     /(apikey|api_key|token|password|passwd)(\s*[=:]\s*)\S+/gi,
     '$1$2***',
   );
-  DIAG.push(`${new Date().toISOString().slice(11, 19)} [${scope}] ${redacted}`);
+  DIAG.push(`${new Date().toTimeString().slice(0, 8)} [${scope}] ${redacted}`);
   if (DIAG.length > DIAG_LIMIT) DIAG.splice(0, DIAG.length - DIAG_LIMIT);
 }
 
@@ -113,6 +113,11 @@ export interface Ts6Config {
 export interface Appearance {
   theme: 'glass' | 'midnight' | 'frost' | 'neon';
   accent: string;
+  nickColor: string;
+  msgColor: string;
+  talkOutline: string;
+  /** Seconds a whisperer lingers in the whisper section after whispering stops. */
+  whisperDelay: number;
   glow: number;
   opacity: number;
   blur: number;
@@ -179,7 +184,6 @@ export interface AppConfig {
     display: string;
     /** Relaunch as administrator (Windows only, UAC prompt at startup). */
     elevate: boolean;
-    /** Global hotkey that arms overlay move mode, e.g. "Ctrl+Shift+M". */
     /** Show the in-game overlay window (off = server-only mode, e.g. for OBS). */
     overlayWindow: boolean;
     /** Preferred local port for the web server (stable URL for OBS). 0 = random. */
@@ -191,44 +195,15 @@ export interface AppConfig {
     /** "icon:12345" or "group:6" → class key (see frontend CLASS list). */
     map: Record<string, string>;
   };
-  /** Soundboard. */
-  sounds: {
-    enabled: boolean;
-    /** Volume for the channel ("from me") playback. */
-    volume: number;
-    /** Audio output device for channel playback ('' = default). */
-    outputDevice: string;
-    /** Show the board inside the overlay panel. */
-    boardVisible: boolean;
-    /** Global hotkeys active (they can steal keystrokes while typing). */
-    hotkeysEnabled: boolean;
-    /** Local audition ("sound to me") — separate device/volume. */
-    localEnabled: boolean;
-    localVolume: number;
-    localDevice: string;
-    items: SoundItem[];
-  };
-}
-
-export interface SoundItem {
-  id: string;
-  name: string;
-  /** URL the browser can play: /sounds/<file> or /presets/<file>. */
-  file: string;
-  /** Global hotkey combo, e.g. "Ctrl+Alt+1" (desktop app only). */
-  hotkey: string;
-  volume: number;
-  /** Optional group ("folder") name for organizing the soundboard. */
-  group?: string;
-  /** Trim: playback start offset in seconds. */
-  start?: number;
-  /** Trim: playback end position in seconds (0/absent = full length). */
-  end?: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
   theme: 'glass',
   accent: '#7c6cff',
+  nickColor: '#e8ecff',
+  msgColor: '#b6b6bd',
+  talkOutline: '#57e389',
+  whisperDelay: 4,
   glow: 0.7,
   opacity: 0.72,
   blur: 18,
@@ -303,17 +278,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       '503': 'blood',
       '506': 'monkey',
     },
-  },
-  sounds: {
-    enabled: true,
-    volume: 0.8,
-    outputDevice: '',
-    boardVisible: true,
-    hotkeysEnabled: true,
-    localEnabled: true,
-    localVolume: 0.8,
-    localDevice: '',
-    items: [],
   },
 };
 

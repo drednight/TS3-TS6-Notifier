@@ -34,6 +34,10 @@ await cp(join(ROOT, 'public'), join(APP_DIR, 'public'), { recursive: true });
 await cp(join(ROOT, 'app', 'dist', 'main.cjs'), join(APP_DIR, 'app', 'dist', 'main.cjs'));
 await cp(join(ROOT, 'app', 'icons'), join(RES_DIR, 'icons'), { recursive: true });
 await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-notifier', main: 'app/dist/main.cjs' }));
+// Fake bundled plugin DLL + a scratch APPDATA so /api/plugin/install is testable
+await mkdir(join(RES_DIR, 'plugin'), { recursive: true });
+await writeFile(join(RES_DIR, 'plugin', 'ts3plugin_tsn_win64.dll'), 'fake-dll-bytes');
+await mkdir(join(PKG, 'appdata'), { recursive: true });
 
 // v1.3.1: the Ctrl+Shift+M move hotkey is gone for good
 {
@@ -45,12 +49,25 @@ await writeFile(join(APP_DIR, 'package.json'), JSON.stringify({ name: 'ts3-ts6-n
   const bl = /data-corner="bl"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
   const br = /data-corner="br"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
   check('packaged: bottom corners anchor to the bottom edge', bl && br);
+  // v1.4.5 memory optimization: renderer heap cap + occlusion churn off,
+  // overlay window hugs the panel via the crop channel.
+  const appJs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  check('packaged: renderer memory tuning active', /max-old-space-size/.test(mainSrc) && /CalculateNativeWinOcclusion/.test(mainSrc));
+{
+  const modelSrc = await fs.readFile(new URL('../server/model.ts', import.meta.url), 'utf8');
+  const appSrc = await fs.readFile(new URL('../server/app.ts', import.meta.url), 'utf8');
+  const featSrc = await fs.readFile(new URL('../public/js/features.js', import.meta.url), 'utf8');
+  check('packaged: diagnostics timestamps are local time', /toTimeString/.test(modelSrc) && /toTimeString/.test(appSrc) && !/toISOString\(\)\.slice\(11, 19\)/.test(modelSrc));
+  check('packaged: memory report names windows in plain Russian', /окно «Оверлей»/.test(mainSrc) && /главный процесс/.test(appSrc));
+  check('packaged: sound feature fully removed from the client bundle', !/soundsUiVisible|Soundboard|AudioContext/.test(featSrc));
+}
+  check('packaged: overlay window crops to the panel', /--crop-x/.test(css) && /api\/overlay\/bounds/.test(appJs));
 }
 
 // Boot the bundled main against that layout (electron stubbed)
 const proc = spawn('node', ['-r', './test/electron-stub.cjs', 'app/dist/main.cjs'], {
   cwd: ROOT,
-  env: { ...process.env, TSN_APP_PATH: APP_DIR, TSN_RESOURCES_PATH: RES_DIR, TSN_SMOKE_EXIT: '0' },
+  env: { ...process.env, TSN_APP_PATH: APP_DIR, TSN_RESOURCES_PATH: RES_DIR, TSN_SMOKE_EXIT: '0', APPDATA: join(PKG, 'appdata') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -87,9 +104,22 @@ try {
     }
     const api = await fetch(`http://127.0.0.1:${port}/api/state`);
     check('packaged: /api/state works', api.status === 200);
+    const pst = await fetch(`http://127.0.0.1:${port}/api/plugin/status`);
+    const pstBody = await pst.json();
+    check('packaged: /api/plugin/status works', pst.status === 200 && typeof pstBody.active === 'boolean' && typeof pstBody.dll === 'boolean', JSON.stringify(pstBody));
+    const diagRes = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const diagBody = await diagRes.text();
+    check('packaged: diagnostics has a memory section', /--- memory ---/.test(diagBody) && /главный процесс .*rss=/.test(diagBody));
+check('packaged: only the active source is captured', /раздел выключен — активный источник/.test(diagBody));
+    const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
+    const pinsBody = await pins.json();
+    check('packaged: /api/plugin/install copies the DLL', pins.status === 200 && pinsBody.ok === true && /ts3plugin_tsn_win64\.dll/.test(pinsBody.path || ''), JSON.stringify(pinsBody));
+    const pins2 = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
+    const pins2Body = await pins2.json();
+    check('packaged: reinstall of an identical DLL reports "same" (no EBUSY)', pins2.status === 200 && pins2Body.ok === true && pins2Body.same === true, JSON.stringify(pins2Body));
     const diag = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagText = await diag.text();
-    check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3\/TS6 traffic/.test(diagText) && /TS3-TS6 Notifier diagnostics/.test(diagText), `len=${diagText.length}`);
+    check('packaged: /api/diagnostics report builds', diag.status === 200 && /TS3-TS6 Notifier diagnostics/.test(diagText) && /--- TS3 \(ClientQuery \/ plugin\) ---/.test(diagText) && /--- TS6 \(Remote Apps\) ---/.test(diagText), `len=${diagText.length}`);
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
     const { default: WebSocket } = await import('ws');
     const alive = await new Promise((resolve) => {

@@ -110,6 +110,7 @@ function ts6AuthDump() {
             rootChannels: [
               { id: 5, parentId: 0, properties: { name: 'General', order: 0 } },
               { id: 9, parentId: 0, properties: { name: 'AFK', order: 1 } },
+              { id: 88, parentId: 0, properties: { name: 'DiffLab', order: 2 } },
             ],
             subChannels: {},
           },
@@ -276,6 +277,241 @@ check('ts6: join feed row rendered', (() => {
   return m.some((x) => x.kind === 'system' && x.event === 'join' && x.nickname === 'Новичок');
 })(), JSON.stringify(ts6States[ts6States.length - 1]?.chat));
 check('ts6: groups derived from serverGroups', (last6?.groups || []).some((g) => g.id === 6), JSON.stringify(last6?.groups));
+
+/* v1.4.1: moves must be announced for EVERYONE — not only own-channel touches.
+ * resync() closes the socket (and earlier tests trigger it) — wait until the
+ * fake server has a LIVE connection again or the sends vanish silently. */
+for (let i = 0; i < 60 && globalThis.ts6Sock?.readyState !== 1; i++) {
+  await new Promise((r) => setTimeout(r, 100));
+}
+await new Promise((r) => setTimeout(r, 350));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'channelCreated', payload: { connectionId: 7, channelId: 77, properties: { name: 'Lab' } } }));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, oldChannelId: 5, newChannelId: 9, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, oldChannelId: 9, newChannelId: 77, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: foreign-to-foreign move announced', rows.some((x) => x.kind === 'system' && x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'Lab' && x.own === false), JSON.stringify(rows.filter((x) => x.event === 'move')));
+  check('ts6: leaving own channel flagged own', rows.some((x) => x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'AFK' && x.own === true));
+}
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 102, channelToId: 77, invoker: {} } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: duplicate move form deduped', rows.filter((x) => x.event === 'move' && x.nickname === 'Elsewhere' && x.detail === 'Lab').length === 1, JSON.stringify(rows.filter((x) => x.event === 'move')));
+}
+globalThis.ts6Sock?.send(JSON.stringify({ type: 'clientMoved', payload: { connectionId: 7, clientId: 1, oldChannelId: 5, newChannelId: 9, type: 1, visibility: 1 } }));
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  check('ts6: own move announced too', rows.some((x) => x.event === 'move' && x.nickname === 'Me' && x.detail === 'AFK' && x.own === true), JSON.stringify(rows.filter((x) => x.event === 'move')));
+}
+/* snapshot diff announces moves the event stream missed */
+{
+  globalThis.ts6Sock?.send(JSON.stringify({ type: 'channelCreated', payload: { connectionId: 7, channelId: 88, properties: { name: 'DiffLab' } } }));
+  await new Promise((r) => setTimeout(r, 150));
+  const before = (ts6States[ts6States.length - 1]?.chat || []).filter((x) => x.event === 'move' && x.detail === 'DiffLab').length;
+  ts6Users.find((u) => u.id === 102).channelId = 88;
+  globalThis.ts6Sock?.send(JSON.stringify(ts6AuthDump()));
+  await new Promise((r) => setTimeout(r, 500));
+  const rows = ts6States[ts6States.length - 1]?.chat || [];
+  const after = rows.filter((x) => x.event === 'move' && x.detail === 'DiffLab').length;
+  check('ts6: snapshot diff announces missed move', after === before + 1, `before=${before} after=${after}`);
+}
+
+/* ---------------- TS3 plugin bridge (Overwolf-style) ---------------- */
+const { PluginBridge, PluginState, Ts3WithPluginConnector } = await import('../server/connectors/plugin-bridge.ts');
+
+const pStates = [];
+let pStateRef = null;
+const pState = new PluginState(() => pStates.push(pStateRef.buildState()));
+pStateRef = pState;
+const bridge = new PluginBridge(0);
+let pluginActive = false;
+bridge.on('active', () => { pluginActive = true; });
+bridge.on('line', (m) => pState.ingest(m));
+bridge.start();
+await new Promise((r) => setTimeout(r, 200));
+const psock = net.createConnection({ host: '127.0.0.1', port: bridge.getPort() });
+await new Promise((r) => psock.on('connect', r));
+const sendLine = (obj) => psock.write(JSON.stringify(obj) + '\n');
+
+sendLine({ e: 'hello', v: '1.0.0' });
+sendLine({ e: 'snapshot', server: 'Тест', own: 1, owncid: 10, owncname: 'Лобби', clients: [
+  { id: 1, name: 'Я', cid: 10, groups: '6', cname: 'Лобби' },
+  { id: 2, name: 'Гость', cid: 10, groups: '', cname: 'Лобби' },
+  { id: 3, name: 'Дальний', cid: 11, groups: '', cname: 'Другая' },
+] });
+await new Promise((r) => setTimeout(r, 250));
+check('plugin: hello activates the bridge', pluginActive === true);
+check('plugin: snapshot fills the channel roster', (pStates.at(-1)?.users || []).length === 2, JSON.stringify(pStates.at(-1)?.users?.map((u) => u.nickname)));
+check('plugin: channel name from snapshot', (pStates.at(-1)?.channelName || '') === 'Лобби');
+
+sendLine({ e: 'join', clid: 4, cid: 10, name: 'Новенький', groups: '', cname: 'Лобби' });
+sendLine({ e: 'join', clid: 4, cid: 10, name: 'Новенький', groups: '', cname: 'Лобби' });
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = pStates.at(-1)?.chat || [];
+  check('plugin: join row appears (own channel)', rows.some((m) => m.event === 'join' && m.nickname === 'Новенький' && m.own === true), JSON.stringify(rows.map((m) => m.event)));
+  check('plugin: duplicate join deduped', rows.filter((m) => m.event === 'join' && m.nickname === 'Новенький').length === 1);
+}
+
+sendLine({ e: 'move', clid: 3, from: 11, to: 10, name: 'Дальний', groups: '', cname: 'Лобби' });
+sendLine({ e: 'chat', kind: 'server', clid: 2, name: 'Гость', text: 'Welcome' });
+sendLine({ e: 'talk', clid: 2, s: 1 });
+sendLine({ e: 'client', clid: 2, name: 'Гость', groups: '6,12' });
+sendLine({ e: 'poke', clid: 3, name: 'Дальний', text: 'привет' });
+await new Promise((r) => setTimeout(r, 250));
+{
+  const rows = pStates.at(-1)?.chat || [];
+  const users = pStates.at(-1)?.users || [];
+  check('plugin: global move row with own flag', rows.some((m) => m.event === 'move' && m.nickname === 'Дальний' && m.own === true && m.detail === 'Лобби'), JSON.stringify(rows.filter((m) => m.event === 'move')));
+  check('plugin: server chat row verbatim', rows.some((m) => m.kind === 'server' && m.text === 'Welcome'));
+  check('plugin: poke row', rows.some((m) => m.kind === 'poke' && m.text === 'привет'));
+  check('plugin: group-change row', rows.some((m) => m.event === 'group' && m.userId === '2'));
+  check('plugin: talk state updates', users.some((u) => u.id === '2' && u.talking === true));
+}
+
+// The plugin must take over from the ClientQuery fallback while it is alive.
+// Short idle window + quick fallback keep the swap inside the test budget.
+const autoConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0, 300, 100);
+const autoStates = [];
+autoConn.on('state', (st) => autoStates.push(st));
+autoConn.start();
+await new Promise((r) => setTimeout(r, 150));
+check('plugin: lazy fallback — query poller armed before the plugin', autoConn.getQuery() !== null);
+const psock2 = net.createConnection({ host: '127.0.0.1', port: autoConn.getBridge().getPort() });
+await new Promise((r) => psock2.on('connect', r));
+psock2.write(JSON.stringify({ e: 'hello', v: '1.0.0' }) + '\n');
+psock2.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid: 5, clients: [{ id: 1, name: 'Я', cid: 5, groups: '' }] }) + '\n');
+await new Promise((r) => setTimeout(r, 350));
+check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.detail === 'TS3 plugin' && st.users.length === 1), JSON.stringify(autoStates.map((st) => st.detail)));
+check('plugin: query poller stops while the plugin is alive', autoConn.getQuery() === null);
+
+// Swap-hold: when the plugin goes away the last plugin picture must survive
+// until ClientQuery boots — no blank overlay during the swap.
+{
+  const held = autoStates.filter((st) => st.detail === 'TS3 plugin' && st.users.length === 1).length;
+  psock2.destroy();
+  await new Promise((r) => setTimeout(r, 900));
+  const after = autoStates.slice(-6);
+  check('plugin: state held through the fallback swap', held > 0 && after.some((st) => st.users.length === 1), JSON.stringify(after.map((st) => `${st.status}:${st.users.length}`)));
+  await new Promise((r) => setTimeout(r, 400));
+  check('plugin: fallback query re-armed after the plugin died', autoConn.getQuery() !== null);
+}
+
+// v1.4.6 «one at a time»: when the plugin connects first, the ClientQuery
+// poller must NEVER start.
+{
+  const lazyConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0, 5000, 3000);
+  const lazyStates = [];
+  lazyConn.on('state', (st) => lazyStates.push(st));
+  lazyConn.start();
+  await new Promise((r) => setTimeout(r, 150));
+  const lsock = net.createConnection({ host: '127.0.0.1', port: lazyConn.getBridge().getPort() });
+  await new Promise((r) => lsock.on('connect', r));
+  lsock.write(JSON.stringify({ e: 'hello', v: '1.0.0' }) + '\n');
+  lsock.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid: 5, clients: [{ id: 1, name: 'Я', cid: 5, groups: '' }] }) + '\n');
+  await new Promise((r) => setTimeout(r, 700));
+  check(
+    'plugin: query poller never starts when the plugin connects first',
+    lazyConn.getQuery() === null && lazyStates.some((st) => st.detail === 'TS3 plugin'),
+    JSON.stringify(lazyStates.map((st) => st.detail)),
+  );
+  lsock.destroy();
+  lazyConn.stop();
+}
+
+// v1.4.7: connecting must NOT flood the feed with "everyone joined".
+{
+  const fl = new PluginState(() => {});
+  const rowsOf = () => fl.buildState().chat.filter((m) => m.kind === 'system');
+  // 1) empty baseline → populated (server connect) stays silent
+  fl.ingest({ e: 'snapshot', server: 'S', own: 0, owncid: 0, owncname: '', clients: [] });
+  fl.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'a', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'b', cid: 10, groups: '3', cname: 'A' },
+  ] });
+  check('flood: connect baseline is silent', rowsOf().length === 0, String(rowsOf().length));
+  // 2) one real join between populated snapshots is announced
+  fl.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'a', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'b', cid: 10, groups: '3', cname: 'A' },
+    { id: 8, name: 'c', cid: 10, groups: '4', cname: 'A' },
+  ] });
+  const one = rowsOf();
+  check('flood: a single join is still announced', one.length === 1 && one[0].event === 'join' && one[0].nickname === 'c', JSON.stringify(one));
+  // 3) a mass resync (everyone replaced) stays silent
+  fl.ingest({ e: 'snapshot', server: 'S', own: 9, owncid: 10, owncname: 'A', clients: [
+    { id: 9, name: 'me2', cid: 10, groups: '1', cname: 'A' },
+    { id: 10, name: 'x', cid: 10, groups: '2', cname: 'A' },
+    { id: 11, name: 'y', cid: 10, groups: '3', cname: 'A' },
+    { id: 12, name: 'z', cid: 10, groups: '4', cname: 'A' },
+    { id: 13, name: 'w', cid: 10, groups: '5', cname: 'A' },
+    { id: 14, name: 'v', cid: 10, groups: '6', cname: 'A' },
+  ] });
+  check('flood: mass resync is silent', rowsOf().length === 1, String(rowsOf().length));
+}
+
+// v1.4.4: an own move must switch the channel window (blank-overlay bug).
+{
+  const mv = new PluginState(() => {});
+  mv.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'you', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'other', cid: 20, groups: '3', cname: 'B' },
+  ] });
+  let st = mv.buildState();
+  check('plugin state: snapshot roster is the own channel', st.channelName === 'A' && st.users.length === 2, `${st.channelName}:${st.users.length}`);
+  mv.ingest({ e: 'move', clid: 5, from: 10, to: 20, name: 'me', groups: '1', cname: 'B' });
+  st = mv.buildState();
+  check(
+    'plugin state: own move switches channel roster + name',
+    st.channelName === 'B' && st.channelId === '20' && st.users.length === 2 && st.users.some((u) => u.id === '7'),
+    `${st.channelName}:${st.channelId}:${st.users.map((u) => u.id).join(',')}`,
+  );
+  mv.ingest({ e: 'move', clid: 6, from: 10, to: 20, name: 'you', groups: '2', cname: 'B' });
+  st = mv.buildState();
+  check('plugin state: moves into the new channel land in the roster', st.users.length === 3, st.users.map((u) => u.id).join(','));
+  mv.ingest({ e: 'disconnect' });
+  mv.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 30, owncname: 'C', clients: [{ id: 5, name: 'me', cid: 30, groups: '1', cname: 'C' }] });
+  st = mv.buildState();
+  check('plugin state: fresh snapshot after reconnect re-anchors the channel', st.channelName === 'C' && st.users.length === 1, `${st.channelName}:${st.users.length}`);
+}
+
+// Heartbeat semantics: pings keep the plugin counted as alive; a silent
+// socket eventually marks it idle (short window via constructor).
+{
+  const hBridge = new PluginBridge(0, 400);
+  let hActive = 0;
+  let hIdle = 0;
+  hBridge.on('active', () => { hActive += 1; });
+  hBridge.on('idle', () => { hIdle += 1; });
+  hBridge.start();
+  await new Promise((r) => setTimeout(r, 150));
+  const hs = net.createConnection({ host: '127.0.0.1', port: hBridge.getPort() });
+  await new Promise((r) => hs.on('connect', r));
+  hs.write(JSON.stringify({ e: 'hello', v: '1.1.0' }) + '\n');
+  await new Promise((r) => setTimeout(r, 150));
+  check('bridge: hello marks the plugin active', hActive === 1 && hBridge.active() === true);
+  for (let i = 0; i < 4; i++) {
+    hs.write('{"e":"ping"}\n');
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  check('bridge: heartbeats keep the plugin active', hIdle === 0 && hBridge.active() === true);
+  hs.destroy();
+  await new Promise((r) => setTimeout(r, 1000));
+  check('bridge: dead plugin marked idle after the quiet window', hIdle === 1 && hBridge.active() === false);
+  hBridge.stop();
+}
+
+psock.destroy();
+psock2.destroy();
+bridge.stop();
+autoConn.stop();
 
 /* ---- teardown ---- */
 c3.stop();

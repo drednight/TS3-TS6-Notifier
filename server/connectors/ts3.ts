@@ -61,6 +61,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private refreshFails = 0;
   private refreshTimer: NodeJS.Timeout | null = null;
   private periodicTimer: NodeJS.Timeout | null = null;
+  private keepaliveTimer: NodeJS.Timeout | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
   private authFailed = false;
   private greetingSeen = false;
@@ -101,7 +102,8 @@ export class Ts3Connector extends EventEmitter implements Connector {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.flushTimer) clearTimeout(this.flushTimer);
-    this.reconnectTimer = this.refreshTimer = this.flushTimer = null;
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    this.reconnectTimer = this.refreshTimer = this.flushTimer = this.keepaliveTimer = null;
     this.signalDisconnect();
   }
 
@@ -279,6 +281,10 @@ export class Ts3Connector extends EventEmitter implements Connector {
 
     if (this.periodicTimer) clearInterval(this.periodicTimer);
     this.periodicTimer = setInterval(() => void this.fullRefresh(), 45000);
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = setInterval(() => {
+      if (!this.stopped && this.socket) void this.safe('version', 6000);
+    }, 20000);
     this.refreshFails = 0;
   }
 
@@ -350,6 +356,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
         const idx = this.pending.findIndex((p) => p === entry);
         if (idx >= 0) this.pending.splice(idx, 1);
         reject(new Error(`ClientQuery command timeout: ${cmd.split(' ')[0]}`));
+        // The late response would desync every following request — hard-reset
+        // the link instead and let the reconnect loop rebuild cleanly.
+        this.signalDisconnect(socket);
       }, timeoutMs);
       const entry: PendingCommand = {
         lines: [],
@@ -364,9 +373,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
     });
   }
 
-  private async safe(cmd: string) {
+  private async safe(cmd: string, timeoutMs = 8000) {
     try {
-      return await this.command(cmd);
+      return await this.command(cmd, timeoutMs);
     } catch (err) {
       return {
         items: [] as Ts3Fields[],
@@ -434,7 +443,7 @@ export class Ts3Connector extends EventEmitter implements Connector {
         this.serverName = fStr(server.items[0]!, 'virtualserver_name');
       }
 
-      const chRes = await this.safe('channellist');
+      const chRes = await this.safe('channellist', 20000);
       this.channels.clear();
       for (const item of chRes.items) {
         const id = fInt(item, 'cid');
@@ -446,9 +455,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
         });
       }
 
-      let clRes = await this.safe('clientlist -uid -away -voice -groups');
+      let clRes = await this.safe('clientlist -uid -away -voice -groups', 20000);
       if (clRes.errorId !== 0) {
-        clRes = await this.safe('clientlist -uid -away -voice');
+        clRes = await this.safe('clientlist -uid -away -voice', 20000);
       }
 
       const clients = new Map<number, UserState>();
@@ -690,6 +699,15 @@ export class Ts3Connector extends EventEmitter implements Connector {
         const to = fInt(fields, 'ctid');
         if (user?.isSelf) {
           this.ownCid = to;
+          this.pushChat({
+            userId: String(clid),
+            nickname: user.nickname,
+            text: user.nickname,
+            kind: 'system',
+            event: 'move',
+            detail: this.channels.get(to)?.name ?? '',
+            own: true,
+          });
         } else if (user && !user.isQuery && clid !== this.ownClid) {
           // v1.3.1: every move on the server («кто куда перешёл») — the user
           // wants the full picture, not only own-channel touches.

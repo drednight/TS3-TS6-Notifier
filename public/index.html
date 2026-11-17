@@ -77,7 +77,6 @@
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="appearance" data-i18n="tabAppearance"></button>
       <button class="tab" data-tab="elements" data-i18n="tabElements"></button>
-      <button class="tab" data-tab="sound" data-i18n="tabSound" hidden></button>
       <button class="tab" data-tab="connection" data-i18n="tabConnection"></button>
       <button class="tab" data-tab="more" data-i18n="tabMore"></button>
     </nav>
@@ -100,17 +99,26 @@
         </div>
 
         <div class="opt-group">
-          <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="theme"></span></div>
-          <div class="theme-tiles" id="themeSeg">
-            <button data-value="glass" data-i18n="themeGlass"></button>
-            <button data-value="midnight" data-i18n="themeMidnight"></button>
-            <button data-value="frost" data-i18n="themeFrost"></button>
-            <button data-value="neon" data-i18n="themeNeon"></button>
-            <button data-value="emerald" data-i18n="themeEmerald"></button>
-            <button data-value="carmine" data-i18n="themeCarmine"></button>
-            <button data-value="amber" data-i18n="themeAmber"></button>
-            <button data-value="mono" data-i18n="themeMono"></button>
+          <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="presetsTitle"></span></div>
+          <div class="theme-tiles" id="presetSeg">
+            <button data-value="glass" data-i18n="presetGlass"></button>
+            <button data-value="midnight" data-i18n="presetMidnight"></button>
+            <button data-value="frost" data-i18n="presetFrost"></button>
+            <button data-value="neon" data-i18n="presetNeon"></button>
+            <button data-value="emerald" data-i18n="presetEmerald"></button>
+            <button data-value="carmine" data-i18n="presetCarmine"></button>
+            <button data-value="amber" data-i18n="presetAmber"></button>
+            <button data-value="mono" data-i18n="presetMono"></button>
           </div>
+
+          <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="colorsTitle"></span></div>
+          <div class="color-rows">
+            <label class="switch-row"><span data-i18n="nickColorLabel"></span><input type="color" data-color="nickColor" /></label>
+            <label class="switch-row"><span data-i18n="msgColorLabel"></span><input type="color" data-color="msgColor" /></label>
+            <label class="switch-row"><span data-i18n="talkOutlineLabel"></span><input type="color" data-color="talkOutline" /></label>
+          </div>
+
+          <div class="opt-group-title"><span class="group-ico" data-ico="star"></span><span data-i18n="accentLabel"></span></div>
           <div class="swatch-row" id="accentSwatches">
             <button class="swatch" data-value="#7c6cff" style="--sw:#7c6cff"></button>
             <button class="swatch" data-value="#22d3ee" style="--sw:#22d3ee"></button>
@@ -240,6 +248,11 @@
             <label class="chip-toggle"><input type="checkbox" data-toggle="chatPrivate" /><span class="chip-ico" data-ico="shield"></span><span data-i18n="chatPrivate"></span></label>
             <label class="chip-toggle"><input type="checkbox" data-toggle="showUnreadBadge" /><span class="chip-ico" data-ico="star"></span><span data-i18n="unreadBadge"></span></label>
           </div>
+          <div class="field" data-slider="whisperDelay" data-min="1" data-max="30" data-step="1">
+            <label data-i18n="whisperDelay"></label><output></output>
+            <input type="range" />
+          </div>
+
           <div class="field" data-slider="chatDelay" data-min="2" data-max="60" data-step="1">
             <label data-i18n="chatDelay"></label><output></output>
             <input type="range" />
@@ -287,71 +300,6 @@
         </div>
       </section>
 
-      <!-- ---------- Sound ---------- -->
-      <section class="tab-panel" data-panel="sound" hidden>
-        <div class="card sound-target">
-          <div class="switch-list">
-            <label class="switch-row"><span data-i18n="localSound"></span><input type="checkbox" id="localEnabled" /><i></i></label>
-          </div>
-          <div class="field">
-            <label data-i18n="outputDevice"></label>
-            <select id="audioOutputLocal"><option value="" data-i18n="outputDeviceDefault"></option></select>
-          </div>
-          <div class="field">
-            <label data-i18n="localVolume"></label>
-            <input type="range" id="localVolume" min="0" max="1" step="0.05" value="0.8" data-sound-range />
-          </div>
-        </div>
-
-        <div class="card sound-target">
-          <div class="switch-list">
-            <label class="switch-row"><span data-i18n="channelSound"></span><input type="checkbox" id="soundsEnabled" /><i></i></label>
-          </div>
-          <div class="field">
-            <label data-i18n="outputDevice"></label>
-            <div class="btn-row">
-              <select id="audioOutput"><option value="" data-i18n="outputDeviceDefault"></option></select>
-              <button class="btn" id="refreshDevices" data-i18n="refreshDevices"></button>
-            </div>
-          </div>
-          <div class="field">
-            <label data-i18n="soundsVolume"></label>
-            <input type="range" id="soundVolume" min="0" max="1" step="0.05" value="0.8" data-sound-range />
-          </div>
-        </div>
-
-        <div class="switch-list">
-          <label class="switch-row"><span data-i18n="hotkeysEnabled"></span><input type="checkbox" id="hotkeysEnabled" /><i></i></label>
-        </div>
-
-        <div class="guide-card">
-          <div class="guide-title" data-i18n="soundGuideTitle"></div>
-          <div class="guide-status searching" id="loopbackStatus" data-i18n="loopbackSearching"></div>
-          <div class="guide-mode">
-            <div class="guide-mode-name" data-i18n="guideNoCable"></div>
-            <div class="hint" data-i18n="guideNoCableSteps"></div>
-          </div>
-          <div class="guide-mode">
-            <div class="guide-mode-name" data-i18n="guideCable"></div>
-            <div class="hint" data-i18n="guideCableSteps"></div>
-          </div>
-          <div class="hint" data-i18n="guideLimit"></div>
-        </div>
-
-        <div class="field">
-          <label data-i18n="soundItems"></label>
-          <div id="soundItems" class="sound-list"></div>
-        </div>
-
-        <div class="btn-row">
-          <button class="btn" id="stopAllBtn" data-i18n="stopSound"></button>
-          <button class="btn" id="clearHotkeysBtn" data-i18n="clearHotkeys"></button>
-          <button class="btn primary" id="openBoardBtn" data-i18n="openBoard"></button>
-        </div>
-
-        <div class="hint block" data-i18n="soundsHint"></div>
-      </section>
-
       <!-- ---------- Connection ---------- -->
       <section class="tab-panel" data-panel="connection">
         <div class="conn-status card" id="connStatusCard">
@@ -383,6 +331,12 @@
             <input type="password" id="ts3ApiKey" spellcheck="false" autocomplete="off" />
             <div class="hint" data-i18n="ts3KeyHint"></div>
           </div>
+          <div class="sub-title" data-i18n="pluginTitle"></div>
+          <div class="hint block" data-i18n="pluginHint"></div>
+          <div class="tile-grid">
+            <button class="tile-btn" id="pluginInstallBtn" data-i18n="pluginInstall"></button>
+          </div>
+          <div class="hint" id="pluginStatus"></div>
         </div>
 
         <div id="ts6Fields" class="conn-fields opt-group">
@@ -399,9 +353,6 @@
         <div class="btn-row">
           <button class="btn primary wide" id="reconnectBtn" data-i18n="reconnect"></button>
         </div>
-
-        <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
-        <div class="hint block" data-i18n="elevateHint"></div>
 
         <div class="hint block" data-i18n="connectionHelp"></div>
         <details class="collapse-block" id="ts6GroupsBlock">
@@ -435,6 +386,12 @@
         </div>
 
         <div class="opt-group">
+          <div class="opt-group-title"><span class="group-ico" data-ico="gear"></span><span data-i18n="elevateTitle"></span></div>
+          <label class="switch-row"><span data-i18n="elevateLabel"></span><input type="checkbox" id="elevateToggle" /><i></i></label>
+          <div class="hint block" data-i18n="elevateHint"></div>
+        </div>
+
+        <div class="opt-group">
           <div class="opt-group-title"><span class="group-ico" data-ico="alert"></span><span data-i18n="diagTitle"></span></div>
           <div class="hint block" data-i18n="diagHint"></div>
           <div class="tile-grid">
@@ -455,10 +412,9 @@
         </div>
 
         <div class="card about-card">
-          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.3.0</span></div>
+          <div class="about-title">TS3-TS6 Notifier <span class="ver">v1.4.1</span></div>
           <div class="hint" data-i18n="aboutText"></div>
         </div>
-        <div class="hint block" data-i18n="aboutTip"></div>
       </section>
     </div>
   </aside>
