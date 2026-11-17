@@ -322,6 +322,11 @@ export class PluginState {
         });
         this.clients.set(id, u);
         if (msg['cname']) this.channelNames.set(u.channelId, str(msg['cname']));
+        // Own join (server connect, channel return) moves the channel window.
+        if (id === this.ownId) {
+          this.ownCid = u.channelId;
+          this.ownChannelName = str(msg['cname']) || this.channelNames.get(u.channelId) || this.ownChannelName;
+        }
         if (!u.isSelf && !u.isQuery && u.nickname) {
           this.pushRow(u.nickname, u.id, 'join', u.channelId === this.ownCid);
         }
@@ -350,10 +355,17 @@ export class PluginState {
         const nick = str(msg['name']) || prev?.nickname || '';
         const u = prev
           ? { ...prev, channelId: to, serverGroups: str(msg['groups']) || prev.serverGroups }
-          : makeUser(String(id), nick, { channelId: to, serverGroups: str(msg['groups']) });
+          : makeUser(String(id), nick, { channelId: to, serverGroups: str(msg['groups']), isSelf: id === this.ownId });
         this.clients.set(id, u);
         const cname = str(msg['cname']);
         if (cname) this.channelNames.set(to, cname);
+        // Own move switches the "my channel" window — without this the roster
+        // kept filtering against the OLD channel and the overlay went blank
+        // (hide-empty hid the panel the moment the filter matched nobody).
+        if (id === this.ownId) {
+          this.ownCid = to;
+          this.ownChannelName = cname || this.channelNames.get(to) || this.ownChannelName;
+        }
         if (!u.isQuery && nick) {
           this.pushRow(nick, u.id, 'move', u.isSelf || from === this.ownCid || to === this.ownCid, cname || this.channelNames.get(to) || '');
         }
@@ -425,6 +437,8 @@ export class PluginState {
       case 'disconnect': {
         this.clients.clear();
         this.channelNames.clear();
+        this.ownCid = 0;
+        this.ownChannelName = '';
         this.announcedOnce = false;
         this.emitState();
         return;

@@ -1,6 +1,6 @@
 {
   "name": "ts3-ts6-notifier",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Beautiful overlay for TeamSpeak 3 & TeamSpeak 6: channel roster, live speaking indicators, icons and full appearance customization",
   "type": "module",
   "private": true,

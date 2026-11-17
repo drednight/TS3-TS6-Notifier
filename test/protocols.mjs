@@ -396,6 +396,32 @@ check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.d
   check('plugin: state held through the fallback swap', held > 0 && after.some((st) => st.users.length === 1), JSON.stringify(after.map((st) => `${st.status}:${st.users.length}`)));
 }
 
+// v1.4.4: an own move must switch the channel window (blank-overlay bug).
+{
+  const mv = new PluginState(() => {});
+  mv.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 10, owncname: 'A', clients: [
+    { id: 5, name: 'me', cid: 10, groups: '1', cname: 'A' },
+    { id: 6, name: 'you', cid: 10, groups: '2', cname: 'A' },
+    { id: 7, name: 'other', cid: 20, groups: '3', cname: 'B' },
+  ] });
+  let st = mv.buildState();
+  check('plugin state: snapshot roster is the own channel', st.channelName === 'A' && st.users.length === 2, `${st.channelName}:${st.users.length}`);
+  mv.ingest({ e: 'move', clid: 5, from: 10, to: 20, name: 'me', groups: '1', cname: 'B' });
+  st = mv.buildState();
+  check(
+    'plugin state: own move switches channel roster + name',
+    st.channelName === 'B' && st.channelId === '20' && st.users.length === 2 && st.users.some((u) => u.id === '7'),
+    `${st.channelName}:${st.channelId}:${st.users.map((u) => u.id).join(',')}`,
+  );
+  mv.ingest({ e: 'move', clid: 6, from: 10, to: 20, name: 'you', groups: '2', cname: 'B' });
+  st = mv.buildState();
+  check('plugin state: moves into the new channel land in the roster', st.users.length === 3, st.users.map((u) => u.id).join(','));
+  mv.ingest({ e: 'disconnect' });
+  mv.ingest({ e: 'snapshot', server: 'S', own: 5, owncid: 30, owncname: 'C', clients: [{ id: 5, name: 'me', cid: 30, groups: '1', cname: 'C' }] });
+  st = mv.buildState();
+  check('plugin state: fresh snapshot after reconnect re-anchors the channel', st.channelName === 'C' && st.users.length === 1, `${st.channelName}:${st.users.length}`);
+}
+
 // Heartbeat semantics: pings keep the plugin counted as alive; a silent
 // socket eventually marks it idle (short window via constructor).
 {
