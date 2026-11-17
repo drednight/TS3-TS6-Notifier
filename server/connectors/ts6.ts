@@ -23,6 +23,9 @@ const APP_VERSION = '1.0.0';
 const APP_NAME = 'TS3-TS6 Notifier';
 const APP_DESCRIPTION = 'TeamSpeak overlay: channel roster, live speaking indicators, icons';
 
+/** How long a finished whisper stays in the state (the UI fades it out). */
+const WHISPER_GRACE_MS = 1200;
+
 /**
  * TeamSpeak 5/6 data source via the Remote Apps WebSocket API
  * (ws://127.0.0.1:5899 by default).
@@ -39,6 +42,9 @@ export class Ts6Connector extends EventEmitter implements Connector {
 
   private clients = new Map<number, UserState>();
   private channels = new Map<number, ChannelInfo>();
+  /** clientId → last whisper (active = they are whispering right now). */
+  private whisperHits = new Map<number, { at: number; active: boolean }>();
+  private whisperTimer: NodeJS.Timeout | null = null;
   private ownByConnection = new Map<number, number>();
   private groupInfos = new Map<number, ServerGroup>();
   private tracedProps = false;
@@ -76,7 +82,8 @@ export class Ts6Connector extends EventEmitter implements Connector {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.authTimer) clearTimeout(this.authTimer);
     if (this.flushTimer) clearTimeout(this.flushTimer);
-    this.reconnectTimer = this.authTimer = this.flushTimer = null;
+    if (this.whisperTimer) clearTimeout(this.whisperTimer);
+    this.reconnectTimer = this.authTimer = this.flushTimer = this.whisperTimer = null;
     this.closeSocket(true);
   }
 
@@ -321,7 +328,12 @@ export class Ts6Connector extends EventEmitter implements Connector {
             channelId: 0,
             isSelf: clientId === this.ownClientId,
           } satisfies UserState);
-        this.clients.set(clientId, applyProperties(existing, props));
+        const updated = applyProperties(existing, props);
+        this.clients.set(clientId, updated);
+        // Some builds report whispers through properties instead of the talk
+        // event («flagTalkingWithWhisper») — track those too.
+        if (updated.talking) this.noteWhisper(clientId, !!updated.whispering);
+        else if (this.whisperHits.has(clientId)) this.noteWhisper(clientId, false);
         this.emitState();
         return;
       }
@@ -331,9 +343,13 @@ export class Ts6Connector extends EventEmitter implements Connector {
         const status = jInt(payload, 'status');
         // status: 0 = silent, 1 = talking, ≥2 or whisper/targetMode flags = whisper.
         const talking = status >= 1;
+        // TS6 really sends «isWhisper» (see any diagnostics report) — the old
+        // check only knew «whisper»/targetMode, so whispers never registered.
         const whisper =
           talking &&
           (status >= 2 ||
+            jBool(payload, 'isWhisper') ||
+            jBool(payload, 'isWhispering') ||
             jBool(payload, 'whisper') ||
             ('targetMode' in payload && jInt(payload, 'targetMode') !== 0));
         if (foreign) {
@@ -347,6 +363,9 @@ export class Ts6Connector extends EventEmitter implements Connector {
           this.clients.set(clientId, { ...client, talking, whispering: whisper });
           this.emitState();
         }
+        // Remember who whispered — including people from other channels, who
+        // never appear in the roster at all.
+        if (clientId) this.noteWhisper(clientId, whisper);
         return;
       }
 
@@ -823,6 +842,68 @@ export class Ts6Connector extends EventEmitter implements Connector {
     this.closeSocket(false);
   }
 
+  /* -------------------------------------------------- whispers */
+
+  /**
+   * Remember who whispered. Whispers often come from another channel (a
+   * whisper list aimed at a channel or at channel commanders), so those
+   * people never show up in the roster — the overlay lists them separately.
+   */
+  private noteWhisper(clientId: number, whisper: boolean): void {
+    if (!clientId || clientId === this.ownClientId) return; // own whispering is not news
+    const prev = this.whisperHits.get(clientId);
+    if (whisper) {
+      this.whisperHits.set(clientId, { at: Date.now(), active: true });
+      if (this.whisperHits.size > 64) {
+        const cutoff = Date.now() - 60000;
+        for (const [id, rec] of this.whisperHits) {
+          if (!rec.active && rec.at < cutoff) this.whisperHits.delete(id);
+        }
+      }
+      if (!prev?.active) this.emitState();
+      return;
+    }
+    if (prev?.active) {
+      this.whisperHits.set(clientId, { at: Date.now(), active: false });
+      this.emitState();
+      // Nothing else may happen after a whisper ends — re-publish once so the
+      // row really leaves the state (and the UI can fade it out).
+      if (!this.whisperTimer) {
+        this.whisperTimer = setTimeout(() => {
+          this.whisperTimer = null;
+          this.emitState();
+        }, WHISPER_GRACE_MS + 200);
+      }
+    }
+  }
+
+  /** Whisperers that are not in our channel (the roster covers the rest). */
+  private buildWhisperers(roster: UserState[]): UserState[] {
+    const now = Date.now();
+    const onRoster = new Set(roster.map((u) => String(u.id)));
+    const out: UserState[] = [];
+    for (const [id, rec] of this.whisperHits) {
+      // active = still whispering; the grace keeps a flapping whisper steady.
+      if (!rec.active && now - rec.at > WHISPER_GRACE_MS) {
+        this.whisperHits.delete(id);
+        continue;
+      }
+      if (onRoster.has(String(id)) || id === this.ownClientId) continue;
+      const known = this.clients.get(id);
+      if (known?.isQuery) continue;
+      const channel = known?.channelId ? this.channels.get(known.channelId)?.name ?? '' : '';
+      out.push({
+        ...(known ?? makeUser(String(id), `#${id}`)),
+        id: String(id),
+        talking: true,
+        whispering: true,
+        isSelf: false,
+        whisperChannel: channel,
+      });
+    }
+    return out;
+  }
+
   /* -------------------------------------------------- publish */
 
   private buildState(): OverlayState {
@@ -835,15 +916,17 @@ export class Ts6Connector extends EventEmitter implements Connector {
         if (!groupMap.has(id)) groupMap.set(id, { id, name: '', iconId: 0 });
       }
     }
+    const users = [...this.clients.values()].filter(
+      (c) => this.ownChannelId > 0 && c.channelId === this.ownChannelId,
+    );
     return {
       ...emptyState('ts6', this.curStatus, this.curDetail),
       serverName: this.serverName,
       channelName: this.channels.get(this.ownChannelId)?.name ?? '',
       channelId: this.ownChannelId > 0 ? String(this.ownChannelId) : '',
       selfId: this.ownClientId > 0 ? String(this.ownClientId) : null,
-      users: [...this.clients.values()].filter(
-        (c) => this.ownChannelId > 0 && c.channelId === this.ownChannelId,
-      ),
+      users,
+      whisperers: this.buildWhisperers(users),
       groups: [...groupMap.values()].sort((a, b) => a.id - b.id),
       chat: this.chat,
       updatedAt: Date.now(),

@@ -44,6 +44,9 @@ interface ChannelInfo {
   name: string;
 }
 
+/** How long a finished whisper stays in the state (the UI fades it out). */
+const WHISPER_GRACE_MS = 1200;
+
 /**
  * TeamSpeak 3 data source via the built-in ClientQuery plugin
  * (TCP telnet, default 127.0.0.1:25639).
@@ -68,6 +71,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
   private traceCount = 0;
 
   private clients = new Map<number, UserState>();
+  /** clid → last whisper (active = whispering right now). */
+  private whisperHits = new Map<number, { at: number; active: boolean }>();
+  private whisperTimer: NodeJS.Timeout | null = null;
   private groupMem = new Map<number, { sg: string; cg: string }>();
   private announcedOnce = false;
   private channels = new Map<number, ChannelInfo>();
@@ -103,7 +109,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    if (this.whisperTimer) clearTimeout(this.whisperTimer);
     this.reconnectTimer = this.refreshTimer = this.flushTimer = this.keepaliveTimer = null;
+    this.whisperTimer = null;
     this.signalDisconnect();
   }
 
@@ -619,6 +627,9 @@ export class Ts3Connector extends EventEmitter implements Connector {
           this.clients.set(clid, { ...user, talking, whispering: whisper });
           this.emitState();
         }
+        // Whispers may come from another channel — remember them so the
+        // overlay can show who spoke (the roster only holds our channel).
+        this.noteWhisper(clid, whisper);
         return;
       }
 
@@ -834,16 +845,74 @@ export class Ts3Connector extends EventEmitter implements Connector {
     this.emitState();
   }
 
+  /* -------------------------------------------------- whispers */
+
+  /** Remember who whispered — including people from other channels. */
+  private noteWhisper(clid: number, whisper: boolean): void {
+    if (!clid || clid === this.ownClid) return; // own whispering is not news
+    const prev = this.whisperHits.get(clid);
+    if (whisper) {
+      this.whisperHits.set(clid, { at: Date.now(), active: true });
+      if (this.whisperHits.size > 64) {
+        const cutoff = Date.now() - 60000;
+        for (const [id, rec] of this.whisperHits) {
+          if (!rec.active && rec.at < cutoff) this.whisperHits.delete(id);
+        }
+      }
+      if (!prev?.active) this.emitState();
+      return;
+    }
+    if (prev?.active) {
+      this.whisperHits.set(clid, { at: Date.now(), active: false });
+      this.emitState();
+      // Nothing else may happen after a whisper ends — re-publish once so the
+      // row really leaves the state (and the UI can fade it out).
+      if (!this.whisperTimer) {
+        this.whisperTimer = setTimeout(() => {
+          this.whisperTimer = null;
+          this.emitState();
+        }, WHISPER_GRACE_MS + 200);
+      }
+    }
+  }
+
+  /** Whisperers that are not in our channel (the roster covers the rest). */
+  private buildWhisperers(roster: UserState[]): UserState[] {
+    const now = Date.now();
+    const onRoster = new Set(roster.map((u) => String(u.id)));
+    const out: UserState[] = [];
+    for (const [clid, rec] of this.whisperHits) {
+      if (!rec.active && now - rec.at > WHISPER_GRACE_MS) {
+        this.whisperHits.delete(clid);
+        continue;
+      }
+      if (onRoster.has(String(clid)) || clid === this.ownClid) continue;
+      const known = this.clients.get(clid);
+      if (known?.isQuery) continue;
+      out.push({
+        ...(known ?? makeUser(String(clid), `#${clid}`)),
+        id: String(clid),
+        talking: true,
+        whispering: true,
+        isSelf: false,
+        whisperChannel: known?.channelId ? this.channels.get(known.channelId)?.name ?? '' : '',
+      });
+    }
+    return out;
+  }
+
   private buildState(): OverlayState {
+    const users = [...this.clients.values()].filter(
+      (c) => this.ownCid > 0 && c.channelId === this.ownCid,
+    );
     return {
       ...emptyState('ts3', this.curStatus, this.curDetail),
       serverName: this.serverName,
       channelName: this.channels.get(this.ownCid)?.name ?? '',
       channelId: this.ownCid > 0 ? String(this.ownCid) : '',
       selfId: this.ownClid > 0 ? String(this.ownClid) : null,
-      users: [...this.clients.values()].filter(
-        (c) => this.ownCid > 0 && c.channelId === this.ownCid,
-      ),
+      users,
+      whisperers: this.buildWhisperers(users),
       groups: this.groups,
       chat: this.chat,
       updatedAt: Date.now(),

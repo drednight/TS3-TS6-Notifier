@@ -23,6 +23,11 @@ export interface UserState {
   talking: boolean;
   /** Whispering (target-mode speech) — shown in a separate fading section. */
   whispering: boolean;
+  /**
+   * Only set on rows from `OverlayState.whisperers`: the channel this person
+   * whispers FROM (they are not in your channel). Shown as a tooltip.
+   */
+  whisperChannel?: string;
   /** Microphone muted (hardware off, client-side mute or server-side mute). */
   inputMuted: boolean;
   /** Speakers/headphones muted. */
@@ -52,6 +57,12 @@ export interface OverlayState {
   selfId: string | null;
   /** Users of the current channel, including self. */
   users: UserState[];
+  /**
+   * People who whispered to you (or to your channel) from ANOTHER channel.
+   * They are not part of `users` — the overlay lists them in the whisper
+   * section so a whisper never goes unnoticed.
+   */
+  whisperers: UserState[];
   /** Server groups (TS3 provides names + icon ids; TS6 usually only ids). */
   groups: ServerGroup[];
   /** Rolling chat log for toast notifications. */
@@ -297,6 +308,7 @@ export function emptyState(source: SourceKind, status: StatusCode, detail = ''):
     channelId: '',
     selfId: null,
     users: [],
+    whisperers: [],
     groups: [],
     chat: [],
     updatedAt: Date.now(),

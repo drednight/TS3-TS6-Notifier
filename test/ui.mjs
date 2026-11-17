@@ -139,6 +139,40 @@ try {
     check('overlay: whisper/chat containers present', !!doc.getElementById('whisperBlock') && !!doc.getElementById('chatFeed'));
     check('overlay: class glyph API available', !!dom.window.TSIcons && typeof dom.window.TSIcons.classGlyph === 'function' && dom.window.TSIcons.CLASSES.length === 18);
 
+    // v1.4.12: a whisper from ANOTHER channel — the speaker is not in the
+    // roster, so it must land in the whisper section under the channel list.
+    FakeWS.last._emit({
+      type: 'state',
+      state: {
+        ...fakeState,
+        whisperers: [
+          { id: '900', nickname: 'Сосед', channelId: 77, talking: true, whispering: true, inputMuted: false, outputMuted: false, away: false, awayMessage: '', prioritySpeaker: false, channelCommander: false, isSelf: false, isQuery: false, avatarHash: '', serverGroups: '', whisperChannel: 'Соседний канал' },
+        ],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    check('overlay: outside whisperer shows in the whisper section', !!doc.querySelector('#whisperList .row') && [...doc.querySelectorAll('#whisperList .nick')].some((n) => n.textContent === 'Сосед'), JSON.stringify([...doc.querySelectorAll('#whisperList .nick')].map((n) => n.textContent)));
+    check('overlay: whisper block opened by an outside whisperer', doc.getElementById('whisperBlock').hidden === false);
+    check('overlay: outside whisperer labelled with its channel', /Соседний канал/.test(doc.querySelector('#whisperList .row')?.title || ''), doc.querySelector('#whisperList .row')?.title);
+    check('overlay: outside whisperer is not in the channel roster', ![...doc.querySelectorAll('#userList .nick')].some((n) => n.textContent === 'Сосед'));
+    check('overlay: outside whisperer does not inflate the user count', doc.getElementById('userCount').textContent === '2', doc.getElementById('userCount').textContent);
+    // whisper section off → no outside rows at all
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showWhispers: false } } });
+    await new Promise((r) => setTimeout(r, 450));
+    check('overlay: whisper section toggle hides outside whisperers', doc.getElementById('whisperBlock').hidden === true && !doc.querySelector('#whisperList .row'));
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig, appearance: { ...fakeConfig.appearance, showWhispers: true, whisperDelay: 1 } } });
+    await new Promise((r) => setTimeout(r, 80));
+    // the connector drops it → the row lingers «whisperDelay», then fades out
+    FakeWS.last._emit({ type: 'state', state: { ...fakeState, whisperers: [] } });
+    await new Promise((r) => setTimeout(r, 80));
+    check('overlay: outside whisper row lingers after the state drops it', !!doc.querySelector('#whisperList .row'));
+    await new Promise((r) => setTimeout(r, 1400));
+    FakeWS.last._emit({ type: 'state', state: { ...fakeState, whisperers: [] } });
+    await new Promise((r) => setTimeout(r, 450)); // row-out animation
+    check('overlay: outside whisper row gone after the delay', !doc.querySelector('#whisperList .row') && doc.getElementById('whisperBlock').hidden === true, `rows=${doc.querySelectorAll('#whisperList .row').length}`);
+    FakeWS.last._emit({ type: 'config', config: { ...fakeConfig } });
+    await new Promise((r) => setTimeout(r, 60));
+
     // v1.1.1: chat must be visible even in clean mode (the overlay window)
     FakeWS.last._emit({
       type: 'state',
@@ -658,6 +692,23 @@ try {
   // a wider/taller panel must re-crop the desktop window, or it gets clipped
   check('size: a resized panel re-reports its rect to the shell', /new ResizeObserver\(scheduleBounds\)/.test(appjs) && /Settings\.onChange\(\(\) => \{\s*lastBoundsSig = ''/.test(appjs));
   check('size: appearance pushed from another window re-measures too', /config = msg\.config;[\s\S]{0,900}isCleanMode\)\s*\{\s*lastBoundsSig = ''/.test(appjs));
+}
+
+// v1.4.12: whispers must be visible — even from another channel
+{
+  const fs = await import('node:fs/promises');
+  const appjs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const ts6 = await fs.readFile(new URL('../server/connectors/ts6.ts', import.meta.url), 'utf8');
+  const ts3 = await fs.readFile(new URL('../server/connectors/ts3.ts', import.meta.url), 'utf8');
+  const bridge = await fs.readFile(new URL('../server/connectors/plugin-bridge.ts', import.meta.url), 'utf8');
+  const model = await fs.readFile(new URL('../server/model.ts', import.meta.url), 'utf8');
+  // TS6 really sends «isWhisper» — the old check only knew «whisper»/targetMode
+  check('whisper: ts6 parses the isWhisper flag', /jBool\(payload, 'isWhisper'\)/.test(ts6));
+  check('whisper: state carries outside whisperers', /whisperers: UserState\[\]/.test(model));
+  check('whisper: every source fills them', /whisperers: this\.buildWhisperers\(users\)/.test(ts6) && /whisperers: this\.buildWhisperers\(users\)/.test(ts3) && /whisperers: this\.buildWhisperers\(users\)/.test(bridge));
+  check('whisper: ts3 plugin forwards isReceivedWhisper', /\\"w\\":%d/.test(await fs.readFile(new URL('../plugin/ts3plugin_tsn.c', import.meta.url), 'utf8')) && /num\(msg\['w'\]\)/.test(bridge));
+  check('whisper: overlay renders them in the whisper section', /outsideWhisperers\(nowTs, whisperMs\)/.test(appjs) && /users\.concat\(outsiders\)/.test(appjs));
+  check('whisper: outside whisperers do not join the roster count', /count\.textContent = users\.length/.test(appjs));
 }
 
 // v1.4.6: one data source at a time + tray ↔ Связь sync

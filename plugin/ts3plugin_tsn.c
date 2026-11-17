@@ -12,6 +12,7 @@
  *   {"e":"snapshot","server":"...","own":N,"owncid":N,
  *    "clients":[{"id":N,"name":"..","cid":N,"groups":".."}]}   full state
  *   {"e":"join"|"leave"|"move"|"talk"|"client", ...}          deltas
+ *   talk: {"clid":N,"s":0|1,"w":0|1}   w = isReceivedWhisper (v1.4.12)
  *   {"e":"chat","kind":"channel|private|server","name":"..","text":".."}
  *   {"e":"poke","name":"..","text":".."}
  *   {"e":"disconnect"}
@@ -335,8 +336,9 @@ PLUGINS_EXPORTDLL void ts3plugin_onUpdateClientEvent(uint64 schid, anyID clid, a
 }
 
 PLUGINS_EXPORTDLL void ts3plugin_onTalkStatusChangeEvent(uint64 schid, int status, int isReceivedWhisper, anyID clid) {
-    (void)isReceivedWhisper;
-    tsn_sendf("{\"e\":\"talk\",\"clid\":%u,\"s\":%d,\"schid\":%llu}", (unsigned)clid, status, (unsigned long long)schid);
+    /* «w» = isReceivedWhisper: the overlay shows whisperers even when they
+     * speak from another channel (added in v1.4.12). */
+    tsn_sendf("{\"e\":\"talk\",\"clid\":%u,\"s\":%d,\"w\":%d,\"schid\":%llu}", (unsigned)clid, status, isReceivedWhisper, (unsigned long long)schid);
 }
 
 PLUGINS_EXPORTDLL int ts3plugin_onTextMessageEvent(uint64 schid, anyID targetMode, anyID toID, anyID fromID, const char* fromName, const char* fromUniqueIdentifier, const char* message, int ffIgnored) {
