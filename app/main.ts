@@ -65,6 +65,7 @@ const childWindows = new Map<string, BrowserWindow>();
 let tray: Tray | null = null;
 let screenHooksInstalled = false;
 let overlayVisible = true;
+let overlayMoveMode = false;
 
 app.setAppUserModelId('dev.tsnotifier.app');
 
@@ -198,6 +199,12 @@ if (tryRelaunchElevated()) {
 
 /* ---------------- single instance ---------------- */
 
+// v1.4.5 memory tuning: skip Chromium's native-occlusion bookkeeping (it
+// burns CPU on always-visible windows) and cap renderer JS heaps so a busy
+// feed can never balloon into hundreds of MB.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128');
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -207,8 +214,13 @@ if (!gotLock) {
 
 /* ---------------- windows ---------------- */
 
+// Random per-window token: the desktop overlay window is the ONLY page whose
+// geometry report may resize the window — an OBS browser source loads the
+// same ?clean=1 page and must never be cropped.
+let overlayToken = '';
+
 function overlayUrl(): string {
-  return `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1`;
+  return `http://127.0.0.1:${handle?.port() ?? 0}/?clean=1${overlayToken ? `&w=${overlayToken}` : ''}`;
 }
 
 function settingsUrl(): string {
@@ -220,15 +232,18 @@ function boardUrl(): string {
   return `http://127.0.0.1:${handle?.port() ?? 0}/board.html`;
 }
 
-function fitOverlay(): void {
-  if (!overlayWin) return;
+function targetDisplay(): Electron.Display {
   const want = handle?.store.get().desktop.display ?? 'primary';
-  let target = screen.getPrimaryDisplay();
   if (want && want !== 'primary') {
     const found = screen.getAllDisplays().find((d) => String(d.id) === want);
-    if (found) target = found;
+    if (found) return found;
   }
-  overlayWin.setBounds(target.workArea);
+  return screen.getPrimaryDisplay();
+}
+
+function fitOverlay(): void {
+  if (!overlayWin) return;
+  overlayWin.setBounds(targetDisplay().workArea);
 }
 
 function applyClickThrough(): void {
@@ -270,6 +285,13 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
           height: name === 'tsn-board' ? 560 : 820,
           autoHideMenuBar: true,
           title: 'TS3-TS6 Notifier',
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            spellcheck: false,
+            devTools: !IS_PACKAGED,
+          },
         });
         childWindows.set(name, child);
         child.on('closed', () => childWindows.delete(name));
@@ -285,13 +307,8 @@ function watchWebContents(win: BrowserWindow, tag: string): void {
 }
 
 function createOverlay(): void {
-  const want = handle?.store.get().desktop.display ?? 'primary';
-  let target = screen.getPrimaryDisplay();
-  if (want && want !== 'primary') {
-    const found = screen.getAllDisplays().find((d) => String(d.id) === want);
-    if (found) target = found;
-  }
-  const workArea = target.workArea;
+  const workArea = targetDisplay().workArea;
+  overlayToken = Math.random().toString(36).slice(2, 10);
   overlayWin = new BrowserWindow({
     x: workArea.x,
     y: workArea.y,
@@ -312,6 +329,8 @@ function createOverlay(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
       devTools: !IS_PACKAGED,
     },
   });
@@ -361,6 +380,8 @@ function openSettings(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
       devTools: !IS_PACKAGED,
     },
   });
@@ -393,6 +414,8 @@ function openBoard(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
       devTools: !IS_PACKAGED,
     },
   });
@@ -691,6 +714,43 @@ async function boot(): Promise<void> {
     setOverlayClickThrough: (ignore: boolean) => {
       if (overlayWin && !overlayWin.isDestroyed()) {
         overlayWin.setIgnoreMouseEvents(!!ignore, { forward: true });
+      }
+    },
+    // v1.4.5: the window hugs the panel instead of the whole screen — a
+    // fullscreen transparent layer is the single biggest memory item.
+    setOverlayBounds: (rect) => {
+      const wa = targetDisplay().workArea;
+      if (!rect.token || rect.token !== overlayToken) {
+        // Not our window (OBS source, stale tab) — no crop, keep full layout.
+        return { cropX: 0, cropY: 0, screenW: 0, screenH: 0 };
+      }
+      const w = Math.max(120, Math.min(Math.round(rect.w), wa.width));
+      const h = Math.max(80, Math.min(Math.round(rect.h), wa.height));
+      const x = Math.max(0, Math.min(Math.round(rect.x), wa.width - w));
+      const y = Math.max(0, Math.min(Math.round(rect.y), wa.height - h));
+      if (overlayWin && !overlayWin.isDestroyed() && !overlayMoveMode) {
+        try {
+          overlayWin.setBounds({ x: wa.x + x, y: wa.y + y, width: w, height: h });
+        } catch {
+          /* keep the returned crop anyway — the page must stay in sync */
+        }
+      }
+      return { cropX: x, cropY: y, screenW: wa.width, screenH: wa.height };
+    },
+    setOverlayMoveMode: (on: boolean) => {
+      overlayMoveMode = !!on;
+      if (on) fitOverlay(); // fullscreen again while the user drags
+    },
+    memReport: () => {
+      try {
+        return typeof app.getAppMetrics === 'function'
+          ? app.getAppMetrics().map(
+              (pr) =>
+                `${pr.name || pr.type} (pid ${pr.pid}): rss=${Math.round((pr.memory?.workingSetSize ?? 0) / 1024)}MB`,
+            )
+          : [];
+      } catch {
+        return [];
       }
     },
     checkUpdates: () => checkForUpdatesNow(),

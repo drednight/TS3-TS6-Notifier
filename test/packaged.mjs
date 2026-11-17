@@ -49,6 +49,11 @@ await mkdir(join(PKG, 'appdata'), { recursive: true });
   const bl = /data-corner="bl"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
   const br = /data-corner="br"[^#]*#panel\s*\{[^}]*bottom:\s*var\(--margin-y\)/.test(css);
   check('packaged: bottom corners anchor to the bottom edge', bl && br);
+  // v1.4.5 memory optimization: renderer heap cap + occlusion churn off,
+  // overlay window hugs the panel via the crop channel.
+  const appJs = await fs.readFile(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  check('packaged: renderer memory tuning active', /max-old-space-size/.test(mainSrc) && /CalculateNativeWinOcclusion/.test(mainSrc));
+  check('packaged: overlay window crops to the panel', /--crop-x/.test(css) && /api\/overlay\/bounds/.test(appJs));
 }
 
 // Boot the bundled main against that layout (electron stubbed)
@@ -94,6 +99,9 @@ try {
     const pst = await fetch(`http://127.0.0.1:${port}/api/plugin/status`);
     const pstBody = await pst.json();
     check('packaged: /api/plugin/status works', pst.status === 200 && typeof pstBody.active === 'boolean' && typeof pstBody.dll === 'boolean', JSON.stringify(pstBody));
+    const diagRes = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const diagBody = await diagRes.text();
+    check('packaged: diagnostics has a memory section', /--- memory ---/.test(diagBody) && /main process: rss=/.test(diagBody));
     const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
     const pinsBody = await pins.json();
     check('packaged: /api/plugin/install copies the DLL', pins.status === 200 && pinsBody.ok === true && /ts3plugin_tsn_win64\.dll/.test(pinsBody.path || ''), JSON.stringify(pinsBody));

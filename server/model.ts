@@ -84,7 +84,7 @@ export interface ChatMessage {
 /* ---------------- diagnostics ring buffer ----------------
  * Raw TS3/TS6 traffic + app notes, exposed via GET /api/diagnostics so the
  * user can copy a report. Secrets are redacted on write. */
-const DIAG_LIMIT = 800;
+const DIAG_LIMIT = 400;
 export const DIAG: string[] = [];
 
 export function diag(scope: string, line: string): void {

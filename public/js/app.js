@@ -891,6 +891,82 @@
     }
   }
 
+  /* ---------------- overlay window crop (v1.4.5) ----------------
+   * The desktop shell shrinks the overlay window to the panel so a fullscreen
+   * transparent layer is never composited. The page reports the panel rect in
+   * screen-work-area coordinates; the shell answers with the crop applied. */
+  const isCleanMode = Settings.clean;
+  // Desktop window token (?w=...). OBS browser sources load the same page
+  // without it and must never be cropped.
+  const winToken = new URLSearchParams(location.search).get('w') || '';
+  let cropX = 0;
+  let cropY = 0;
+  let lastBoundsSig = '';
+  let boundsTimer = 0;
+
+  function applyCropVars() {
+    const root = document.documentElement.style;
+    root.setProperty('--crop-x', String(cropX));
+    root.setProperty('--crop-y', String(cropY));
+  }
+
+  function reportBounds() {
+    if (!isCleanMode || !winToken || moveMode || typeof fetch !== 'function') return;
+    const panel = $('panel');
+    if (!panel || !panel.offsetWidth) return; // hidden → keep the last window
+    const r = panel.getBoundingClientRect();
+    const pad = 48; // room for the drop shadow + move-handle glow
+    const rect = {
+      x: Math.round(r.x + cropX - pad),
+      y: Math.round(r.y + cropY - pad),
+      w: Math.round(r.width + pad * 2),
+      h: Math.round(r.height + pad * 2),
+      token: winToken,
+    };
+    const sig = `${rect.x},${rect.y},${rect.w},${rect.h}`;
+    if (sig === lastBoundsSig) return;
+    lastBoundsSig = sig;
+    fetch('/api/overlay/bounds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rect),
+    })
+      .then((resp) => resp.json())
+      .then((b) => {
+        if (b && b.ok) {
+          cropX = b.cropX ?? 0;
+          cropY = b.cropY ?? 0;
+          if (b.screenW) document.documentElement.style.setProperty('--screen-w', `${b.screenW}px`);
+          if (b.screenH) document.documentElement.style.setProperty('--screen-h', `${b.screenH}px`);
+          applyCropVars();
+        }
+      })
+      .catch(() => {});
+  }
+
+  function scheduleBounds() {
+    if (boundsTimer) return;
+    boundsTimer = setTimeout(() => {
+      boundsTimer = 0;
+      reportBounds();
+    }, 250);
+  }
+
+  // Rows appear/expire on their own timers — watch the panel instead of
+  // chasing every render path.
+  if (isCleanMode) {
+    new MutationObserver(scheduleBounds).observe($('panel'), {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
+    window.addEventListener('resize', () => {
+      lastBoundsSig = '';
+      scheduleBounds();
+    });
+  }
+
   let moveMode = false;
   let moveModeTimer = 0;
   let pendingX = null;
@@ -909,11 +985,20 @@
     const hint = $('moveHint');
     if (hint) hint.hidden = true;
     postClickthrough(clickThroughWanted());
+    if (isCleanMode) {
+      lastBoundsSig = '';
+      scheduleBounds();
+    }
   }
 
   function enterMoveMode() {
     moveMode = true;
     document.body.classList.add('move-mode');
+    if (isCleanMode) {
+      cropX = 0;
+      cropY = 0;
+      applyCropVars();
+    }
     const handle = $('moveHandle');
     if (handle) handle.hidden = false;
     const hint = $('moveHint');

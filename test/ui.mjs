@@ -576,4 +576,39 @@ try {
 
 const failed = results.filter((r) => !r).length;
 console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
+
+// v1.4.5: overlay window crop endpoint (memory optimization)
+{
+  const crops = [];
+  const hb = await startServer({
+    port: 0,
+    host: '127.0.0.1',
+    dataDir: join(tmpdir(), 'tsn-ui-bounds'),
+    publicDir: join(ROOT, 'public'),
+    setOverlayBounds: (r) => {
+      crops.push(r);
+      return { cropX: r.x, cropY: r.y, screenW: 1920, screenH: 1080 };
+    },
+  });
+  const res = await fetch(`http://127.0.0.1:${hb.port()}/api/overlay/bounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x: 10, y: 20, w: 300, h: 400 }),
+  });
+  const body = await res.json();
+  check(
+    'bounds: /api/overlay/bounds forwards the rect and returns the crop',
+    res.status === 200 && body.ok === true && body.cropX === 10 && body.cropY === 20 && body.screenW === 1920 && body.screenH === 1080 && crops.length === 1 && crops[0].w === 300,
+    JSON.stringify(body),
+  );
+  const bad = await fetch(`http://127.0.0.1:${hb.port()}/api/overlay/bounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x: 'x', w: 1 }),
+  });
+  const badBody = await bad.json();
+  check('bounds: garbage rect is rejected', badBody.ok === false, JSON.stringify(badBody));
+  hb.close();
+}
+
 process.exit(failed ? 1 : 0);

@@ -89,6 +89,8 @@ const electron = {
     getAppPath: () => APP_PATH,
     getPath: (name) => path.join(os.tmpdir(), 'tsn-stub', name),
     setAppUserModelId: noop,
+    commandLine: { appendSwitch: noop },
+    getAppMetrics: () => [],
     requestSingleInstanceLock: () => true,
     setLoginItemSettings: (o) => console.log('[stub] login item =', JSON.stringify(o)),
     getLoginItemSettings: () => ({ openAtLogin: false }),

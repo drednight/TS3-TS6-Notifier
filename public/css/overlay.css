@@ -144,9 +144,17 @@ html, body {
 
 /* ============================ stage / panel ============================ */
 
+/* v1.4.5: the desktop shell shrinks the overlay window to the panel rect.
+ * #stage keeps laying out in SCREEN coordinates (screen-w/h) and is shifted
+ * by the applied crop so the panel never moves visually. The transform also
+ * makes #stage the containing block for any fixed-position children. */
 #stage {
   position: fixed;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: var(--screen-w, 100vw);
+  height: var(--screen-h, 100vh);
+  transform: translate(calc(-1px * var(--crop-x, 0)), calc(-1px * var(--crop-y, 0)));
   pointer-events: none;
 }
 

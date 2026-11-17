@@ -22,6 +22,21 @@ export interface AppOptions {
   listDisplays?: () => Array<{ id: string; label: string; primary: boolean; width?: number; height?: number }>;
   /** Desktop only: temporarily take/release mouse input on the overlay window. */
   setOverlayClickThrough?: (ignore: boolean) => void;
+  /**
+   * Desktop only: shrink the overlay window to the panel rect (v1.4.5 memory
+   * optimization). Rect is relative to the target display's work area; the
+   * return value tells the page which crop the shell applied.
+   */
+  setOverlayBounds?: (rect: { x: number; y: number; w: number; h: number; token?: string }) => {
+    cropX: number;
+    cropY: number;
+    screenW: number;
+    screenH: number;
+  };
+  /** Desktop only: while move mode is armed the overlay window goes fullscreen. */
+  setOverlayMoveMode?: (on: boolean) => void;
+  /** Desktop only: per-process memory rows for the diagnostics report. */
+  memReport?: () => string[];
   /** Try this port first (stable URL for OBS browser sources); falls back to a random one. */
   preferredPort?: number;
   /** Desktop only: trigger an update check in the shell. */
@@ -108,6 +123,20 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
 
   let moveModeActive = false;
   let panelSize: { w: number; h: number } | null = null;
+
+  /** «--- memory ---» diagnostics section (v1.4.5): who eats the RAM. */
+  function memoryRows(): string[] {
+    const m = process.memoryUsage();
+    const rows = [
+      `main process: rss=${(m.rss / 1048576).toFixed(1)}MB heapUsed=${(m.heapUsed / 1048576).toFixed(1)}MB`,
+    ];
+    try {
+      for (const line of opts.memReport?.() ?? []) rows.push(line);
+    } catch {
+      /* metrics unavailable — the main row is still useful */
+    }
+    return rows;
+  }
 
   function broadcast(message: unknown): void {
     const raw = JSON.stringify(message);
@@ -236,6 +265,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move' && method === 'POST') {
       moveModeActive = !moveModeActive;
       broadcast({ type: 'move-mode', active: moveModeActive });
+      opts.setOverlayMoveMode?.(moveModeActive);
       json(res, 200, { ok: true, moveMode: moveModeActive });
       return;
     }
@@ -253,6 +283,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move-confirm' && method === 'POST') {
       moveModeActive = false;
       broadcast({ type: 'move-confirm' });
+      opts.setOverlayMoveMode?.(false);
       json(res, 200, { ok: true });
       return;
     }
@@ -260,6 +291,7 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     if (url === '/api/overlay/move-cancel' && method === 'POST') {
       moveModeActive = false;
       broadcast({ type: 'move-cancel' });
+      opts.setOverlayMoveMode?.(false);
       json(res, 200, { ok: true });
       return;
     }
@@ -273,6 +305,35 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
           panelSize = { w: Math.round(Number(b?.w)), h: Math.round(Number(b?.h)) };
         }
         json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    // v1.4.5 memory optimization: the clean overlay reports its content rect
+    // (screen-work-area relative) so the desktop shell can shrink the window
+    // to the panel instead of compositing a fullscreen transparent layer.
+    if (url === '/api/overlay/bounds' && method === 'POST') {
+      void readBody(req).then((body) => {
+        const b = body as { x?: number; y?: number; w?: number; h?: number; token?: string } | null;
+        const nums = [b?.x, b?.y, b?.w, b?.h].map(Number);
+        if (nums.every((n) => Number.isFinite(n))) {
+          const applied = opts.setOverlayBounds?.({
+            x: nums[0] as number,
+            y: nums[1] as number,
+            w: nums[2] as number,
+            h: nums[3] as number,
+            token: typeof b?.token === 'string' ? b.token : '',
+          });
+          json(res, 200, {
+            ok: true,
+            cropX: applied?.cropX ?? 0,
+            cropY: applied?.cropY ?? 0,
+            screenW: applied?.screenW ?? 0,
+            screenH: applied?.screenH ?? 0,
+          });
+          return;
+        }
+        json(res, 200, { ok: false });
       });
       return;
     }
@@ -374,6 +435,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
         '--- TS6 (Remote Apps) ---',
         ...(ts6Lines.length ? ts6Lines : ['(no data — активный источник не TS6)']),
         ...(otherLines.length ? ['', '--- other ---', ...otherLines] : []),
+        '',
+        '--- memory ---',
+        ...memoryRows(),
       ].join('\n');
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(report);
