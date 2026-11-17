@@ -165,6 +165,12 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
     private apiKey: string,
     bridgePort = 48912,
     idleAfterMs = 45000,
+    /**
+     * v1.4.6 «one at a time»: the ClientQuery fallback starts only after this
+     * delay — if the plugin connects first, the query poller never runs at
+     * all, so the two data paths are never both active.
+     */
+    private fallbackDelayMs = 4000,
   ) {
     super();
     this.bridge = new PluginBridge(bridgePort, idleAfterMs);
@@ -183,6 +189,10 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
         this.usingPlugin = true;
         this.query?.stop();
         this.query = null;
+        if (this.fallbackTimer) {
+          clearTimeout(this.fallbackTimer);
+          this.fallbackTimer = null;
+        }
         this.holdUntil = 0;
         this.pluginState = new PluginState(() => this.emit('state', this.pluginState!.buildState()));
         console.log('[ts3] plugin bridge active — ClientQuery connector paused');
@@ -202,12 +212,20 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
       }
       this.ensureQuery();
     });
-    // Fallback runs from the start so the overlay works without the plugin.
-    this.ensureQuery();
+    // Lazy fallback: give the plugin a few seconds to connect first so the
+    // ClientQuery poller and the plugin never work simultaneously.
+    this.fallbackTimer = setTimeout(() => {
+      this.fallbackTimer = null;
+      this.ensureQuery();
+    }, this.fallbackDelayMs);
   }
 
   stop(): void {
     this.stopped = true;
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
     this.bridge.removeAllListeners('line');
     this.bridge.removeAllListeners('active');
     this.bridge.removeAllListeners('idle');
@@ -223,9 +241,15 @@ export class Ts3WithPluginConnector extends EventEmitter implements Connector {
     return this.bridge;
   }
 
+  /** Testing hook: the ClientQuery fallback (null until it starts). */
+  getQuery(): Ts3Connector | null {
+    return this.query;
+  }
+
   private pluginState: PluginState | null = null;
   private holdUntil = 0;
   private queryLive = false;
+  private fallbackTimer: NodeJS.Timeout | null = null;
 
   private ensureQuery(): void {
     if (this.stopped || this.query) return;

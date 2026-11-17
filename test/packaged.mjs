@@ -102,6 +102,7 @@ try {
     const diagRes = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const diagBody = await diagRes.text();
     check('packaged: diagnostics has a memory section', /--- memory ---/.test(diagBody) && /main process: rss=/.test(diagBody));
+check('packaged: only the active source is captured', /раздел выключен — активный источник/.test(diagBody));
     const pins = await fetch(`http://127.0.0.1:${port}/api/plugin/install`, { method: 'POST' });
     const pinsBody = await pins.json();
     check('packaged: /api/plugin/install copies the DLL', pins.status === 200 && pinsBody.ok === true && /ts3plugin_tsn_win64\.dll/.test(pinsBody.path || ''), JSON.stringify(pinsBody));

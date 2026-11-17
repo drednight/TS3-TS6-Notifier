@@ -577,6 +577,17 @@ try {
 const failed = results.filter((r) => !r).length;
 console.log(`\n${results.length - failed}/${results.length} UI checks passed`);
 
+// v1.4.6: one data source at a time + tray ↔ Связь sync
+{
+  const fs = await import('node:fs/promises');
+  const mainSrc = await fs.readFile(new URL('../app/main.ts', import.meta.url), 'utf8');
+  const appSrc = await fs.readFile(new URL('../server/app.ts', import.meta.url), 'utf8');
+  check('single-source: no background TS3 bridge outside the TS3 path', !/diagBridge/.test(appSrc));
+  check('single-source: inactive diagnostics section is stubbed', /раздел выключен — активный источник/.test(appSrc));
+  check('tray sync: menu rebuilds when the source changes', /traySig = JSON\.stringify\(\[\s*cfg\.source/.test(mainSrc));
+  check('tray sync: tray pushes config to open windows', /function setSource[\s\S]{0,400}broadcast\(\{ type: 'config'/.test(mainSrc));
+}
+
 // v1.4.5: overlay window crop endpoint (memory optimization)
 {
   const crops = [];

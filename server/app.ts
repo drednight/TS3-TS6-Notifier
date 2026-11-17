@@ -8,7 +8,7 @@ import { DIAG, OverlayState, diag, emptyState } from './model.js';
 import type { Connector } from './connectors/wire.js';
 import { MockConnector } from './connectors/mock.js';
 import { Ts3Connector } from './connectors/ts3.js';
-import { PluginBridge, Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
+import { Ts3WithPluginConnector } from './connectors/plugin-bridge.js';
 import { Ts6Connector } from './connectors/ts6.js';
 import { findTs3Icon } from './icons.js';
 
@@ -80,13 +80,9 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
   let connector: Connector | null = null;
   let latestState: OverlayState = emptyState(store.get().source, 'connecting');
 
-  let diagBridge: PluginBridge | null = null;
-
   function startConnector(): void {
     connector?.stop();
     connector = null;
-    diagBridge?.stop();
-    diagBridge = null;
     const cfg = store.get();
 
     const next: Connector =
@@ -110,10 +106,6 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
     next.start();
     // Both TeamSpeak clients may run at once — capture TS3 plugin events for
     // the diagnostics report even when TS6 is the active source.
-    if (cfg.source !== 'ts3') {
-      diagBridge = new PluginBridge(48912);
-      diagBridge.start();
-    }
     log(`[server] data source: ${cfg.source}`);
   }
 
@@ -422,6 +414,8 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
         `last status: ${latestState.status} — ${latestState.detail || ''}`,
         `users on channel: ${latestState.users.length}, chat/event rows kept: ${latestState.chat.length}`,
         '',
+        // TODO: время пишется в UTC (toISOString.slice) — пользователю нужно
+        // локальное; поправить следующим заходом (v1.4.6, заметка).
         '--- recent chat & events ---',
         ...latestState.chat.slice(-30).map(
           (m) => `${new Date(m.at).toISOString().slice(11, 19)} ${m.kind}${m.event ? '/' + m.event : ''} ${m.nickname ? m.nickname + ': ' : ''}${m.text}${m.detail ? ' [' + m.detail + ']' : ''}`,
@@ -430,10 +424,12 @@ export function startServer(opts: AppOptions): Promise<AppHandle> {
         '--- TS3 (ClientQuery / plugin) ---',
         ...(ts3Lines.length
           ? ts3Lines
-          : ['(no data — активный источник не TS3; установите плагин TS3, чтобы видеть TS3-события и при источнике TS6)']),
+          : [cfg.source === 'ts3' ? '(нет данных)' : `(раздел выключен — активный источник ${cfg.source.toUpperCase()})`]),
         '',
         '--- TS6 (Remote Apps) ---',
-        ...(ts6Lines.length ? ts6Lines : ['(no data — активный источник не TS6)']),
+        ...(ts6Lines.length
+          ? ts6Lines
+          : [cfg.source === 'ts6' ? '(нет данных)' : `(раздел выключен — активный источник ${cfg.source.toUpperCase()})`]),
         ...(otherLines.length ? ['', '--- other ---', ...otherLines] : []),
         '',
         '--- memory ---',

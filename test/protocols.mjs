@@ -374,17 +374,20 @@ await new Promise((r) => setTimeout(r, 250));
 }
 
 // The plugin must take over from the ClientQuery fallback while it is alive.
-const autoConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0);
+// Short idle window + quick fallback keep the swap inside the test budget.
+const autoConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0, 300, 100);
 const autoStates = [];
 autoConn.on('state', (st) => autoStates.push(st));
 autoConn.start();
 await new Promise((r) => setTimeout(r, 150));
+check('plugin: lazy fallback — query poller armed before the plugin', autoConn.getQuery() !== null);
 const psock2 = net.createConnection({ host: '127.0.0.1', port: autoConn.getBridge().getPort() });
 await new Promise((r) => psock2.on('connect', r));
 psock2.write(JSON.stringify({ e: 'hello', v: '1.0.0' }) + '\n');
 psock2.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid: 5, clients: [{ id: 1, name: 'Я', cid: 5, groups: '' }] }) + '\n');
 await new Promise((r) => setTimeout(r, 350));
 check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.detail === 'TS3 plugin' && st.users.length === 1), JSON.stringify(autoStates.map((st) => st.detail)));
+check('plugin: query poller stops while the plugin is alive', autoConn.getQuery() === null);
 
 // Swap-hold: when the plugin goes away the last plugin picture must survive
 // until ClientQuery boots — no blank overlay during the swap.
@@ -394,6 +397,30 @@ check('plugin: plugin takes over from ClientQuery', autoStates.some((st) => st.d
   await new Promise((r) => setTimeout(r, 900));
   const after = autoStates.slice(-6);
   check('plugin: state held through the fallback swap', held > 0 && after.some((st) => st.users.length === 1), JSON.stringify(after.map((st) => `${st.status}:${st.users.length}`)));
+  await new Promise((r) => setTimeout(r, 400));
+  check('plugin: fallback query re-armed after the plugin died', autoConn.getQuery() !== null);
+}
+
+// v1.4.6 «one at a time»: when the plugin connects first, the ClientQuery
+// poller must NEVER start.
+{
+  const lazyConn = new Ts3WithPluginConnector('127.0.0.1', 1, '', 0, 5000, 3000);
+  const lazyStates = [];
+  lazyConn.on('state', (st) => lazyStates.push(st));
+  lazyConn.start();
+  await new Promise((r) => setTimeout(r, 150));
+  const lsock = net.createConnection({ host: '127.0.0.1', port: lazyConn.getBridge().getPort() });
+  await new Promise((r) => lsock.on('connect', r));
+  lsock.write(JSON.stringify({ e: 'hello', v: '1.0.0' }) + '\n');
+  lsock.write(JSON.stringify({ e: 'snapshot', server: 'Тест', own: 1, owncid: 5, clients: [{ id: 1, name: 'Я', cid: 5, groups: '' }] }) + '\n');
+  await new Promise((r) => setTimeout(r, 700));
+  check(
+    'plugin: query poller never starts when the plugin connects first',
+    lazyConn.getQuery() === null && lazyStates.some((st) => st.detail === 'TS3 plugin'),
+    JSON.stringify(lazyStates.map((st) => st.detail)),
+  );
+  lsock.destroy();
+  lazyConn.stop();
 }
 
 // v1.4.4: an own move must switch the channel window (blank-overlay bug).

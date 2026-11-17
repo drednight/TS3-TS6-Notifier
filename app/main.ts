@@ -473,6 +473,8 @@ function setOverlayVisible(visible: boolean): void {
 function setSource(source: 'mock' | 'ts3' | 'ts6'): void {
   handle?.store.update({ source });
   handle?.restartConnector();
+  // Push the change to open windows so Связь switches cards with the tray.
+  handle?.broadcast({ type: 'config', config: handle?.store.get() });
   buildTrayMenu();
   log(`[app] data source → ${source}`);
 }
@@ -784,6 +786,7 @@ async function boot(): Promise<void> {
       fitOverlay();
     }
     const traySig = JSON.stringify([
+      cfg.source,
       cfg.appearance.language,
       cfg.desktop.autostart,
       cfg.desktop.clickThrough,

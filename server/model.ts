@@ -92,6 +92,8 @@ export function diag(scope: string, line: string): void {
     /(apikey|api_key|token|password|passwd)(\s*[=:]\s*)\S+/gi,
     '$1$2***',
   );
+  // TODO: метки времени в UTC — перевести на локальное время пользователя
+  // (пользователь заметил расхождение; поправить следующим заходом).
   DIAG.push(`${new Date().toISOString().slice(11, 19)} [${scope}] ${redacted}`);
   if (DIAG.length > DIAG_LIMIT) DIAG.splice(0, DIAG.length - DIAG_LIMIT);
 }
