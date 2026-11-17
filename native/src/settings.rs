@@ -665,12 +665,12 @@ pub fn spawn_once(app: Arc<App>, port: u16) {
         return;
     }
     let _ = port;
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, tsn_win32)))]
     let _ = &app;
     std::thread::Builder::new()
         .name("settings".into())
         .spawn(move || {
-            #[cfg(windows)]
+            #[cfg(any(windows, tsn_win32))]
             crate::overlay::win32::run_settings(app.clone());
             SETTINGS_OPEN.store(false, Ordering::SeqCst);
         })

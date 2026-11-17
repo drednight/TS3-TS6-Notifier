@@ -22,11 +22,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Building AND testing on windows links the real win32 import libs —
       # full compile validation of the overlay/settings/tray backends.
-      - run: cargo build --release --locked
+      # Errors are mirrored into ::error:: annotations so they survive log outages.
+      - name: cargo build --release
+        shell: bash
         working-directory: native
-      - run: cargo test --release --locked
+        run: |
+          set -o pipefail
+          cargo build --release --locked 2>&1 | tee build.log || {
+            tail -40 build.log | sed 's/^/::error::/'
+            exit 1
+          }
+      - name: cargo test --release
+        shell: bash
         working-directory: native
-      - run: pwsh native/tools/package-win.ps1
+        run: |
+          set -o pipefail
+          cargo test --release --locked 2>&1 | tee test.log || {
+            tail -40 test.log | sed 's/^/::error::/'
+            exit 1
+          }
+      - name: package
+        shell: bash
+        run: |
+          set -o pipefail
+          pwsh native/tools/package-win.ps1 2>&1 | tee pkg.log || {
+            tail -20 pkg.log | sed 's/^/::error::/'
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: tsn-native-win64

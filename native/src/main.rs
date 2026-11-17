@@ -164,7 +164,7 @@ fn main() {
 
     // Run-as-administrator (desktop.elevate, default ON): relaunch elevated.
     // A declined UAC prompt keeps running un-elevated.
-    #[cfg(windows)]
+    #[cfg(any(windows, tsn_win32))]
     {
         let cfg = store.lock().unwrap().get().clone();
         overlay::win32::maybe_elevate(&cfg);

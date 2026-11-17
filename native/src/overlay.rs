@@ -381,9 +381,9 @@ impl Overlay {
                         if rect.contains(x, y) {
                             match hit {
                                 Hit::Gear => {
-                                    #[cfg(windows)]
+                                    #[cfg(any(windows, tsn_win32))]
                                     crate::settings::spawn_once(self.app.clone(), self.port);
-                                    #[cfg(not(windows))]
+                                    #[cfg(not(any(windows, tsn_win32)))]
                                     host.open_url(&format!("http://127.0.0.1:{}/", self.port));
                                 }
                                 Hit::Save => self.confirm_move(),
@@ -470,14 +470,14 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("overlay".into())
         .spawn(move || {
-            #[cfg(windows)]
+            #[cfg(any(windows, tsn_win32))]
             win32::spawn_tray(app.clone(), port);
             let mut ov = Overlay::new(app, port);
-            #[cfg(windows)]
+            #[cfg(any(windows, tsn_win32))]
             {
                 win32::run(&mut ov);
             }
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, tsn_win32)))]
             {
                 let mut host = HeadlessHost::new();
                 loop {

@@ -10,3 +10,6 @@ description = "TS3-TS6 Notifier — native core (Rust): TeamSpeak connectors, st
 [profile.release]
 opt-level = 2
 strip = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tsn_win32)'] }
