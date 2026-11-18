@@ -865,6 +865,8 @@ pub(crate) mod win32 {
         fn ScreenToClient(w: *mut c_void, p: *mut POINT) -> i32;
         fn SetForegroundWindow(w: *mut c_void) -> i32;
         fn GetWindowRect(w: *mut c_void, r: *mut RECT) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
+        fn GetWindowThreadProcessId(w: *mut c_void, pid: *mut u32) -> u32;
         fn SendMessageW(w: *mut c_void, msg: u32, wp: usize, lp: isize) -> isize;
         fn SetWindowTextW(w: *mut c_void, text: *const u16) -> i32;
         fn GetModuleHandleW(name: *const u16) -> *mut c_void;
@@ -930,6 +932,7 @@ pub(crate) mod win32 {
         fn CreateMutexW(attr: *mut c_void, owner: i32, name: *const u16) -> *mut c_void;
         fn GetLastError() -> u32;
         fn CloseHandle(h: *mut c_void) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
         fn GetModuleFileNameW(h: *mut c_void, buf: *mut u16, size: u32) -> u32;
     }
 
@@ -957,6 +960,10 @@ pub(crate) mod win32 {
 
     const TOKEN_QUERY: u32 = 0x0008;
     const TOKEN_ELEVATION_CLASS: u32 = 20;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    const NIF_INFO: u32 = 0x10;
+    const NIIF_INFO: u32 = 0x1;
 
     /// True when the process already runs with administrator rights.
     pub fn is_elevated() -> bool {
@@ -1037,6 +1044,61 @@ pub(crate) mod win32 {
         }
         if relaunch_elevated() {
             std::process::exit(0);
+        }
+    }
+
+    /// True when the window covers (almost) its entire monitor — fullscreen and
+    /// borderless-fullscreen («без рамки») games included.
+    pub fn window_is_fullscreen(hwnd: *mut c_void) -> bool {
+        unsafe {
+            if hwnd.is_null() {
+                return false;
+            }
+            let mut wr: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut wr) == 0 {
+                return false;
+            }
+            let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi: MONITORINFO = std::mem::zeroed();
+            mi.cb_size = std::mem::size_of::<MONITORINFO>() as u32;
+            if mon.is_null() || GetMonitorInfoW(mon, &mut mi) == 0 {
+                return false;
+            }
+            (wr.right - wr.left) >= (mi.rc_monitor.right - mi.rc_monitor.left) - 8
+                && (wr.bottom - wr.top) >= (mi.rc_monitor.bottom - mi.rc_monitor.top) - 8
+        }
+    }
+
+    /// True when the process owning `hwnd` runs with administrator rights.
+    pub fn process_is_elevated(hwnd: *mut c_void) -> bool {
+        unsafe {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == 0 {
+                return false;
+            }
+            let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if proc.is_null() {
+                // cannot query (protected process) — assume elevated
+                return true;
+            }
+            let mut token: *mut c_void = null_mut();
+            let ok = OpenProcessToken(proc, TOKEN_QUERY, &mut token);
+            CloseHandle(proc);
+            if ok == 0 {
+                return true;
+            }
+            let mut elev: u32 = 0;
+            let mut out: u32 = 0;
+            let q = GetTokenInformation(
+                token,
+                TOKEN_ELEVATION_CLASS,
+                &mut elev as *mut u32 as *mut c_void,
+                4,
+                &mut out,
+            );
+            CloseHandle(token);
+            q != 0 && elev != 0
         }
     }
 
@@ -1150,6 +1212,10 @@ pub(crate) mod win32 {
         hwnd: *mut c_void,
         last_rect: (f64, f64, f64, f64),
         topmost_at: Option<std::time::Instant>,
+        /// last foreground window («поверх всех окон»: re-assert on focus change)
+        last_fg: *mut c_void,
+        /// the foreground window covers its monitor — a game owns the screen
+        fg_full: bool,
         mem_dc: *mut c_void,
         dib: *mut c_void,
         dib_bits: *mut u8,
@@ -1255,6 +1321,8 @@ pub(crate) mod win32 {
                 hwnd,
                 last_rect: (0.0, 0.0, 0.0, 0.0),
                 topmost_at: None,
+                last_fg: null_mut(),
+                fg_full: false,
                 mem_dc: std::ptr::null_mut(),
                 dib: std::ptr::null_mut(),
                 dib_bits: std::ptr::null_mut(),
@@ -1361,12 +1429,34 @@ pub(crate) mod win32 {
                     ULW_ALPHA,
                 );
                 ReleaseDC(self.hwnd, dc);
-                // Re-assert TOPMOST at most ~2×/s (not every frame): a per-frame
-                // SetWindowPos on a fullscreen layered window stalls the compositor.
+                // «Повесить оверлей над всеми окнами» — games re-assert their
+                // own z-order when they take focus: watch the foreground window
+                // and push TOPMOST the moment it changes; a fullscreen/borderless
+                // («без рамки») game gets a faster re-assert loop. Not every
+                // frame: a per-frame SetWindowPos on a fullscreen layered window
+                // stalls the compositor.
+                if !self.settings_host {
+                    let fg = GetForegroundWindow();
+                    if fg != self.last_fg {
+                        self.last_fg = fg;
+                        let ours = fg.is_null() || fg == self.hwnd || settings_hwnd_is(fg);
+                        self.fg_full = !ours && window_is_fullscreen(fg);
+                        if !ours {
+                            // something else just took focus — re-assert at once
+                            self.topmost_at = None;
+                        }
+                        // an ADMIN-run fullscreen window: only an elevated overlay
+                        // can stay above it (UIPI) — tell the user once
+                        if self.fg_full && !is_elevated() && process_is_elevated(fg) {
+                            maybe_admin_hint();
+                        }
+                    }
+                }
+                let interval: u128 = if self.fg_full { 220 } else { 500 };
                 let now = std::time::Instant::now();
                 let due = self
                     .topmost_at
-                    .map_or(true, |t| now.duration_since(t).as_millis() >= 500);
+                    .map_or(true, |t| now.duration_since(t).as_millis() >= interval);
                 if due || resized {
                     self.topmost_at = Some(now);
                     if self.settings_host {
@@ -1695,6 +1785,54 @@ pub(crate) mod win32 {
         }
     }
 
+    static TRAY_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// One-shot tray balloon («Если игра запущена от администратора…»).
+    pub fn tray_balloon(title: &str, text: &str) {
+        unsafe {
+            let hwnd = TRAY_HWND.load(std::sync::atomic::Ordering::Relaxed) as *mut c_void;
+            if hwnd.is_null() {
+                return;
+            }
+            let mut nid = tray_nid(hwnd, null_mut(), "");
+            nid.u_flags = NIF_INFO;
+            let t: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let m: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let n = t.len().min(63);
+            nid.sz_info_title[..n].copy_from_slice(&t[..n]);
+            let n = m.len().min(255);
+            nid.sz_info[..n].copy_from_slice(&m[..n]);
+            nid.dw_info_flags = NIIF_INFO;
+            Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+        }
+    }
+
+    /// One-shot hint: a fullscreen ADMIN window can only be covered by an
+    /// elevated overlay («Запуск от имени администратора»).
+    fn maybe_admin_hint() {
+        static ADMIN_HINTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if ADMIN_HINTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let ru = TRAY
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|app| app.store.lock().unwrap().get().appearance.language != "en")
+            .unwrap_or(true);
+        if ru {
+            tray_balloon(
+                "TS3-TS6 Notifier",
+                "Игра запущена от администратора — включите «Запуск от имени администратора» в настройках, чтобы оверлей был поверх неё",
+            );
+        } else {
+            tray_balloon(
+                "TS3-TS6 Notifier",
+                "The game runs as administrator — enable \"Run as administrator\" in settings to keep the overlay above it",
+            );
+        }
+    }
+
     fn tray_nid(hwnd: *mut c_void, icon: *mut c_void, tip: &str) -> NOTIFYICONDATAW {
         let t: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
         let mut nid = NOTIFYICONDATAW {
@@ -1876,6 +2014,7 @@ pub(crate) mod win32 {
             let hwnd_addr = hwnd as usize;
             std::thread::spawn(move || unsafe {
                 let hwnd = hwnd_addr as *mut c_void;
+                TRAY_HWND.store(hwnd_addr, std::sync::atomic::Ordering::Relaxed);
                 let icon = app_icon(32, 32);
                 let (tip, _) = status_text(&app);
                 let mut nid = tray_nid(hwnd, icon, &tip);
