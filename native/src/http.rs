@@ -457,6 +457,8 @@ fn ws_client_loop(app: Arc<App>, stream: TcpStream, rx: Receiver<String>) {
         return;
     }
     stream.set_read_timeout(Some(Duration::from_millis(200))).ok();
+    // a stalled client must not pin this writer thread forever
+    stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
     let mut read_stream = stream.try_clone().expect("clone ws stream");
     loop {
         // outbound

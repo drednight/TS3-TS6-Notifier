@@ -292,10 +292,16 @@ pub struct Overlay {
     last_hits: Vec<(crate::layout::Rect, crate::layout::Hit)>,
     last_geom: (f64, f64, f64, f64, f64), // px, py, pad, pw, ph
     last_origin: (f64, f64),
+    /// Lock-free fallbacks: tick() must NEVER block (the message pump has to
+    /// keep running or the system-wide mouse hook starves).
+    last_cfg: crate::config::AppConfig,
+    last_state: OverlayState,
 }
 
 impl Overlay {
     pub fn new(app: Arc<App>, port: u16) -> Overlay {
+        let cfg0 = app.store.lock().unwrap().get().clone();
+        let st0 = app.latest.read().unwrap().clone();
         Overlay {
             app,
             port,
@@ -315,18 +321,31 @@ impl Overlay {
             last_hits: Vec::new(),
             last_geom: (0.0, 0.0, 0.0, PANEL_W as f64, 200.0),
             last_origin: (0.0, 0.0),
+            last_cfg: cfg0,
+            last_state: st0,
         }
     }
 
-    fn snapshot(&self) -> OverlayState {
-        self.app.latest.read().unwrap().clone()
-    }
+
 
     /// One iteration: build the frame, present, process input.
     pub fn tick(&mut self, host: &mut dyn Host) {
-        let state = self.snapshot();
+        // Never block: a stalled lock holder must not stop the pump.
+        let state = match self.app.latest.try_read() {
+            Ok(g) => {
+                self.last_state = g.clone();
+                self.last_state.clone()
+            }
+            Err(_) => self.last_state.clone(),
+        };
         let now_ms = crate::model::now_ms();
-        let cfg = self.app.store.lock().unwrap().get().clone();
+        let cfg = match self.app.store.try_lock() {
+            Ok(g) => {
+                self.last_cfg = g.get().clone();
+                self.last_cfg.clone()
+            }
+            Err(_) => self.last_cfg.clone(),
+        };
         let a = cfg.appearance.clone();
         let pal = Palette::from_appearance(&a);
         let lang = match a.language.as_str() {
@@ -955,7 +974,6 @@ pub(crate) mod win32 {
 
     struct WinHost {
         hwnd: *mut c_void,
-        hook: *mut c_void,
         last_rect: (f64, f64, f64, f64),
         topmost_at: Option<std::time::Instant>,
         mem_dc: *mut c_void,
@@ -1011,15 +1029,8 @@ pub(crate) mod win32 {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
-            let hook = SetWindowsHookExW(
-                WH_MOUSE_LL,
-                mouse_ll_proc as usize as *mut c_void,
-                std::ptr::null_mut(),
-                0,
-            );
             WinHost {
                 hwnd,
-                hook,
                 last_rect: (0.0, 0.0, 0.0, 0.0),
                 topmost_at: None,
                 mem_dc: std::ptr::null_mut(),
@@ -1070,6 +1081,20 @@ pub(crate) mod win32 {
                 SelectObject(self.mem_dc, self.dib);
                 self.w = w;
                 self.h = h;
+            }
+        }
+    }
+
+    impl Drop for WinHost {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.dib.is_null() {
+                    DeleteObject(self.dib);
+                    DeleteDC(self.mem_dc);
+                }
+                if !self.hwnd.is_null() {
+                    DestroyWindow(self.hwnd);
+                }
             }
         }
     }
@@ -1544,11 +1569,37 @@ pub(crate) mod win32 {
     }
 
     pub fn run(ov: &mut Overlay) {
+        start_input_hook();
         let mut host = unsafe { WinHost::new() };
         loop {
             ov.tick(&mut host);
             std::thread::sleep(Duration::from_millis(33));
         }
+    }
+
+    /// The system-wide mouse hook lives on its OWN message-pump thread: it must
+    /// never be hostage to render/present/locks — while a hook thread is busy,
+    /// ALL mouse input on the whole system stalls.
+    pub fn start_input_hook() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+        std::thread::Builder::new()
+            .name("input-hook".into())
+            .spawn(|| unsafe {
+                SetWindowsHookExW(
+                    WH_MOUSE_LL,
+                    mouse_ll_proc as usize as *mut c_void,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            })
+            .ok();
+        });
     }
 }
 
