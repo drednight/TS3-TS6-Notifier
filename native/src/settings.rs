@@ -61,9 +61,14 @@ pub enum Ctrl {
     Preset(u8),
     Swatch(u8),
     Style(u8),
+    Corner(u8),
     Toggle(&'static str),
     Cycle(&'static str),
     Slider(&'static str),
+    /// Closed dropdown header — click toggles the option list.
+    Select(&'static str),
+    /// An open dropdown option: (key, option index).
+    Option(&'static str, u8),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +87,8 @@ pub struct SettingsModel {
     pub move_requested: bool,
     pub changed: bool,
     pub version: String,
+    /// Which dropdown (if any) is currently open.
+    pub open_select: Option<&'static str>,
 }
 
 impl SettingsModel {
@@ -101,6 +108,7 @@ impl SettingsModel {
             move_requested: false,
             changed: false,
             version,
+            open_select: None,
         }
     }
 
@@ -108,9 +116,46 @@ impl SettingsModel {
         self.changed = true;
     }
 
+    /// Close the open dropdown (outside click / other control).
+    pub fn close_select(&mut self) {
+        self.open_select = None;
+    }
+
     pub fn click(&mut self, ctrl: Ctrl, _x: f32, _y: f32) {
+        if self.open_select.is_some() && !matches!(ctrl, Ctrl::Option(..) | Ctrl::Select(_)) {
+            self.open_select = None;
+        }
         match ctrl {
             Ctrl::Close => self.close_requested = true,
+            Ctrl::Select(key) => {
+                self.open_select = if self.open_select == Some(key) { None } else { Some(key) };
+            }
+            Ctrl::Option(key, i) => {
+                let v = match key {
+                    "language" => ["auto", "ru", "en"].get(i as usize).copied().unwrap_or("auto"),
+                    "eq_style" => ["bars", "ring", "dots", "none"].get(i as usize).copied().unwrap_or("bars"),
+                    "overlay_layer" => ["panel", "screen", "fullscreen"].get(i as usize).copied().unwrap_or("screen"),
+                    _ => ["all", "own"].get(i as usize).copied().unwrap_or("all"),
+                };
+                match key {
+                    "language" => self.app.language = v.into(),
+                    "eq_style" => self.app.eq_style = v.into(),
+                    "overlay_layer" => self.desktop.overlay_layer = v.into(),
+                    "ev_scope_join" => self.app.ev_scope_join = v.into(),
+                    "ev_scope_leave" => self.app.ev_scope_leave = v.into(),
+                    "ev_scope_move" => self.app.ev_scope_move = v.into(),
+                    "ev_scope_group" => self.app.ev_scope_group = v.into(),
+                    "ev_scope_sys" => self.app.ev_scope_sys = v.into(),
+                    "ev_scope_chat" => self.app.ev_scope_chat = v.into(),
+                    _ => {}
+                }
+                self.open_select = None;
+                self.touch();
+            }
+            Ctrl::Corner(i) => {
+                self.app.corner = ["tl", "tr", "bl", "br"].get(i as usize).copied().unwrap_or("tr").into();
+                self.touch();
+            }
             Ctrl::MoveOverlay => self.move_requested = true,
             Ctrl::Preset(i) => {
                 if let Some(p) = PRESETS.get(i as usize) {
@@ -229,6 +274,8 @@ fn toggle_mut<'a>(app: &'a mut Appearance, key: &str) -> &'a mut bool {
         "show_ev_move" => &mut app.show_ev_move,
         "show_ev_poke" => &mut app.show_ev_poke,
         "show_ev_chat" => &mut app.show_ev_chat,
+        "chat_private" => &mut app.chat_private,
+        "show_unread_badge" => &mut app.show_unread_badge,
         _ => &mut app.show_header,
     }
 }
@@ -271,6 +318,7 @@ fn slider_range(key: &str) -> (f64, f64) {
         "glow" => (0.0, 1.0),
         "blur" => (0.0, 40.0),
         "radius" => (0.0, 26.0),
+        "whisper_delay" => (1.0, 30.0),
         _ => (0.0, 200.0), // margin_x / margin_y
     }
 }
@@ -288,7 +336,9 @@ fn set_slider(app: &mut Appearance, key: &str, v: f64) {
         "blur" => app.blur = v,
         "radius" => app.radius = v,
         "margin_x" => app.margin_x = v,
-        _ => app.margin_y = v,
+        "margin_y" => app.margin_y = v,
+        "whisper_delay" => app.whisper_delay = v.round().clamp(min, max),
+        _ => {}
     }
 }
 
@@ -303,7 +353,8 @@ fn get_slider(app: &Appearance, key: &str) -> f64 {
         "blur" => app.blur,
         "radius" => app.radius,
         "margin_x" => app.margin_x,
-        _ => app.margin_y,
+        "margin_y" => app.margin_y,
+        _ => app.whisper_delay,
     }
 }
 
@@ -328,7 +379,9 @@ fn get_toggle(app: &Appearance, key: &str) -> bool {
         "show_ev_leave" => app.show_ev_leave,
         "show_ev_move" => app.show_ev_move,
         "show_ev_poke" => app.show_ev_poke,
-        _ => app.show_ev_chat,
+        "show_ev_chat" => app.show_ev_chat,
+        "chat_private" => app.chat_private,
+        _ => app.show_unread_badge,
     }
 }
 
@@ -458,16 +511,82 @@ fn draw_slider(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, valu
     track
 }
 
-fn draw_cycle(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, value: &str) {
-    c.fonts.draw(buf, x, y + 15.0, label, c.fs, false, c.pal.text);
-    let bw = 140.0;
-    let bx = x + w - bw;
-    buf.round_rect(bx, y, bw, 24.0, 8.0, c.pal.row_hover);
-    let tw = c.fonts.measure(value, c.fs, true);
-    c.fonts.draw(buf, bx + (bw - tw) * 0.5, y + 17.0, value, c.fs, true, c.pal.text);
+fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
+    match key {
+        "language" => vec![
+            (tr(lang, "Авто", "Auto"), 0),
+            (tr(lang, "Русский", "Russian"), 1),
+            ("English".to_string(), 2),
+        ],
+        "eq_style" => vec![
+            (tr(lang, "Столбики", "Bars"), 0),
+            (tr(lang, "Кольцо", "Ring"), 1),
+            (tr(lang, "Точки", "Dots"), 2),
+            (tr(lang, "Скрыть", "Hidden"), 3),
+        ],
+        "overlay_layer" => vec![
+            (tr(lang, "По размеру панели", "Panel-sized"), 0),
+            (tr(lang, "Во весь экран", "Full screen"), 1),
+            (tr(lang, "Полноэкранное окно", "Fullscreen window"), 2),
+        ],
+        _ => vec![
+            (tr(lang, "Весь сервер", "Whole server"), 0),
+            (tr(lang, "Мой канал", "My channel"), 1),
+        ],
+    }
 }
 
-/// Preview sample — shows the design regardless of live state.
+fn select_index(key: &str, app: &Appearance, desktop: &DesktopPrefs) -> u8 {
+    let v = match key {
+        "language" => app.language.as_str(),
+        "eq_style" => app.eq_style.as_str(),
+        "overlay_layer" => desktop.overlay_layer.as_str(),
+        "ev_scope_join" => app.ev_scope_join.as_str(),
+        "ev_scope_leave" => app.ev_scope_leave.as_str(),
+        "ev_scope_move" => app.ev_scope_move.as_str(),
+        "ev_scope_group" => app.ev_scope_group.as_str(),
+        "ev_scope_sys" => app.ev_scope_sys.as_str(),
+        _ => app.ev_scope_chat.as_str(),
+    };
+    match (key, v) {
+        ("language", "auto") => 0, ("language", "ru") => 1, ("language", "en") => 2,
+        ("eq_style", "bars") => 0, ("eq_style", "ring") => 1, ("eq_style", "dots") => 2, ("eq_style", _) => 3,
+        ("overlay_layer", "panel") => 0, ("overlay_layer", "screen") => 1, ("overlay_layer", _) => 2,
+        (_, "own") => 1,
+        _ => 0,
+    }
+}
+
+/// Dropdown row: label left, value box + chevron right. Returns the value box rect.
+fn draw_select(
+    c: &Ctx,
+    buf: &mut crate::render::Buf,
+    x: f32,
+    y: f32,
+    w: f32,
+    label: &str,
+    value: &str,
+    open: bool,
+) -> crate::layout::Rect {
+    let pal = &c.pal;
+    let bx = x + w - 194.0;
+    buf.round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.row_hover);
+    buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, if open { pal.accent } else { pal.muted.scale_a(90.0) }, 1.0);
+    c.fonts.draw(buf, bx + 12.0, y + 5.0, value, 12.0, false, pal.text);
+    // chevron
+    let cx = bx + 172.0;
+    let cy = y + 11.0;
+    if open {
+        buf.line(cx - 4.0, cy + 3.0, cx, cy - 3.0, 1.6, pal.accent);
+        buf.line(cx, cy - 3.0, cx + 4.0, cy + 3.0, 1.6, pal.accent);
+    } else {
+        buf.line(cx - 4.0, cy - 3.0, cx, cy + 3.0, 1.6, pal.muted);
+        buf.line(cx, cy + 3.0, cx + 4.0, cy - 3.0, 1.6, pal.muted);
+    }
+    c.fonts.draw(buf, x + 2.0, y + 5.0, label, 12.0, false, pal.text);
+    crate::layout::Rect { x: bx, y: y - 2.0, w: 190.0, h: 28.0 }
+}
+
 fn sample_input<'a>(
     a: &'a Appearance,
     pal: &'a Palette,
@@ -518,6 +637,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     let c = Ctx { pal: &pal, fonts, fs: 13.0 };
     let mut buf = Buf::new(WIN_W as i32, WIN_H as i32);
     let mut regions: Vec<Region> = Vec::new();
+    let mut open_sel_at: Option<(f32, f32)> = None;
 
     // window background — Glass: subtle vertical gradient + border
     let mut bg = pal.panel_bg;
@@ -625,9 +745,9 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         y += 26.0;
     }
 
-    section(&mut buf, &c, y, &tr(&m.lang, "Геометрия и стиль", "Geometry & style"));
+    section(&mut buf, &c, y, &tr(&m.lang, "Размеры и эффекты", "Size & effects"));
     y += 34.0;
-    let sliders: [(&str, &str, &str); 10] = [
+    let sliders: [(&str, &str, &str); 8] = [
         ("scale", "Масштаб", "Scale"),
         ("font_size", "Шрифт", "Font size"),
         ("panel_width", "Ширина панели", "Panel width"),
@@ -636,14 +756,12 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         ("glow", "Свечение", "Glow"),
         ("blur", "Размытие", "Blur"),
         ("radius", "Скругление", "Corner radius"),
-        ("margin_x", "Отступ X", "Margin X"),
-        ("margin_y", "Отступ Y", "Margin Y"),
     ];
     for (key, ru, en) in sliders {
         let label = tr(&m.lang, ru, en);
         let value = get_slider(&m.app, key);
         let int_unit = match key {
-            "font_size" | "blur" | "radius" | "margin_x" | "margin_y" | "panel_width" | "panel_max_height" => true,
+            "font_size" | "blur" | "radius" | "panel_width" | "panel_max_height" => true,
             _ => false,
         };
         let vstr = if key == "panel_max_height" && value <= 0.0 {
@@ -668,54 +786,58 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         y += 52.0;
     }
 
-    section(&mut buf, &c, y, &tr(&m.lang, "Расположение и вид", "Placement & look"));
+    section(&mut buf, &c, y, &tr(&m.lang, "Положение на экране", "Screen corner"));
     y += 34.0;
-    for (key, ru, en) in [
-        ("theme", "Тема", "Theme"),
-        ("corner", "Угол", "Corner"),
-        ("language", "Язык", "Language"),
-        ("eq_style", "Индикатор", "Talking indicator"),
-    ] {
+    // corner grid 2x2 (same control as the web main)
+    {
+        let gx = pane_x + 4.0;
+        let gw = 240.0;
+        let gh = 128.0;
+        buf.round_rect(gx, y, gw, gh, 10.0, pal.row_hover);
+        buf.stroke_round_rect(gx, y, gw, gh, 10.0, pal.muted.scale_a(80.0), 1.0);
+        let cell = gw / 2.0;
+        let chh = gh / 2.0;
+        for (i, key) in ["tl", "tr", "bl", "br"].iter().enumerate() {
+            let cx = gx + (i % 2) as f32 * cell;
+            let cy = y + (i / 2) as f32 * chh;
+            let active = m.app.corner == *key;
+            if active {
+                buf.round_rect(cx + 3.0, cy + 3.0, cell - 6.0, chh - 6.0, 8.0, pal.accent.scale_a(46.0));
+                buf.stroke_round_rect(cx + 3.0, cy + 3.0, cell - 6.0, chh - 6.0, 8.0, pal.accent, 1.4);
+            }
+            let mw = 26.0f32;
+            let mh = 16.0f32;
+            let (mx, my) = match *key {
+                "tl" => (cx + 12.0, cy + 11.0),
+                "tr" => (cx + cell - 12.0 - mw, cy + 11.0),
+                "bl" => (cx + 12.0, cy + chh - 11.0 - mh),
+                _ => (cx + cell - 12.0 - mw, cy + chh - 11.0 - mh),
+            };
+            buf.round_rect(mx, my, mw, mh, 3.0, if active { pal.accent } else { pal.muted.scale_a(170.0) });
+            regions.push(Region {
+                rect: crate::layout::Rect { x: cx, y: cy, w: cell, h: chh },
+                ctrl: Ctrl::Corner(i as u8),
+            });
+        }
+        y += gh + 12.0;
+    }
+    for (key, ru, en) in [("margin_x", "Отступ X", "Margin X"), ("margin_y", "Отступ Y", "Margin Y")] {
         let label = tr(&m.lang, ru, en);
-        let value = match key {
-            "theme" => m.app.theme.as_str(),
-            "corner" => m.app.corner.as_str(),
-            "language" => m.app.language.as_str(),
-            _ => m.app.eq_style.as_str(),
-        };
-        draw_cycle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, value);
-        regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + pane_w - 144.0, y, w: 140.0, h: 24.0 },
-            ctrl: Ctrl::Cycle(key),
-        });
-        y += 36.0;
+        let value = get_slider(&m.app, key);
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &format!("{value:.0}"), value, slider_range(key));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider(key) });
+        y += 52.0;
     }
 
-    section(&mut buf, &c, y, &tr(&m.lang, "Показывать", "Show"));
+    section(&mut buf, &c, y, &tr(&m.lang, "Состав канала", "Channel roster"));
     y += 34.0;
-    let toggles: [(&str, &str, &str); 20] = [
-        ("show_header", "Шапка", "Header"),
-        ("show_server_name", "Имя сервера", "Server name"),
-        ("show_user_count", "Счётчик", "User count"),
+    for (key, ru, en) in [
         ("show_avatars", "Аватарки", "Avatars"),
         ("show_badges", "Бейджи", "Badges"),
         ("show_self", "Себя", "Self"),
         ("hide_query", "Скрыть query", "Hide query"),
-        ("animations", "Анимации", "Animations"),
-        ("talking_first", "Говорящие первыми", "Talking first"),
-        ("only_talking", "Только говорящие", "Only talking"),
-        ("compact", "Компактный", "Compact"),
         ("hide_empty", "Скрыть пустой", "Hide empty"),
-        ("show_whispers", "Шёпот", "Whispers"),
-        ("show_chat", "Чат", "Chat"),
-        ("show_events", "События", "Events"),
-        ("show_ev_join", "События: входы", "Events: joins"),
-        ("show_ev_leave", "События: выходы", "Events: leaves"),
-        ("show_ev_move", "События: переходы", "Events: moves"),
-        ("show_ev_poke", "События: поке", "Events: pokes"),
-        ("show_ev_chat", "События: чат", "Events: chat"),
-    ];
-    for (key, ru, en) in toggles {
+    ] {
         let label = tr(&m.lang, ru, en);
         let on = get_toggle(&m.app, key);
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
@@ -725,32 +847,151 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         });
         y += 30.0;
     }
-    // «Система» — desktop prefs (layer + UAC + click-through)
-    y += 16.0;
-    {
-        let label = tr(&m.lang, "Система", "System");
-        c.fonts.draw(&mut buf, pane_x + 4.0, y, &label, 13.0, true, pal.accent);
-        y += 26.0;
+
+    section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
+    y += 34.0;
+    for (key, ru, en) in [
+        ("show_header", "Шапка", "Header"),
+        ("show_server_name", "Имя сервера", "Server name"),
+        ("show_user_count", "Счётчик", "User count"),
+        ("compact", "Компактный", "Compact"),
+        ("animations", "Анимации", "Animations"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = get_toggle(&m.app, key);
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
+    }
+
+    section(&mut buf, &c, y, &tr(&m.lang, "Речь и шёпот", "Voice & whispers"));
+    y += 34.0;
+    for (key, ru, en) in [
+        ("talking_first", "Говорящие первыми", "Talking first"),
+        ("only_talking", "Только говорящие", "Only talking"),
+        ("show_whispers", "Шёпот", "Whispers"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = get_toggle(&m.app, key);
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
     }
     {
-        let label = tr(&m.lang, "Поверх всех окон", "Over all windows");
-        let value = match m.desktop.overlay_layer.as_str() {
-            "panel" => tr(&m.lang, "Панель", "Panel"),
-            "screen" => tr(&m.lang, "Во весь экран", "Full screen"),
-            _ => tr(&m.lang, "Полноэкранное", "Fullscreen"),
-        };
-        draw_cycle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value);
-        regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + pane_w - 144.0, y, w: 140.0, h: 24.0 },
-            ctrl: Ctrl::Cycle("overlay_layer"),
-        });
+        let label = tr(&m.lang, "Индикатор речи", "Talking indicator");
+        let cur = select_index("eq_style", &m.app, &m.desktop);
+        let opts = select_options("eq_style", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("eq_style");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("eq_style") });
         y += 36.0;
     }
-    let sys_rows: [(&str, &str, &str); 2] = [
+    {
+        let label = tr(&m.lang, "Задержка шёпота, с", "Whisper delay, s");
+        let value = get_slider(&m.app, "whisper_delay");
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &format!("{value:.0}"), value, slider_range("whisper_delay"));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider("whisper_delay") });
+        y += 52.0;
+    }
+
+    section(&mut buf, &c, y, &tr(&m.lang, "Чат и уведомления", "Chat & notifications"));
+    y += 34.0;
+    for (key, ru, en) in [
+        ("show_chat", "Чат", "Chat"),
+        ("chat_private", "Только личные", "Private only"),
+        ("show_unread_badge", "Бейдж непрочитанных", "Unread badge"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = get_toggle(&m.app, key);
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
+    }
+
+    section(&mut buf, &c, y, &tr(&m.lang, "События сервера", "Server events"));
+    y += 34.0;
+    {
+        let label = tr(&m.lang, "Показывать события", "Show events");
+        let on = get_toggle(&m.app, "show_events");
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle("show_events"),
+        });
+        y += 32.0;
+    }
+    for (tkey, skey, ru, en) in [
+        ("show_ev_join", "ev_scope_join", "Входы", "Joins"),
+        ("show_ev_leave", "ev_scope_leave", "Выходы", "Leaves"),
+        ("show_ev_move", "ev_scope_move", "Переходы", "Moves"),
+        ("show_ev_poke", "ev_scope_group", "Поке", "Pokes"),
+        ("show_ev_chat", "ev_scope_chat", "Чат", "Chat"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = get_toggle(&m.app, tkey);
+        let tw = pane_w - 8.0 - 200.0;
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, tw, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: tw, h: 26.0 },
+            ctrl: Ctrl::Toggle(tkey),
+        });
+        let cur = select_index(skey, &m.app, &m.desktop);
+        let opts = select_options(skey, &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some(skey);
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, "", &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select(skey) });
+        y += 32.0;
+    }
+
+    section(&mut buf, &c, y, &tr(&m.lang, "Система", "System"));
+    y += 34.0;
+    {
+        let label = tr(&m.lang, "Слой оверлея", "Overlay layer");
+        let cur = select_index("overlay_layer", &m.app, &m.desktop);
+        let opts = select_options("overlay_layer", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("overlay_layer");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("overlay_layer") });
+        y += 36.0;
+    }
+    {
+        let label = tr(&m.lang, "Язык", "Language");
+        let cur = select_index("language", &m.app, &m.desktop);
+        let opts = select_options("language", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("language");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("language") });
+        y += 36.0;
+    }
+    for (key, ru, en) in [
         ("elevate", "Запуск от имени администратора", "Run as administrator"),
         ("click_through", "Мышь проходит сквозь оверлей", "Mouse passes through the overlay"),
-    ];
-    for (key, ru, en) in sys_rows {
+    ] {
         let label = tr(&m.lang, ru, en);
         let on = if key == "elevate" { m.desktop.elevate } else { m.desktop.click_through };
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
@@ -815,6 +1056,36 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     c.fonts.draw(&mut buf, pv_x + (pv_w - h1w) * 0.5, btn_y + 64.0, &hint1, 11.5, false, pal.muted);
     c.fonts.draw(&mut buf, pv_x + (pv_w - h2w) * 0.5, btn_y + 82.0, &hint2, 11.5, false, pal.muted);
 
+    // ---- dropdown popup (topmost layer) ----
+    if let (Some(key), Some((px, py))) = (m.open_select, open_sel_at) {
+        let opts = select_options(key, &m.lang);
+        let cur = select_index(key, &m.app, &m.desktop);
+        let row_h = 30.0f32;
+        let pop_h = opts.len() as f32 * row_h + 10.0;
+        let mut pop_y = py + 32.0;
+        if pop_y + pop_h > WIN_H - 8.0 {
+            pop_y = (py - pop_h - 2.0).max(8.0);
+        }
+        buf.round_rect(px, pop_y, 190.0, pop_h, 8.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.35).scale_a(252.0));
+        buf.stroke_round_rect(px, pop_y, 190.0, pop_h, 8.0, pal.accent.scale_a(170.0), 1.2);
+        for (i, (lbl, idx)) in opts.iter().enumerate() {
+            let ry = pop_y + 5.0 + i as f32 * row_h;
+            if *idx == cur {
+                buf.round_rect(px + 4.0, ry, 182.0, row_h - 4.0, 6.0, pal.accent.scale_a(52.0));
+            }
+            c.fonts.draw(&mut buf, px + 12.0, ry + 6.0, lbl, 12.0, false, pal.text);
+            regions.push(Region {
+                rect: crate::layout::Rect { x: px, y: ry, w: 190.0, h: row_h - 2.0 },
+                ctrl: Ctrl::Option(key, *idx),
+            });
+        }
+    }
+    // dropdown options win clicks over content underneath
+    let (mut front, back): (Vec<Region>, Vec<Region>) =
+        regions.into_iter().partition(|r| matches!(r.ctrl, Ctrl::Option(..)));
+    front.extend(back);
+    let regions = front;
+
     (buf, regions, content_h)
 }
 
@@ -826,6 +1097,24 @@ use crate::http::App;
 use crate::overlay::{Ev, Host};
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
+static SETTINGS_RECT: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
+
+/// True while the settings window is open (the overlay leaves topmost z-order alone then).
+pub fn is_open() -> bool {
+    SETTINGS_OPEN.load(Ordering::SeqCst)
+}
+
+pub fn set_window_rect(x: f64, y: f64, w: f64, h: f64) {
+    *SETTINGS_RECT.lock().unwrap() = Some((x, y, w, h));
+}
+
+/// Screen-space hit test used to route wheel input to the settings window first.
+pub fn rect_contains(px: f64, py: f64) -> bool {
+    match *SETTINGS_RECT.lock().unwrap() {
+        Some((x, y, w, h)) => px >= x && px <= x + w && py >= y && py <= y + h,
+        None => false,
+    }
+}
 
 /// Open the settings window at most once («окно настроек открывается один раз»).
 pub fn spawn_once(app: Arc<App>, port: u16) {
@@ -869,23 +1158,35 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
     let work = host.work_area();
     let x = work.0 + (work.2 - WIN_W as f64) * 0.5;
     let y = work.1 + (work.3 - WIN_H as f64) * 0.5;
+    set_window_rect(x, y, WIN_W as f64, WIN_H as f64);
+    let mut activated = false;
     loop {
         let (buf, regions, content_h) = render(m, fonts, icons);
         host.present(&buf, x, y, (x, y, WIN_W as f64, WIN_H as f64));
         host.set_interactive(true);
+        if !activated {
+            activated = true;
+            host.activate();
+        }
         // pump() reports SCREEN coordinates — the model works window-local
         for ev in host.pump() {
             match ev {
                 Ev::Click(ex, ey) => {
                     let (ex, ey) = (ex - x as f32, ey - y as f32);
+                    let mut hit = false;
                     for r in &regions {
                         if r.rect.contains(ex, ey) {
                             if matches!(r.ctrl, Ctrl::Slider(_)) {
                                 continue;
                             }
                             m.click(r.ctrl, ex, ey);
+                            hit = true;
                             break;
                         }
+                    }
+                    if !hit {
+                        // click outside any control closes the open dropdown
+                        m.close_select();
                     }
                 }
                 Ev::DragStart(ex, ey) => {
@@ -911,7 +1212,7 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
         if m.close_requested {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(33));
+        std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }
 
@@ -997,7 +1298,38 @@ mod tests {
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 10);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 11);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 8);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count() == 4);
+    }
+
+    #[test]
+    fn select_dropdown_pick_and_close() {
+        let mut m = model();
+        m.click(Ctrl::Select("language"), 0.0, 0.0);
+        assert_eq!(m.open_select, Some("language"));
+        m.click(Ctrl::Option("language", 1), 0.0, 0.0);
+        assert_eq!(m.app.language, "ru");
+        assert_eq!(m.open_select, None);
+        assert!(m.changed);
+        m.changed = false;
+        m.click(Ctrl::Select("eq_style"), 0.0, 0.0);
+        assert_eq!(m.open_select, Some("eq_style"));
+        m.click(Ctrl::Toggle("show_chat"), 0.0, 0.0);
+        assert_eq!(m.open_select, None);
+        m.click(Ctrl::Option("ev_scope_join", 1), 0.0, 0.0);
+        assert_eq!(m.app.ev_scope_join, "own");
+        m.click(Ctrl::Option("overlay_layer", 0), 0.0, 0.0);
+        assert_eq!(m.desktop.overlay_layer, "panel");
+    }
+
+    #[test]
+    fn corner_grid_sets_placement() {
+        let mut m = model();
+        m.click(Ctrl::Corner(2), 0.0, 0.0);
+        assert_eq!(m.app.corner, "bl");
+        m.click(Ctrl::Corner(1), 0.0, 0.0);
+        assert_eq!(m.app.corner, "tr");
     }
 }
 
@@ -1015,9 +1347,17 @@ mod qa {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
         std::fs::create_dir_all(dir).unwrap();
         write_png(&format!("{dir}/settings.png"), &buf).unwrap();
+        // middle — corner grid + roster sections
+        m.scroll = 620.0;
+        let (bufm, _, _) = render(&m, &fonts, &icons);
+        write_png(&format!("{dir}/settings-middle.png"), &bufm).unwrap();
         // scrolled to the bottom — «Система» section
         m.wheel(-100000.0, ch);
         let (buf2, _, _) = render(&m, &fonts, &icons);
         write_png(&format!("{dir}/settings-bottom.png"), &buf2).unwrap();
+        // dropdown open («Язык»)
+        m.click(Ctrl::Select("language"), 0.0, 0.0);
+        let (buf3, _, _) = render(&m, &fonts, &icons);
+        write_png(&format!("{dir}/settings-select.png"), &buf3).unwrap();
     }
 }

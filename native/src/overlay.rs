@@ -227,6 +227,8 @@ pub trait Host {
     fn pump(&mut self) -> Vec<Ev>;
     fn set_interactive(&mut self, on: bool);
     fn open_url(&self, url: &str);
+    /// Bring the window to the foreground (settings window on open).
+    fn activate(&mut self) {}
     fn work_area(&self) -> (f64, f64, f64, f64);
     /// Full bounds of the target monitor ('screen'/'fullscreen' layer modes).
     fn screen_area(&self) -> (f64, f64, f64, f64);
@@ -436,7 +438,7 @@ impl Overlay {
             time_bucket
         );
         let interactive_wanted = move_mode || self.dragging || !cfg.desktop.click_through;
-        let min_gap: u64 = if interactive_wanted { 32 } else { 66 }; // 30fps / 15fps
+        let min_gap: u64 = 15; // up to ~60fps (dirty-check + 2s force keep idle cheap)
         let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap;
         let force = now_ms.saturating_sub(self.last_present_ms) >= 2000;
         let dirty = force || (due && self.last_key.as_deref() != Some(key.as_str()));
@@ -625,7 +627,7 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
                 let mut host = HeadlessHost::new();
                 loop {
                     ov.tick(&mut host);
-                    std::thread::sleep(Duration::from_millis(66));
+                    std::thread::sleep(Duration::from_millis(16));
                 }
             }
         })
@@ -743,6 +745,7 @@ pub(crate) mod win32 {
         fn ReleaseCapture() -> i32;
         fn GetCursorPos(p: *mut POINT) -> i32;
         fn ScreenToClient(w: *mut c_void, p: *mut POINT) -> i32;
+        fn SetForegroundWindow(w: *mut c_void) -> i32;
         fn SetWindowPos(
             w: *mut c_void,
             after: *mut c_void,
@@ -948,16 +951,27 @@ pub(crate) mod win32 {
     const SPI_GETWORKAREA: u32 = 0x0030;
     const IDC_ARROW: usize = 32512;
 
-    /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta).
-    static WHEELS: std::sync::Mutex<Vec<(POINT, f32)>> = std::sync::Mutex::new(Vec::new());
+    /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta, timestamp ms).
+    static WHEELS: std::sync::Mutex<Vec<(POINT, f32, u64)>> = std::sync::Mutex::new(Vec::new());
+    const WHEEL_TTL_MS: u64 = 1500;
+
+    fn wheel_now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
 
     unsafe extern "system" fn mouse_ll_proc(code: i32, w: usize, l: isize) -> isize {
         if code >= 0 && w as u32 == WM_MOUSEWHEEL {
             let info = &*(l as *const MSLLHOOKSTRUCT);
             let delta = ((info.mouse_data >> 16) & 0xffff) as u16 as i16 as f32;
+            let now = wheel_now_ms();
             let mut q = WHEELS.lock().unwrap();
-            if q.len() < 32 {
-                q.push((POINT { x: info.pt.x, y: info.pt.y }, delta / 120.0 * 40.0));
+            // prune stale entries, then push — fresh events are NEVER dropped
+            q.retain(|(_, _, ts)| now.saturating_sub(*ts) < WHEEL_TTL_MS);
+            if q.len() < 64 {
+                q.push((POINT { x: info.pt.x, y: info.pt.y }, delta / 120.0 * 40.0, now));
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
@@ -983,6 +997,7 @@ pub(crate) mod win32 {
         h: i32,
         interactive: bool,
         drag_pending: bool,
+        settings_host: bool,
     }
 
     unsafe extern "system" fn wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: isize) -> isize {
@@ -1040,6 +1055,7 @@ pub(crate) mod win32 {
                 h: 0,
                 interactive: false,
                 drag_pending: false,
+                settings_host: false,
             }
         }
 
@@ -1145,15 +1161,20 @@ pub(crate) mod win32 {
                     .map_or(true, |t| now.duration_since(t).as_millis() >= 500);
                 if due || resized {
                     self.topmost_at = Some(now);
-                    SetWindowPos(
-                        self.hwnd,
-                        HWND_TOPMOST as *mut c_void,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    );
+                    // while the settings window is open it owns the top of the
+                    // topmost band — re-asserting here would slide under it and
+                    // make the window look unfocusable
+                    if !crate::settings::is_open() {
+                        SetWindowPos(
+                            self.hwnd,
+                            HWND_TOPMOST as *mut c_void,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                    }
                 }
             }
         }
@@ -1161,18 +1182,31 @@ pub(crate) mod win32 {
         fn pump(&mut self) -> Vec<Ev> {
             let mut out = Vec::new();
             {
-                // wheel captured by the LL hook — only events over OUR window
-                let mut kept: Vec<(POINT, f32)> = Vec::new();
+                // wheel captured by the LL hook — only events over OUR window;
+                // stale entries expire so a busy desktop never starves fresh events
+                let mut kept: Vec<(POINT, f32, u64)> = Vec::new();
                 let (rx, ry, rw, rh) = self.last_rect;
-                for (pt, delta) in std::mem::take(&mut *WHEELS.lock().unwrap()) {
-                    let inside = pt.x as f64 >= rx
+                let now = wheel_now_ms();
+                for (pt, delta, ts) in std::mem::take(&mut *WHEELS.lock().unwrap()) {
+                    if now.saturating_sub(ts) >= WHEEL_TTL_MS {
+                        continue;
+                    }
+                    let mut inside = pt.x as f64 >= rx
                         && pt.x as f64 <= rx + rw
                         && pt.y as f64 >= ry
                         && pt.y as f64 <= ry + rh;
+                    // the settings window wins the wheel wherever the two overlap
+                    if inside
+                        && !self.settings_host
+                        && crate::settings::is_open()
+                        && crate::settings::rect_contains(pt.x as f64, pt.y as f64)
+                    {
+                        inside = false;
+                    }
                     if inside {
                         out.push(Ev::Wheel(delta));
-                    } else if kept.len() < 32 {
-                        kept.push((pt, delta));
+                    } else {
+                        kept.push((pt, delta, ts));
                     }
                 }
                 *WHEELS.lock().unwrap() = kept;
@@ -1223,6 +1257,12 @@ pub(crate) mod win32 {
                     cur | WS_EX_TRANSPARENT
                 };
                 SetWindowLongW(self.hwnd, GWL_EXSTYLE, next);
+            }
+        }
+
+        fn activate(&mut self) {
+            unsafe {
+                SetForegroundWindow(self.hwnd);
             }
         }
 
@@ -1561,6 +1601,7 @@ pub(crate) mod win32 {
 
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         let mut host = unsafe { WinHost::new() };
+        host.settings_host = true;
         let cfg = app.store.lock().unwrap().get().clone();
         let mut m = crate::settings::SettingsModel::new_full(cfg.appearance.clone(), cfg.desktop.clone(), app.version.clone());
         let fonts = crate::font::Fonts::load();
