@@ -17,6 +17,8 @@ pub struct TsEndpoint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Appearance {
     pub theme: String,
+    /// Overlay panel style: "glass" | "neon" | "hud" | "soft" | "crt".
+    pub style: String,
     pub accent: String,
     pub nick_color: String,
     pub msg_color: String,
@@ -75,6 +77,7 @@ impl Default for Appearance {
     fn default() -> Appearance {
         Appearance {
             theme: "glass".into(),
+            style: "glass".into(),
             accent: "#7c6cff".into(),
             nick_color: "#e8ecff".into(),
             msg_color: "#b6b6bd".into(),
@@ -248,6 +251,7 @@ pub fn appearance_from_json_with(obj: &Json, base: &Appearance) -> Appearance {
     }
     Appearance {
         theme: pick_str(obj, "theme", &d.theme),
+        style: pick_str(obj, "style", &d.style),
         accent: pick_str(obj, "accent", &d.accent),
         nick_color: pick_str(obj, "nickColor", &d.nick_color),
         msg_color: pick_str(obj, "msgColor", &d.msg_color),
@@ -304,6 +308,7 @@ pub fn appearance_from_json_with(obj: &Json, base: &Appearance) -> Appearance {
 pub fn appearance_to_json(a: &Appearance) -> Json {
     crate::json::obj(vec![
         ("theme", Json::s(a.theme.clone())),
+        ("style", Json::s(a.style.clone())),
         ("accent", Json::s(a.accent.clone())),
         ("nickColor", Json::s(a.nick_color.clone())),
         ("msgColor", Json::s(a.msg_color.clone())),

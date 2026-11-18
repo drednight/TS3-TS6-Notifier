@@ -42,6 +42,52 @@ pub fn parse_color(s: &str) -> Rgba {
     opt(s).unwrap_or(Rgba::rgb(255, 255, 255))
 }
 
+/// Overlay panel style variant (mockups 1..5). Paint-only: shapes + palette
+/// tints in the software rasterizer — zero extra runtime memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleKind {
+    Glass,
+    Neon,
+    Hud,
+    Soft,
+    Crt,
+}
+
+impl StyleKind {
+    pub const ALL: [(&str, &str, &str); 5] = [
+        ("glass", "Стекло", "Glass"),
+        ("neon", "Неон", "Neon"),
+        ("hud", "Тактический", "Tactical"),
+        ("soft", "Мягкий", "Soft"),
+        ("crt", "Кинескоп", "CRT"),
+    ];
+    /// Signature accent per style (applied when the style tile is clicked).
+    pub const ACCENTS: [&str; 5] = ["#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#4ade80"];
+
+    pub fn parse(s: &str) -> StyleKind {
+        match s {
+            "neon" => StyleKind::Neon,
+            "hud" => StyleKind::Hud,
+            "soft" => StyleKind::Soft,
+            "crt" => StyleKind::Crt,
+            _ => StyleKind::Glass,
+        }
+    }
+
+    pub fn id(&self) -> &'static str {
+        StyleKind::ALL[*self as usize].0
+    }
+
+    /// Secondary accent (neon magenta, CRT amber) — otherwise the user accent.
+    pub fn second(&self, accent: Rgba) -> Rgba {
+        match self {
+            StyleKind::Neon => Rgba::rgb(255, 47, 214),
+            StyleKind::Crt => Rgba::rgb(255, 176, 60),
+            _ => accent,
+        }
+    }
+}
+
 pub fn mix(a: Rgba, b: Rgba, t: f64) -> Rgba {
     let t = t.clamp(0.0, 1.0);
     let m = |i: usize| (a.0[i] as f64 * (1.0 - t) + b.0[i] as f64 * t).round() as u8;

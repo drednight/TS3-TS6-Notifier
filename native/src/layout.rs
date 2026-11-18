@@ -6,7 +6,7 @@ use crate::config::Appearance;
 use crate::font::Fonts;
 use crate::model::UserState;
 use crate::render::Buf;
-use crate::theme::{hash_hue, hsl, mix, Palette, Rgba};
+use crate::theme::{hash_hue, hsl, mix, Palette, Rgba, StyleKind};
 
 pub const PANEL_W: f32 = 292.0; // css px (#panel width)
 pub const SHADOW_PAD: f32 = 26.0; // css px transparent margin for the drop shadow
@@ -212,6 +212,7 @@ struct Ctx<'a> {
     fs: f32,
     now: f64,
     anim: bool,
+    sk: StyleKind,
 }
 
 impl<'a> Ctx<'a> {
@@ -221,6 +222,39 @@ impl<'a> Ctx<'a> {
     fn em(&self, em: f32) -> f32 {
         self.fs * em
     }
+    /// Style-aware corner radius (from a base px radius).
+    fn rad(&self, base: f32) -> f32 {
+        match self.sk {
+            StyleKind::Glass => base,
+            StyleKind::Neon | StyleKind::Hud => (base * 0.3).clamp(self.s(1.5), self.s(6.0)),
+            StyleKind::Soft => base * 1.5,
+            StyleKind::Crt => 0.0,
+        }
+    }
+    /// Style-aware panel/row background tint.
+    fn bg(&self, base: Rgba) -> Rgba {
+        match self.sk {
+            StyleKind::Glass => base,
+            StyleKind::Neon => mix(base, Rgba::rgb(2, 3, 8), 0.42),
+            StyleKind::Hud => mix(base, Rgba::rgb(6, 8, 10), 0.24),
+            StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.10),
+            StyleKind::Crt => mix(base, Rgba::rgb(4, 6, 4), 0.35),
+        }
+    }
+    /// Style-aware border color.
+    fn border(&self, base: Rgba) -> Rgba {
+        match self.sk {
+            StyleKind::Glass => base,
+            StyleKind::Neon => self.pal.accent.scale_a(150.0),
+            StyleKind::Hud => mix(base, self.pal.accent, 0.35),
+            StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.22),
+            StyleKind::Crt => self.pal.accent.scale_a(110.0),
+        }
+    }
+    /// Whisper/talk secondary accent (neon magenta, CRT amber, else user accent).
+    fn second(&self) -> Rgba {
+        self.sk.second(self.pal.accent)
+    }
 }
 
 fn draw_you_chip(c: &Ctx, buf: &mut Buf, x: f32, y: f32, label: &str) -> f32 {
@@ -228,7 +262,7 @@ fn draw_you_chip(c: &Ctx, buf: &mut Buf, x: f32, y: f32, label: &str) -> f32 {
     let tw = c.fonts.measure(label, size, true);
     let pad = c.s(5.0);
     let h = size * 1.8;
-    buf.round_rect(x, y, tw + pad * 2.0, h, c.s(6.0), c.pal.accent.scale_a(41.0));
+    buf.round_rect(x, y, tw + pad * 2.0, h, c.rad(c.s(6.0)), c.pal.accent.scale_a(41.0));
     c.fonts.draw(buf, x + pad, y + h * 0.72, label, size, true, c.pal.accent);
     x + pad * 2.0 + tw
 }
@@ -339,11 +373,34 @@ fn draw_user_row(
     opts: &RowOpts,
 ) {
     let pal = c.pal;
-    let radius = pal.radius as f32 * 0.5 * c.k;
+    let radius = c.rad(pal.radius as f32 * 0.5 * c.k);
+    let secc = if whisper { c.second() } else { pal.accent };
     if u.talking && !whisper {
-        buf.round_rect(x, y, w, h, radius, pal.talking_bg);
-        // v1.4.9 «Обводка говорящего» — 2px outline of the whole row strip
-        buf.stroke_round_rect(x, y, w, h, radius, pal.talk_outline, c.s(2.0));
+        // v1.4.9 «Обводка говорящего» — highlight of the whole row strip (every style)
+        match c.sk {
+            StyleKind::Neon => {
+                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
+                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), pal.accent);
+                buf.fill_rect(x, y, c.s(2.0), h, pal.accent.scale_a(120.0));
+            }
+            StyleKind::Hud => {
+                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
+                buf.fill_rect(x, y, c.s(3.0), h, pal.accent);
+                buf.stroke_round_rect(x, y, w, h, radius, pal.accent.scale_a(90.0), 1.0);
+            }
+            StyleKind::Soft => {
+                buf.round_rect(x, y, w, h, h * 0.42, pal.talking_bg);
+                buf.stroke_round_rect(x, y, w, h, h * 0.42, pal.talk_outline.scale_a(150.0), c.s(1.5));
+            }
+            StyleKind::Crt => {
+                buf.round_rect(x, y, w, h, radius, pal.accent.scale_a(30.0));
+                buf.stroke_round_rect(x, y, w, h, radius, pal.accent.scale_a(170.0), 1.0);
+            }
+            StyleKind::Glass => {
+                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
+                buf.stroke_round_rect(x, y, w, h, radius, pal.talk_outline, c.s(2.0));
+            }
+        }
     }
     if whisper {
         // .whisper-list .row::before — accent wash fading to 70% width
@@ -354,7 +411,7 @@ fn draw_user_row(
             if a == 0 {
                 continue;
             }
-            buf.fill_rect(x + w * t, y, w / steps as f32 + 1.0, h, pal.accent.scale_a(a as f64));
+            buf.fill_rect(x + w * t, y, w / steps as f32 + 1.0, h, secc.scale_a(a as f64));
         }
     }
     let av = if h < c.s(36.0) { c.s(24.0) } else { c.s(30.0) };
@@ -408,7 +465,7 @@ fn draw_user_row(
     let tx = if opts.show_avatars { av_x + av + c.s(9.0) } else { x + c.s(10.0) };
     let nick_size = c.em(1.0);
     let nick_color = if whisper {
-        pal.accent
+        secc
     } else if u.input_muted || u.away {
         pal.muted
     } else {
@@ -466,6 +523,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         fs,
         now: inp.now_ms as f64,
         anim: a.animations,
+        sk: StyleKind::parse(&a.style),
     };
     let pad = SHADOW_PAD * k;
     let panel_w = ((a.panel_width as f32) * k).clamp(200.0 * k, 600.0 * k);
@@ -530,17 +588,18 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
 
     // ---------------- draw pass ----------------
     let (px, py) = (pad, pad);
-    // drop shadow + panel body
-    buf.shadow_round_rect(px, py, panel_w, panel_h, c.s(inp.pal.radius as f32), c.s(18.0), inp.pal.shadow);
-    buf.round_rect(px, py, panel_w, panel_h, c.s(inp.pal.radius as f32), inp.pal.panel_bg);
-    buf.stroke_round_rect(px, py, panel_w, panel_h, c.s(inp.pal.radius as f32), inp.pal.panel_border, 1.0);
+    // drop shadow + panel body (style-aware radius/tint/border)
+    let pr = c.rad(c.s(inp.pal.radius as f32));
+    buf.shadow_round_rect(px, py, panel_w, panel_h, pr, c.s(18.0), inp.pal.shadow);
+    buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
+    buf.stroke_round_rect(px, py, panel_w, panel_h, pr, c.border(inp.pal.panel_border), 1.0);
 
     let mut cy = py;
     // ---- move handle (z-index 50 in css — drawn over header) ----
     if inp.move_mode {
         let bg = mix(inp.pal.accent, Rgba::rgb(12, 14, 26).with_a(235), 0.22);
-        buf.round_rect(px, cy, panel_w, handle_h, c.s(inp.pal.radius as f32), bg);
-        buf.stroke_round_rect(px, cy, panel_w, handle_h, c.s(inp.pal.radius as f32), inp.pal.accent.scale_a(178.0), 1.0);
+        buf.round_rect(px, cy, panel_w, handle_h, pr, bg);
+        buf.stroke_round_rect(px, cy, panel_w, handle_h, pr, inp.pal.accent.scale_a(178.0), 1.0);
         // grip «⠿» as three short lines + text + ✓/✗ buttons
         let bx = px + c.s(12.0);
         for i in 0..3 {
@@ -571,23 +630,42 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
 
     // ---- header ----
     if a.show_header {
-        // accent wash (linear-gradient 115deg ≈ horizontal)
-        // accent wash (linear-gradient 115deg ≈ horizontal fade)
-        for i in 0..14 {
-            let t = i as f32 / 14.0;
-            let a_alpha = (30.0 * (1.0 - t) * (1.0 - t)) as u8;
-            if a_alpha == 0 {
-                continue;
+        match c.sk {
+            StyleKind::Glass | StyleKind::Soft => {
+                // accent wash (linear-gradient 115deg ≈ horizontal fade)
+                for i in 0..14 {
+                    let t = i as f32 / 14.0;
+                    let a_alpha = (30.0 * (1.0 - t) * (1.0 - t)) as u8;
+                    if a_alpha == 0 {
+                        continue;
+                    }
+                    buf.fill_rect(
+                        px + panel_w * t,
+                        cy,
+                        panel_w / 14.0 + 1.0,
+                        header_h,
+                        inp.pal.accent.scale_a(a_alpha as f64),
+                    );
+                }
+                buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
-            buf.fill_rect(
-                px + panel_w * t,
-                cy,
-                panel_w / 14.0 + 1.0,
-                header_h,
-                inp.pal.accent.scale_a(a_alpha as f64),
-            );
+            StyleKind::Neon => {
+                buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(2, 3, 8).scale_a(90.0));
+                buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(150.0));
+            }
+            StyleKind::Hud => {
+                buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(0, 0, 0).scale_a(30.0));
+                buf.fill_rect(px, cy + header_h - 2.0, panel_w, 1.0, c.border(inp.pal.panel_border));
+                buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(90.0));
+            }
+            StyleKind::Crt => {
+                let mut dx = px;
+                while dx < px + panel_w - c.s(4.0) {
+                    buf.fill_rect(dx, cy + header_h - 1.0, c.s(6.0), 1.0, inp.pal.accent.scale_a(120.0));
+                    dx += c.s(12.0);
+                }
+            }
         }
-        buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.panel_border);
         // conn dot
         let dot_x = px + c.s(16.5);
         let dot_y = cy + header_h * 0.5 - c.s(8.0);
@@ -600,7 +678,11 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if dot_glow {
             buf.stroke_circle(dot_x, dot_y, c.s(4.5) + c.s(2.0), dot_c.scale_a(120.0), c.s(3.0));
         }
-        buf.circle(dot_x, dot_y, c.s(4.5), dot_c);
+        if c.sk == StyleKind::Hud {
+            buf.round_rect(dot_x - c.s(4.0), dot_y - c.s(4.0), c.s(8.0), c.s(8.0), c.s(1.0), dot_c);
+        } else {
+            buf.circle(dot_x, dot_y, c.s(4.5), dot_c);
+        }
         // titles
         let tx = px + c.s(31.0);
         let ch_size = c.em(1.02);
@@ -633,7 +715,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let ph = c.s(19.0);
             let pxx = gx - c.s(6.0) - pw;
             let pyy = cy + (header_h - ph) * 0.5;
-            buf.round_rect(pxx, pyy, pw, ph, ph * 0.5, inp.pal.row_hover);
+            buf.round_rect(pxx, pyy, pw, ph, c.rad(ph * 0.5), inp.pal.row_hover);
             inp.fonts.draw(&mut buf, pxx + (pw - tw) * 0.5, pyy + ph * 0.68, &cnt, size, true, inp.pal.muted);
         }
         cy += header_h;
@@ -668,16 +750,17 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if !inp.whisperers.is_empty() {
         let head = tr(inp.lang, "ШЁПОТ", "WHISPER");
         let hs = c.em(0.72);
-        buf.round_rect(px + c.s(10.0), cy + whisper_head_h * 0.5 - c.s(1.0), c.s(3.0), c.s(3.0), c.s(1.5), inp.pal.accent);
-        inp.fonts.draw(&mut buf, px + c.s(18.0), cy + whisper_head_h * 0.5 + hs * 0.36, &head, hs, true, inp.pal.accent);
+        let secc = c.second();
+        buf.round_rect(px + c.s(10.0), cy + whisper_head_h * 0.5 - c.s(1.0), c.s(3.0), c.s(3.0), c.s(1.5), secc);
+        inp.fonts.draw(&mut buf, px + c.s(18.0), cy + whisper_head_h * 0.5 + hs * 0.36, &head, hs, true, secc);
         let tw = inp.fonts.measure(&head, hs, true);
         buf.fill_rect_vgrad(
             px + c.s(24.0) + tw,
             cy + whisper_head_h * 0.5 - c.s(0.5),
             panel_w - c.s(34.0) - tw,
             1.0,
-            inp.pal.accent.scale_a(90.0),
-            inp.pal.accent.scale_a(0.0),
+            secc.scale_a(90.0),
+            secc.scale_a(0.0),
         );
         cy += whisper_head_h + c.s(2.0);
         for u in &inp.whisperers {
@@ -702,8 +785,9 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let x0 = px + c.s(10.0);
             let w0 = panel_w - c.s(20.0);
             if item.kind == 1 {
-                buf.round_rect(x0, y0, w0, feed_row_h, c.s(10.0), inp.pal.accent.scale_a(26.0));
-                buf.stroke_round_rect(x0, y0, w0, feed_row_h, c.s(10.0), inp.pal.accent.scale_a(115.0), 1.0);
+                let fr = c.rad(c.s(10.0));
+                buf.round_rect(x0, y0, w0, feed_row_h, fr, inp.pal.accent.scale_a(26.0));
+                buf.stroke_round_rect(x0, y0, w0, feed_row_h, fr, inp.pal.accent.scale_a(115.0), 1.0);
             }
             let size = c.em(0.92);
             let baseline = y0 + feed_row_h * 0.5 + size * 0.35;
@@ -745,6 +829,48 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     }
     if scroll_on {
         buf.clear_clip();
+    }
+
+    // ---- style texture overlays (paint-only) ----
+    match c.sk {
+        StyleKind::Crt => {
+            // phosphor scanlines
+            let mut yy = py + 1.0;
+            while yy < py + panel_h - 1.0 {
+                buf.fill_rect(px + 1.0, yy, panel_w - 2.0, 1.0, Rgba([0, 0, 0, 42]));
+                yy += c.s(3.0);
+            }
+        }
+        StyleKind::Hud => {
+            // faint tactical grid + corner ticks
+            let step = c.s(22.0);
+            let mut gx = px + step;
+            while gx < px + panel_w - 1.0 {
+                buf.fill_rect(gx, py + 2.0, 1.0, panel_h - 4.0, inp.pal.accent.scale_a(10.0));
+                gx += step;
+            }
+            let mut gy = py + step;
+            while gy < py + panel_h - 1.0 {
+                buf.fill_rect(px + 2.0, gy, panel_w - 4.0, 1.0, inp.pal.accent.scale_a(10.0));
+                gy += step;
+            }
+            let (ins, ln, th) = (c.s(5.0), c.s(13.0), c.s(2.0));
+            let col = inp.pal.accent.scale_a(160.0);
+            for (cx0, cy0, sx, sy) in [
+                (px + ins, py + ins, 1.0f32, 1.0),
+                (px + panel_w - ins, py + ins, -1.0, 1.0),
+                (px + ins, py + panel_h - ins, 1.0, -1.0),
+                (px + panel_w - ins, py + panel_h - ins, -1.0, -1.0),
+            ] {
+                buf.fill_rect(cx0.min(cx0 + sx * ln), cy0.min(cy0 + sy * th), ln, th, col);
+                buf.fill_rect(cx0.min(cx0 + sx * th), cy0.min(cy0 + sy * ln), th, ln, col);
+            }
+        }
+        StyleKind::Neon => {
+            // inner glow frame
+            buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
+        }
+        StyleKind::Glass | StyleKind::Soft => {}
     }
 
     // keep the first talking row visible (auto-follow for capped panels)
@@ -1007,5 +1133,59 @@ mod qa {
         };
         let frame2 = render_frame(&inp2);
         write_png(&format!("{dir}/frame_empty_frost.png"), &frame2.buf).unwrap();
+
+        // style variants (mockups 1..5) — same scene, per-style paint
+        for (i, (st_id, _ru, _en)) in StyleKind::ALL.iter().enumerate() {
+            let mut a3 = Appearance::default();
+            a3.style = st_id.to_string();
+            a3.accent = StyleKind::ACCENTS[i].to_string();
+            let pal3 = Palette::from_appearance(&a3);
+            let s_alice = {
+                let mut u = mk("100", "Alice", true, false, false, false);
+                u.channel_commander = true;
+                u
+            };
+            let s_me = {
+                let mut u = mk("1", "Я", false, false, false, true);
+                u.away = true;
+                u.away_message = "ушёл на обед".into();
+                u
+            };
+            let s_bob = {
+                let mut u = mk("101", "Bob", false, false, true, false);
+                u.output_muted = true;
+                u.priority_speaker = true;
+                u
+            };
+            let inp3 = FrameInput {
+                appearance: &a3,
+                pal: &pal3,
+                fonts: &fonts,
+                icons: &icons,
+                status: "live",
+                server_name: "Eternals",
+                channel_name: "Генеральный штаб",
+                user_count: 4,
+                users: vec![s_alice, s_me, s_bob, mk("102", "Мыsha Петров", false, false, false, false)],
+                class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into()), None],
+                whisper_keys: vec![("103".into(), Some("ghost".into()))],
+                whisperers: {
+                    let mut w = mk("103", "Ghost", true, true, false, false);
+                    w.whispering = true;
+                    vec![w]
+                },
+                feed: vec![
+                    FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 },
+                    FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 },
+                ],
+                lang: "ru",
+                move_mode: true,
+                now_ms: 1500,
+                work_h: 1080.0,
+                roster_scroll: 0.0,
+            };
+            let fr = render_frame(&inp3);
+            write_png(&format!("{dir}/style-{st_id}.png"), &fr.buf).unwrap();
+        }
     }
 }

@@ -7,7 +7,7 @@ use crate::font::Fonts;
 use crate::layout::{render_frame, FeedItem, FrameInput};
 use crate::model::UserState;
 use crate::render::Buf;
-use crate::theme::{parse_color, Palette, Rgba};
+use crate::theme::{parse_color, Palette, Rgba, StyleKind};
 
 pub const WIN_W: f32 = 900.0;
 /// Scrollable left-pane height (title 58 + bottom margin 16).
@@ -60,6 +60,7 @@ pub enum Ctrl {
     MoveOverlay,
     Preset(u8),
     Swatch(u8),
+    Style(u8),
     Toggle(&'static str),
     Cycle(&'static str),
     Slider(&'static str),
@@ -127,6 +128,15 @@ impl SettingsModel {
             Ctrl::Swatch(i) => {
                 if let Some(c) = ACCENT_SWATCHES.get(i as usize) {
                     self.app.accent = c.to_string();
+                    self.touch();
+                }
+            }
+            Ctrl::Style(i) => {
+                if let Some(st) = StyleKind::ALL.get(i as usize) {
+                    self.app.style = st.0.to_string();
+                    if let Some(acc) = StyleKind::ACCENTS.get(i as usize) {
+                        self.app.accent = acc.to_string();
+                    }
                     self.touch();
                 }
             }
@@ -549,6 +559,25 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         c.fonts.draw(buf, pane_x + 4.0, y + 16.0, text, 14.0, true, c.pal.accent);
         buf.fill_rect(pane_x + 4.0, y + 24.0, pane_w - 8.0, 1.0, c.pal.panel_border);
     };
+
+    section(&mut buf, &c, y, &tr(&m.lang, "Стиль панели", "Panel style"));
+    y += 34.0;
+    {
+        let icons = [0u8, 3, 7, 5, 6];
+        let n = StyleKind::ALL.len() as f32;
+        let tile_w = (pane_w - 8.0 - (n - 1.0) * 8.0) / n;
+        for (i, st) in StyleKind::ALL.iter().enumerate() {
+            let bx = pane_x + 4.0 + i as f32 * (tile_w + 8.0);
+            let active = m.app.style == st.0;
+            let label = tr(&m.lang, st.1, st.2);
+            draw_tile(&c, &mut buf, bx, y, tile_w, 56.0, &label, icons[i], active);
+            regions.push(Region {
+                rect: crate::layout::Rect { x: bx, y, w: tile_w, h: 56.0 },
+                ctrl: Ctrl::Style(i as u8),
+            });
+        }
+        y += 62.0;
+    }
 
     section(&mut buf, &c, y, &tr(&m.lang, "Пресеты", "Presets"));
     y += 34.0;
