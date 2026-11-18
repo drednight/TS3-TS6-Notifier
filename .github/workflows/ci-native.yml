@@ -60,7 +60,8 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" native/installer/tsn-native.iss
+          $ver = (Select-String -Path native/Cargo.toml -Pattern '^version = "(.+)"$').Matches.Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver native/installer/tsn-native.iss
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:

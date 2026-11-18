@@ -1,10 +1,10 @@
 name: Build desktop app
 
+# Since v2.0.0 the version line belongs to the native app (ci-native.yml):
+# tag pushes no longer trigger a legacy Electron build. Build it manually when
+# needed.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write

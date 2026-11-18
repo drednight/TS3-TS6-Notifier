@@ -1802,6 +1802,8 @@ pub(crate) mod win32 {
             } else if cmd == 120 {
                 let mut nid = tray_nid(hwnd, null_mut(), "");
                 Shell_NotifyIconW(NIM_DELETE, &mut nid);
+                // «установится при выходе из приложения»
+                crate::settings::try_launch_pending_update();
                 std::process::exit(0);
             }
         }
@@ -1966,6 +1968,14 @@ pub(crate) mod win32 {
                 0,
                 std::ptr::null_mut(),
             ) == 0
+        }
+    }
+
+    /// Launch a file with the shell ("open" verb) — used to run the downloaded
+    /// update installer.
+    pub fn shell_open(path: &str) {
+        unsafe {
+            ShellExecuteW(null_mut(), wide("open").as_ptr(), wide(path).as_ptr(), null(), null(), 1);
         }
     }
 

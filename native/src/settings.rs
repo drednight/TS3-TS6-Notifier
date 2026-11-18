@@ -79,6 +79,8 @@ pub enum Ctrl {
     Reconnect,
     /// «Проверить обновления».
     CheckUpdate,
+    /// «Перезапустить сейчас» — install a downloaded update and restart.
+    InstallUpdate,
     /// Copy the OBS browser-source URL to the clipboard.
     CopyObs,
     /// Copy the diagnostics report to the clipboard.
@@ -129,6 +131,8 @@ pub enum Pending {
     InstallPlugin,
     Reconnect,
     CheckUpdate,
+    /// Install a downloaded update and restart («Перезапустить сейчас»).
+    InstallUpdate,
     CopyObs,
     CopyDiag,
 }
@@ -165,6 +169,8 @@ pub struct SettingsModel {
     pub conn_note: String,
     /// Status line under «Проверить обновления».
     pub update_note: String,
+    /// A downloaded update is ready to install («Перезапустить сейчас»).
+    pub update_ready: bool,
     /// Actions that need `Arc<App>` — performed by run_loop.
     pub pending: Option<Pending>,
 }
@@ -203,6 +209,7 @@ impl SettingsModel {
             select_all: false,
             conn_note: String::new(),
             update_note: String::new(),
+            update_ready: false,
             pending: None,
         }
     }
@@ -323,6 +330,7 @@ impl SettingsModel {
             Ctrl::InstallPlugin => self.pending = Some(Pending::InstallPlugin),
             Ctrl::Reconnect => self.pending = Some(Pending::Reconnect),
             Ctrl::CheckUpdate => self.pending = Some(Pending::CheckUpdate),
+            Ctrl::InstallUpdate => self.pending = Some(Pending::InstallUpdate),
             Ctrl::CopyObs => self.pending = Some(Pending::CopyObs),
             Ctrl::CopyDiag => self.pending = Some(Pending::CopyDiag),
             Ctrl::GroupMap(i) => {
@@ -1496,6 +1504,16 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &m.update_note, 11.5, false, pal.muted);
         y += 24.0;
     }
+    if m.update_ready {
+        // «автообновление»: installer is downloaded — offer the restart
+        let label = tr(&m.lang, "Перезапустить сейчас", "Restart now");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::InstallUpdate,
+        });
+        y += 42.0;
+    }
     {
         let label = tr(&m.lang, "Скопировать ссылку для OBS", "Copy OBS browser-source URL");
         draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
@@ -1692,9 +1710,88 @@ fn ver_newer(remote: &str, current: &str) -> bool {
     false
 }
 
+/// Installer download target — fixed release asset name (release plan).
+pub const UPDATE_SETUP_URL: &str =
+    "https://github.com/drednight/TS3-TS6-Notifier/releases/latest/download/TS3-TS6-Notifier-Setup.exe";
+
+fn update_setup_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("tsn-update-setup.exe")
+}
+
+fn update_marker_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("tsn-update-pending.txt")
+}
+
+/// Translate an update-check mailbox code into the «Ещё» status line.
+pub fn update_note_text(code: &str, lang: &str) -> String {
+    let ru = lang == "ru";
+    if code == "checking" {
+        tr(lang, "Проверка обновлений…", "Checking for updates…")
+    } else if code == "latest" {
+        tr(lang, "У вас последняя версия ✓", "You are up to date ✓")
+    } else if code == "error" {
+        tr(lang, "Не удалось проверить обновления", "Update check failed")
+    } else if let Some(v) = code.strip_prefix("available ") {
+        if ru {
+            format!("Новая версия: {v} — скачиваем…")
+        } else {
+            format!("New version: {v} — downloading…")
+        }
+    } else if let Some(v) = code.strip_prefix("downloaded ") {
+        if ru {
+            format!("Обновление {v} скачано — установится при выходе из приложения")
+        } else {
+            format!("Update {v} downloaded — installs when you quit the app")
+        }
+    } else if let Some(v) = code.strip_prefix("dlfail ") {
+        if ru {
+            format!("Новая версия: {v} — не удалось скачать автоматически")
+        } else {
+            format!("New version: {v} — automatic download failed")
+        }
+    } else {
+        code.to_string()
+    }
+}
+
+/// Launch a downloaded update installer (if any), consuming the marker so the
+/// installer runs exactly once. True when the installer was started.
+pub fn try_launch_pending_update() -> bool {
+    let marker = update_marker_path();
+    let target = match std::fs::read_to_string(&marker) {
+        Ok(t) => t.trim().to_string(),
+        Err(_) => return false,
+    };
+    let _ = std::fs::remove_file(&marker);
+    if target.is_empty() || !std::path::Path::new(&target).exists() {
+        return false;
+    }
+    #[cfg(any(windows, tsn_win32))]
+    {
+        crate::overlay::win32::shell_open(&target);
+        true
+    }
+    #[cfg(not(any(windows, tsn_win32)))]
+    {
+        let _ = target;
+        false
+    }
+}
+
+/// Download the release installer to a temp file («автообновление» step 2).
+#[cfg(any(windows, tsn_win32))]
+fn download_update_setup() -> bool {
+    crate::overlay::win32::fetch_url_to_file(UPDATE_SETUP_URL, &update_setup_path())
+}
+#[cfg(not(any(windows, tsn_win32)))]
+fn download_update_setup() -> bool {
+    false
+}
+
 /// Check GitHub Releases for a newer version (background thread). Broadcasts
-/// `update-status` messages the web UI already understands, and stores the
-/// human line in [`UPDATE_NOTE`] for the settings window.
+/// `update-status` messages the web UI already understands, stores the human
+/// line in [`UPDATE_NOTE`] for the settings window, and downloads the update
+/// installer so it installs on quit / «Перезапустить сейчас».
 pub fn start_update_check(app: Arc<App>) {
     std::thread::Builder::new()
         .name("update-check".into())
@@ -1711,8 +1808,24 @@ pub fn start_update_check(app: Arc<App>) {
                     app.broadcast(&crate::json::obj(vec![
                         ("type", crate::json::Json::s("update-status")),
                         ("status", crate::json::Json::s("available")),
-                        ("version", crate::json::Json::s(tag)),
+                        ("version", crate::json::Json::s(tag.clone())),
                     ]));
+                    // «автообновление»: fetch the installer right away — it then
+                    // installs on quit or via «Перезапустить сейчас»
+                    if download_update_setup() {
+                        let _ = std::fs::write(
+                            update_marker_path(),
+                            update_setup_path().to_string_lossy().as_bytes(),
+                        );
+                        *UPDATE_NOTE.lock().unwrap() = format!("downloaded {tag}");
+                        app.broadcast(&crate::json::obj(vec![
+                            ("type", crate::json::Json::s("update-status")),
+                            ("status", crate::json::Json::s("downloaded")),
+                            ("version", crate::json::Json::s(tag)),
+                        ]));
+                    } else {
+                        *UPDATE_NOTE.lock().unwrap() = format!("dlfail {tag}");
+                    }
                 }
                 Some(_) => {
                     *UPDATE_NOTE.lock().unwrap() = "latest".into();
@@ -1884,17 +1997,8 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
             let mut note = UPDATE_NOTE.lock().unwrap();
             if !note.is_empty() {
                 let code = std::mem::take(&mut *note);
-                m.update_note = if code == "checking" {
-                    tr(&m.lang, "Проверка обновлений…", "Checking for updates…")
-                } else if code == "latest" {
-                    tr(&m.lang, "У вас последняя версия ✓", "You are up to date ✓")
-                } else if code == "error" {
-                    tr(&m.lang, "Не удалось проверить обновления", "Update check failed")
-                } else if let Some(v) = code.strip_prefix("available ") {
-                    format!("{} {}", tr(&m.lang, "Доступна версия", "Update available"), v)
-                } else {
-                    code
-                };
+                m.update_ready = code.starts_with("downloaded ");
+                m.update_note = update_note_text(&code, &m.lang);
             }
         }
         if let Some(p) = m.pending.take() {
@@ -1915,6 +2019,12 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                 Pending::CheckUpdate => {
                     m.update_note = tr(&m.lang, "Проверка обновлений…", "Checking for updates…");
                     start_update_check(app.clone());
+                }
+                Pending::InstallUpdate => {
+                    if try_launch_pending_update() {
+                        std::process::exit(0);
+                    }
+                    m.update_note = tr(&m.lang, "Не удалось запустить установщик", "Failed to start the installer");
                 }
                 Pending::CopyObs => {
                     let url = format!("http://127.0.0.1:{}/?clean=1", crate::http::listen_port());
@@ -2022,6 +2132,21 @@ mod tests {
         assert!(!ver_newer("v1.4.13", "1.5.0"));
         assert!(!ver_newer("1.5.0", "1.5.0"));
         assert!(ver_newer("2.0", "1.9.9"));
+    }
+
+    #[test]
+    fn ver_same_version_is_not_newer() {
+        assert!(!ver_newer("v2.0.0", "2.0.0"));
+        assert!(ver_newer("v2.0.1", "2.0.0"));
+    }
+
+    #[test]
+    fn update_note_codes_translate() {
+        assert_eq!(update_note_text("checking", "ru"), "Проверка обновлений…");
+        assert_eq!(update_note_text("latest", "ru"), "У вас последняя версия ✓");
+        assert!(update_note_text("downloaded v2.0.0", "ru").contains("v2.0.0"));
+        assert!(update_note_text("available v2.0.0", "ru").contains("v2.0.0"));
+        assert!(update_note_text("dlfail v2.0.0", "en").contains("v2.0.0"));
     }
 
     #[test]

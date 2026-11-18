@@ -404,6 +404,15 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             json_response(stream, 200, &obj(vec![("ok", Json::b(true)), ("applied", Json::b(false))]));
             true
         }
+        _ if path.starts_with("/api/update/restart") && method == "POST" => {
+            // «Перезапустить сейчас» — run the downloaded installer and exit
+            let ok = crate::settings::try_launch_pending_update();
+            json_response(stream, 200, &obj(vec![("ok", Json::b(ok))]));
+            if ok {
+                std::process::exit(0);
+            }
+            true
+        }
         _ if path.starts_with("/api/overlay/clickthrough") && method == "POST" => {
             json_response(stream, 200, &obj(vec![("ok", Json::b(true)), ("applied", Json::b(false))]));
             true
