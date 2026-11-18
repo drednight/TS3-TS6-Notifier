@@ -565,7 +565,7 @@ impl Overlay {
                                     #[cfg(any(windows, tsn_win32))]
                                     crate::settings::spawn_once(self.app.clone(), self.port);
                                     #[cfg(not(any(windows, tsn_win32)))]
-                                    host.open_url(&format!("http://127.0.0.1:{}/", self.port));
+                                    host.open_url(&format!("http://127.0.0.1:{}/?open=settings", self.port));
                                 }
                                 Hit::Save => self.confirm_move(),
                                 Hit::Discard => self.cancel_move(),
@@ -677,6 +677,16 @@ pub fn spawn(app: Arc<App>, port: u16) -> JoinHandle<()> {
 
 /// win32 backend — always compiled so it type-checks on every platform;
 /// the windows import libs are only linked when targeting windows.
+/// Open a URL in the user's default browser (used for the web settings menu).
+pub fn open_url_external(url: &str) {
+    #[cfg(any(windows, tsn_win32))]
+    win32::open_url_external(url);
+    #[cfg(not(any(windows, tsn_win32)))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
 pub(crate) mod win32 {
     use super::*;
     use crate::render::Buf;
@@ -1390,18 +1400,7 @@ pub(crate) mod win32 {
         }
 
         fn open_url(&self, url: &str) {
-            let wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-            let op: Vec<u16> = "open\0".encode_utf16().collect();
-            unsafe {
-                ShellExecuteW(
-                    std::ptr::null_mut(),
-                    op.as_ptr(),
-                    wide.as_ptr(),
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    1,
-                );
-            }
+            open_url_external(url);
         }
 
         fn screen_area(&self) -> (f64, f64, f64, f64) {
@@ -1773,6 +1772,25 @@ pub(crate) mod win32 {
         }
     }
 
+    /// ShellExecuteW "open" — launch the default browser on `url`.
+    pub fn open_url_external(url: &str) {
+        let wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        let op: Vec<u16> = "open\0".encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            );
+        }
+    }
+
+    /// The legacy native settings window. Retired: the settings menu lives in
+    /// the web UI now (opened in the browser via settings::spawn_once).
+    #[allow(dead_code)]
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         set_thread_dpi_aware(); // crisp rendering at fractional display scaling
         let mut host = unsafe { WinHost::new() };

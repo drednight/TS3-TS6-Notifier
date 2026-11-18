@@ -92,12 +92,17 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let rc_path = out_dir.join("app.rc");
     let res_path = out_dir.join("app.res");
-    let ico_str = ico
-        .canonicalize()
-        .unwrap_or(ico)
-        .to_string_lossy()
+    // canonicalize() yields a UNC \\?\ path which rc.exe refuses to open —
+    // strip the prefix (the reason the v0.1.6 embed silently produced an
+    // icon-less exe). Failures below are FATAL: the icon is a hard
+    // requirement and a silent skip shipped icon-less builds twice already.
+    let ico_abs = ico.canonicalize().unwrap_or(ico.clone());
+    let ico_disp = ico_abs.to_string_lossy().into_owned();
+    let ico_disp = ico_disp
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&ico_disp)
         .replace('\\', "\\\\");
-    std::fs::write(&rc_path, format!("1 ICON \"{ico_str}\"\n")).expect("write app.rc");
+    std::fs::write(&rc_path, format!("1 ICON \"{ico_disp}\"\n")).expect("write app.rc");
 
     let name = rc.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
     let ok = if name.contains("windres") {
@@ -116,9 +121,18 @@ fn main() {
             .unwrap_or(false)
     };
     if !ok || !res_path.exists() {
-        println!("cargo:warning=resource compiler failed — exe will have no icon");
-        return;
+        println!(
+            "::error::build.rs: resource compiler {} failed to build app.rc — exe would have no icon",
+            rc.display()
+        );
+        panic!("resource compiler failed (rc={})", rc.display());
     }
+    // Diagnostics that survive into the CI annotations (readable via API).
+    println!(
+        "::notice::build.rs: icon embedded via {} from {}",
+        rc.display(),
+        ico_abs.display()
+    );
     // `rustc-link-arg-bin` is supported on every cargo we care about; the
     // package's only bin target is `tsn-native`
     println!("cargo:rustc-link-arg-bin=tsn-native={}", res_path.display());

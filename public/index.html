@@ -132,6 +132,16 @@
 
         <div class="opt-group">
           <div class="opt-group-title"><span class="group-ico" data-ico="wave"></span><span data-i18n="grpPanel"></span></div>
+          <div class="field">
+            <label data-i18n="panelStyle"></label>
+            <select data-enum="style">
+              <option value="glass" data-i18n="styleGlass"></option>
+              <option value="neon" data-i18n="styleNeon"></option>
+              <option value="hud" data-i18n="styleHud"></option>
+              <option value="soft" data-i18n="styleSoft"></option>
+              <option value="crt" data-i18n="styleCrt"></option>
+            </select>
+          </div>
           <div class="field" data-slider="glow" data-min="0" data-max="1" data-step="0.05">
             <label data-i18n="glow"></label><output></output>
             <input type="range" />
@@ -259,6 +269,10 @@
           </div>
           <div class="field" data-slider="whisperDelay" data-min="1" data-max="30" data-step="1">
             <label data-i18n="whisperDelay"></label><output></output>
+            <input type="range" />
+          </div>
+          <div class="field" data-slider="talkingFade" data-min="0" data-max="10" data-step="1">
+            <label data-i18n="talkingFade"></label><output></output>
             <input type="range" />
           </div>
 

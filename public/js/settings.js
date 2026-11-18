@@ -34,8 +34,10 @@
     hideQuery: true,
     animations: true,
     eqStyle: 'bars',
+    style: 'glass',
     talkingFirst: true,
     onlyTalking: false,
+    talkingFade: 2,
     compact: false,
     hideEmpty: false,
     showWhispers: true,
@@ -90,6 +92,7 @@
     corner: ['tl', 'tr', 'bl', 'br'],
     language: ['auto', 'ru', 'en'],
     eqStyle: ['bars', 'ring', 'dots', 'none'],
+    style: ['glass', 'neon', 'hud', 'soft', 'crt'],
     evScopeJoin: ['all', 'own'],
     evScopeLeave: ['all', 'own'],
     evScopeMove: ['all', 'own'],
@@ -111,6 +114,7 @@
     marginY: [0, 20000],
     chatDelay: [2, 60],
     whisperDelay: [1, 30],
+    talkingFade: [0, 10],
     eventsCount: [1, 10],
     eventsDelay: [5, 60],
   };
@@ -302,7 +306,7 @@
 
   function fmt(key, value) {
     if (key === 'opacity' || key === 'glow' || key === 'scale') return `${Math.round(value * 100)}%`;
-    if (key === 'chatDelay' || key === 'eventsDelay') return `${value} s`;
+    if (key === 'chatDelay' || key === 'eventsDelay' || key === 'whisperDelay' || key === 'talkingFade') return `${value} s`;
     if (key === 'eventsCount') return `${value}`;
     if (key === 'panelMaxHeight' && Number(value) <= 0) return window.I18N?.t('sizeAuto') || 'auto';
     return `${value}px`;

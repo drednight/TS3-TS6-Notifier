@@ -1179,17 +1179,18 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
 
 /* ---------------- window runner ---------------- */
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use crate::http::App;
 use crate::overlay::{Ev, Host};
 
-static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 static SETTINGS_RECT: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
 
-/// True while the settings window is open (the overlay leaves topmost z-order alone then).
+/// The settings menu lives in the web UI (opened in the browser) now — there
+/// is no native settings window anymore, so the overlay never has to yield
+/// topmost z-order to it.
 pub fn is_open() -> bool {
-    SETTINGS_OPEN.load(Ordering::SeqCst)
+    false
 }
 
 pub fn set_window_rect(x: f64, y: f64, w: f64, h: f64) {
@@ -1204,30 +1205,23 @@ pub fn rect_contains(px: f64, py: f64) -> bool {
     }
 }
 
-/// Open the settings window at most once («окно настроек открывается один раз»).
-pub fn spawn_once(app: Arc<App>, port: u16) {
-    if SETTINGS_OPEN.swap(true, Ordering::SeqCst) {
+/// Open the settings menu in the web UI — the classic menu, now the single
+/// one («вернуть старое меню, но с новыми функциями»). The gear button and the
+/// tray entry both land in the browser on the settings page. A short debounce
+/// keeps double clicks from spawning extra tabs.
+pub fn spawn_once(_app: Arc<App>, port: u16) {
+    static LAST_OPEN_MS: AtomicU64 = AtomicU64::new(0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_OPEN_MS.load(Ordering::SeqCst);
+    if now_ms.saturating_sub(last) < 3_000 {
         return;
     }
-    let _ = port;
-    #[cfg(not(any(windows, tsn_win32)))]
-    let _ = &app;
-    struct OpenGuard;
-    impl Drop for OpenGuard {
-        fn drop(&mut self) {
-            SETTINGS_OPEN.store(false, Ordering::SeqCst);
-        }
-    }
-    std::thread::Builder::new()
-        .name("settings".into())
-        .spawn(move || {
-            // RAII: even a panic inside the settings UI must release the
-            // "already open" flag — otherwise settings can never open again
-            let _guard = OpenGuard;
-            #[cfg(any(windows, tsn_win32))]
-            crate::overlay::win32::run_settings(app.clone());
-        })
-        .ok();
+    LAST_OPEN_MS.store(now_ms, Ordering::SeqCst);
+    let url = format!("http://127.0.0.1:{port}/?open=settings");
+    crate::overlay::open_url_external(&url);
 }
 
 fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
