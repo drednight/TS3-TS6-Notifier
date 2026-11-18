@@ -90,3 +90,19 @@ jobs:
           commit=$(git commit-tree "$tree" -m "ci build ${GITHUB_SHA}")
           git push origin "+$commit:refs/notes/tsn-win-build"
           echo "transport ok: $commit"
+      # Attach the build to a GitHub Release when one already exists for this
+      # version — releases are still created deliberately, this never publishes
+      # on its own (uploads.github.com is reachable from runners, not the dev
+      # sandbox).
+      - name: attach build to GitHub release (if v<version> exists)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Select-String -Path native/Cargo.toml -Pattern '^version = "(.+)"$').Matches.Groups[1].Value
+          $tag = "v$ver"
+          $exists = gh release view $tag --json tagName -q .tagName 2>$null
+          if (-not $exists) { echo "no release $tag — nothing to attach"; exit 0 }
+          gh release upload $tag dist-win/TS3-TS6-Notifier-Setup.exe dist-win/tsn-native-win64.zip --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          echo "assets attached to $tag"
