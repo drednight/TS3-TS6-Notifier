@@ -217,6 +217,9 @@ pub enum Ev {
     DragMove(f32, f32),
     DragEnd,
     Wheel(f32),
+    /// Keyboard text input for the settings window: printable chars, \x08
+    /// backspace, pasted strings.
+    Text(String),
 }
 
 pub trait Host {
@@ -864,6 +867,22 @@ pub(crate) mod win32 {
         fn GetTokenInformation(token: *mut c_void, class: u32, info: *mut c_void, len: u32, out: *mut u32) -> i32;
     }
 
+    #[cfg_attr(windows, link(name = "user32"))]
+    extern "system" {
+        fn OpenClipboard(owner: *mut c_void) -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(fmt: u32, mem: *mut c_void) -> *mut c_void;
+        fn GetClipboardData(fmt: u32) -> *mut c_void;
+        fn CloseClipboard() -> i32;
+    }
+
+    #[cfg_attr(windows, link(name = "kernel32"))]
+    extern "system" {
+        fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+        fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+        fn GlobalUnlock(mem: *mut c_void) -> i32;
+    }
+
     const TOKEN_QUERY: u32 = 0x0008;
     const TOKEN_ELEVATION_CLASS: u32 = 20;
 
@@ -980,6 +999,9 @@ pub(crate) mod win32 {
 
     // window messages / styles
     const WM_DESTROY: u32 = 0x0002;
+    const WM_CHAR: u32 = 0x0102;
+    const WM_PASTE: u32 = 0x0302;
+    const CF_UNICODETEXT: u32 = 13;
     const WM_LBUTTONUP: u32 = 0x0202;
     const WM_MOUSEMOVE: u32 = 0x0200;
     const WM_LBUTTONDOWN: u32 = 0x0201;
@@ -1013,6 +1035,8 @@ pub(crate) mod win32 {
 
     /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta, timestamp ms).
     static WHEELS: std::sync::Mutex<Vec<(POINT, f32, u64)>> = std::sync::Mutex::new(Vec::new());
+    /// Keyboard input queued by the settings window proc (WM_CHAR / paste).
+    static KEYS: std::sync::Mutex<Vec<Ev>> = std::sync::Mutex::new(Vec::new());
     const WHEEL_TTL_MS: u64 = 1500;
 
     fn wheel_now_ms() -> u64 {
@@ -1090,6 +1114,32 @@ pub(crate) mod win32 {
                     );
                 }
                 DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_PASTE => {
+                if settings_hwnd_is(hwnd) {
+                    let text = get_clipboard_text();
+                    if !text.is_empty() {
+                        KEYS.lock().unwrap().push(Ev::Text(text));
+                    }
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wp, lp)
+                }
+            }
+            WM_CHAR => {
+                if settings_hwnd_is(hwnd) {
+                    let ch = char::from_u32(wp as u32);
+                    match ch {
+                        Some('\x08') => KEYS.lock().unwrap().push(Ev::Text("\x08".into())),
+                        Some(c) if (c as u32) >= 0x20 && c != '\x7f' => {
+                            KEYS.lock().unwrap().push(Ev::Text(c.to_string()))
+                        }
+                        _ => {}
+                    }
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wp, lp)
+                }
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
@@ -1281,6 +1331,7 @@ pub(crate) mod win32 {
 
         fn pump(&mut self) -> Vec<Ev> {
             let mut out = Vec::new();
+            out.append(&mut KEYS.lock().unwrap());
             {
                 // wheel captured by the LL hook — only events over OUR window;
                 // stale entries expire so a busy desktop never starves fresh events
@@ -1766,6 +1817,86 @@ pub(crate) mod win32 {
         }
     }
 
+    /// Copy `text` to the Windows clipboard.
+    pub fn set_clipboard_text(text: &str) {
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return;
+            }
+            EmptyClipboard();
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes = wide.len() * 2;
+            let h = GlobalAlloc(0x0002 /* GMEM_MOVEABLE */, bytes);
+            if !h.is_null() {
+                let dst = GlobalLock(h);
+                if !dst.is_null() {
+                    std::ptr::copy_nonoverlapping(wide.as_ptr(), dst as *mut u16, wide.len());
+                    GlobalUnlock(h);
+                    SetClipboardData(CF_UNICODETEXT, h);
+                }
+            }
+            CloseClipboard();
+        }
+    }
+
+    /// Current clipboard text ("" when empty or unavailable).
+    pub fn get_clipboard_text() -> String {
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return String::new();
+            }
+            let mut out = String::new();
+            let h = GetClipboardData(CF_UNICODETEXT);
+            if !h.is_null() {
+                let p = GlobalLock(h) as *const u16;
+                if !p.is_null() {
+                    let mut len = 0usize;
+                    while *p.add(len) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(p, len);
+                    out = String::from_utf16_lossy(slice);
+                    GlobalUnlock(h);
+                }
+            }
+            CloseClipboard();
+            out
+        }
+    }
+
+    /// Download `url` to `path` via urlmon (WinINet HTTPS). Used by the
+    /// update check — no TLS stack needed in-process.
+    pub fn fetch_url_to_file(url: &str, path: &std::path::Path) -> bool {
+        #[cfg_attr(windows, link(name = "urlmon"))]
+        extern "system" {
+            fn URLDownloadToFileW(
+                p0: *mut c_void,
+                sz_url: *const u16,
+                sz_file: *const u16,
+                reserved: u32,
+                cb: *mut c_void,
+            ) -> i32;
+        }
+        #[cfg_attr(windows, link(name = "ole32"))]
+        extern "system" {
+            fn CoInitializeEx(reserved: *mut c_void, model: u32) -> i32;
+        }
+        unsafe {
+            CoInitializeEx(std::ptr::null_mut(), 0);
+        }
+        let wurl: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        let wpath: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            URLDownloadToFileW(
+                std::ptr::null_mut(),
+                wurl.as_ptr(),
+                wpath.as_ptr(),
+                0,
+                std::ptr::null_mut(),
+            ) == 0
+        }
+    }
+
     /// ShellExecuteW "open" — launch the default browser on `url`.
     pub fn open_url_external(url: &str) {
         let wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1782,9 +1913,8 @@ pub(crate) mod win32 {
         }
     }
 
-    /// The legacy native settings window. Retired: the settings menu lives in
-    /// the web UI now (opened in the browser via settings::spawn_once).
-    #[allow(dead_code)]
+    /// The settings window: a separate taskbar app («настройки отдельным
+    /// приложением в панели задач»).
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         set_thread_dpi_aware(); // crisp rendering at fractional display scaling
         let mut host = unsafe { WinHost::new() };
@@ -1802,6 +1932,14 @@ pub(crate) mod win32 {
         }
         let cfg = app.store.lock().unwrap().get().clone();
         let mut m = crate::settings::SettingsModel::new_full(cfg.appearance.clone(), cfg.desktop.clone(), app.version.clone());
+        m.source = cfg.source.clone();
+        m.ts3 = cfg.ts3.clone();
+        m.ts6 = cfg.ts6.clone();
+        for (id, cls) in &cfg.classes.map {
+            if let Some(row) = m.groups.iter_mut().find(|(rid, _)| rid == id) {
+                row.1 = cls.clone();
+            }
+        }
         let fonts = crate::font::Fonts::load();
         let icons = crate::assets::Icons::load();
         crate::settings::run_loop(&mut m, &app, &fonts, &icons, &mut host);

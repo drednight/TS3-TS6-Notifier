@@ -19,6 +19,14 @@ use std::time::Duration;
 
 pub type RestartFn = Arc<dyn Fn() + Send + Sync>;
 
+/// The port the HTTP server actually listens on (for the OBS URL etc.).
+static LISTEN_PORT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The live server port (0 before serve() binds).
+pub fn listen_port() -> u16 {
+    LISTEN_PORT.load(std::sync::atomic::Ordering::SeqCst) as u16
+}
+
 pub struct App {
     pub store: Arc<Mutex<ConfigStore>>,
     pub latest: RwLock<OverlayState>,
@@ -184,7 +192,7 @@ fn memory_rows() -> Vec<String> {
     vec!["главный процесс (Rust/сервер): rss=n/a".into()]
 }
 
-fn diagnostics(app: &App) -> String {
+pub(crate) fn diagnostics(app: &App) -> String {
     let cfg = app.store.lock().unwrap().get().clone();
     let latest = app.latest.read().unwrap().clone();
     let ts3_lines = lines_for("[ts3]");
@@ -390,6 +398,9 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             true
         }
         _ if path.starts_with("/api/update/check") && method == "POST" => {
+            // real check against GitHub Releases; progress arrives over WS as
+            // `update-status` and in the settings window's «Ещё» section
+            crate::settings::start_update_check(app.clone());
             json_response(stream, 200, &obj(vec![("ok", Json::b(true)), ("applied", Json::b(false))]));
             true
         }
@@ -405,7 +416,7 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
     }
 }
 
-fn plugin_install(dll: &str) -> Json {
+pub(crate) fn plugin_install(dll: &str) -> Json {
     if !cfg!(windows) {
         return obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))]);
     }
@@ -512,6 +523,7 @@ pub fn serve(app: Arc<App>, host: &str, preferred_port: u16) -> std::io::Result<
         TcpListener::bind((host, 0))?
     };
     let port = listener.local_addr()?.port();
+    LISTEN_PORT.store(port as u64, std::sync::atomic::Ordering::SeqCst);
     thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };

@@ -590,7 +590,10 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     let (px, py) = (pad, pad);
     // drop shadow + panel body (style-aware radius/tint/border)
     let pr = c.rad(c.s(inp.pal.radius as f32));
-    buf.shadow_round_rect(px, py, panel_w, panel_h, pr, c.s(18.0), inp.pal.shadow);
+    // «Размытие» (appearance.blur) drives the shadow softness — the slider
+    // must have a visible effect in the native renderer too.
+    let blur_px = ((inp.appearance.blur as f32) * c.k).clamp(3.0, 44.0);
+    buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
     buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
     buf.stroke_round_rect(px, py, panel_w, panel_h, pr, c.border(inp.pal.panel_border), 1.0);
 

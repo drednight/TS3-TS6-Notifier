@@ -325,6 +325,8 @@ pub fn appearance_to_json(a: &Appearance) -> Json {
         ("radius", Json::n(a.radius)),
         ("scale", Json::n(a.scale)),
         ("fontSize", Json::n(a.font_size)),
+        ("panelWidth", Json::n(a.panel_width)),
+        ("panelMaxHeight", Json::n(a.panel_max_height)),
         ("corner", Json::s(a.corner.clone())),
         ("marginX", Json::n(a.margin_x)),
         ("marginY", Json::n(a.margin_y)),
@@ -576,6 +578,18 @@ mod tests {
         let patch3 = crate::json::Json::parse(r#"{"desktop":{"overlayLayer":"bogus"}}"#).unwrap();
         c.update_from(&patch3);
         assert_eq!(c.desktop.overlay_layer, "fullscreen"); // unchanged on invalid
+    }
+
+    #[test]
+    fn to_json_keeps_panel_size() {
+        // regression: appearance_to_json once dropped panelWidth/panelMaxHeight,
+        // so the settings window's «Панель» sliders never reached the store
+        let mut cfg = AppConfig::default();
+        cfg.appearance.panel_width = 401.0;
+        cfg.appearance.panel_max_height = 640.0;
+        let back = AppConfig::from_json(&cfg.to_json());
+        assert_eq!(back.appearance.panel_width, 401.0);
+        assert_eq!(back.appearance.panel_max_height, 640.0);
     }
 
     #[test]

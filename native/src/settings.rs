@@ -71,6 +71,66 @@ pub enum Ctrl {
     Select(&'static str),
     /// An open dropdown option: (key, option index).
     Option(&'static str, u8),
+    /// Text input field: (field id). Click focuses it for typing.
+    Field(&'static str),
+    /// «Установить плагин» (TeamSpeak 3).
+    InstallPlugin,
+    /// «Переподключить» — restart the active connector.
+    Reconnect,
+    /// «Проверить обновления».
+    CheckUpdate,
+    /// Copy the OBS browser-source URL to the clipboard.
+    CopyObs,
+    /// Copy the diagnostics report to the clipboard.
+    CopyDiag,
+    /// Cycle the class for a server-group row: (row index).
+    GroupMap(u8),
+}
+
+/// Server-group rows edited by «Группы сервера» — id → class key ("" = none).
+pub const GROUP_ROWS: [&str; 17] = [
+    "442", "444", "445", "446", "447", "448", "449", "450", "451", "452", "453", "454", "455", "456",
+    "502", "503", "506",
+];
+
+/// Class cycle order («нет» first). RU labels via class_ru().
+pub const CLASS_CYCLE: [&str; 19] = [
+    "", "kanglong", "blood", "werewolf", "warrior", "assassin", "gunslinger", "guardian", "priest",
+    "archer", "paladin", "shaman", "bard", "mystic", "druid", "monkey", "mage", "reaper", "ghost",
+];
+
+fn class_ru(key: &str) -> &'static str {
+    match key {
+        "kanglong" => "Канглонг",
+        "blood" => "Кровавый",
+        "werewolf" => "Оборотень",
+        "warrior" => "Воин",
+        "assassin" => "Ассасин",
+        "gunslinger" => "Стрелок",
+        "guardian" => "Страж",
+        "priest" => "Жрец",
+        "archer" => "Лучник",
+        "paladin" => "Паладин",
+        "shaman" => "Шаман",
+        "bard" => "Бард",
+        "mystic" => "Мистик",
+        "druid" => "Друид",
+        "monkey" => "Обезьяна",
+        "mage" => "Маг",
+        "reaper" => "Жнец",
+        "ghost" => "Призрак",
+        _ => "нет",
+    }
+}
+
+/// Actions that need `Arc<App>` — executed by run_loop after click().
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pending {
+    InstallPlugin,
+    Reconnect,
+    CheckUpdate,
+    CopyObs,
+    CopyDiag,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +151,22 @@ pub struct SettingsModel {
     pub version: String,
     /// Which dropdown (if any) is currently open.
     pub open_select: Option<&'static str>,
+    /// Connection draft («Связь») — persisted on every change.
+    pub source: String,
+    pub ts3: crate::config::TsEndpoint,
+    pub ts6: crate::config::TsEndpoint,
+    /// «Группы сервера»: (group id, class key or "").
+    pub groups: Vec<(String, String)>,
+    /// Focused text field id (typing goes there).
+    pub focus: Option<&'static str>,
+    /// First typed char replaces the whole value (classic select-all focus).
+    pub select_all: bool,
+    /// Transient status line under the «Связь» controls.
+    pub conn_note: String,
+    /// Status line under «Проверить обновления».
+    pub update_note: String,
+    /// Actions that need `Arc<App>` — performed by run_loop.
+    pub pending: Option<Pending>,
 }
 
 impl SettingsModel {
@@ -111,6 +187,113 @@ impl SettingsModel {
             changed: false,
             version,
             open_select: None,
+            source: "mock".into(),
+            ts3: crate::config::TsEndpoint {
+                host: "127.0.0.1".into(),
+                port: 25639,
+                api_key: String::new(),
+            },
+            ts6: crate::config::TsEndpoint {
+                host: "127.0.0.1".into(),
+                port: 5899,
+                api_key: String::new(),
+            },
+            groups: GROUP_ROWS.iter().map(|id| (id.to_string(), String::new())).collect(),
+            focus: None,
+            select_all: false,
+            conn_note: String::new(),
+            update_note: String::new(),
+            pending: None,
+        }
+    }
+
+    /// Type into the focused field: printable chars, `\x08` backspace, pasted
+    /// strings. The first char after focusing replaces the value.
+    pub fn text_input(&mut self, text: &str) {
+        let Some(id) = self.focus else { return };
+        let mut dirty = false;
+        for ch in text.chars() {
+            if ch == '\x08' {
+                if id.ends_with("_port") {
+                    let mut v = self.field_text(id);
+                    if self.select_all {
+                        v.clear();
+                    } else {
+                        v.pop();
+                    }
+                    self.set_field_text(id, &v);
+                } else {
+                    let sel = self.select_all;
+                    if let Some(f) = self.field_mut(id) {
+                        if sel {
+                            f.clear();
+                        } else {
+                            f.pop();
+                        }
+                    }
+                }
+                self.select_all = false;
+                dirty = true;
+            } else if ch == '\r' || ch == '\n' {
+                // multi-line input is meaningless here
+            } else if id.ends_with("_port") {
+                if !ch.is_ascii_digit() {
+                    continue;
+                }
+                let mut v = self.field_text(id);
+                if self.select_all {
+                    v.clear();
+                }
+                if v.len() < 5 {
+                    v.push(ch);
+                }
+                self.set_field_text(id, &v);
+                self.select_all = false;
+                dirty = true;
+            } else if (ch as u32) >= 0x20 {
+                let sel = self.select_all;
+                if let Some(f) = self.field_mut(id) {
+                    if sel {
+                        f.clear();
+                    }
+                    f.push(ch);
+                }
+                self.select_all = false;
+                dirty = true;
+            }
+        }
+        if dirty {
+            self.touch();
+        }
+    }
+
+    fn field_mut(&mut self, id: &str) -> Option<&mut String> {
+        match id {
+            "ts3_host" => Some(&mut self.ts3.host),
+            "ts3_key" => Some(&mut self.ts3.api_key),
+            "ts6_host" => Some(&mut self.ts6.host),
+            "ts6_key" => Some(&mut self.ts6.api_key),
+            _ => None,
+        }
+    }
+
+    fn field_text(&self, id: &str) -> String {
+        match id {
+            "ts3_host" => self.ts3.host.clone(),
+            "ts3_key" => self.ts3.api_key.clone(),
+            "ts6_host" => self.ts6.host.clone(),
+            "ts6_key" => self.ts6.api_key.clone(),
+            "ts3_port" => self.ts3.port.to_string(),
+            "ts6_port" => self.ts6.port.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn set_field_text(&mut self, id: &str, v: &str) {
+        match id {
+            "ts3_port" => self.ts3.port = v.parse().unwrap_or(0).clamp(0, 65535),
+            "ts6_port" => self.ts6.port = v.parse().unwrap_or(0).clamp(0, 65535),
+            _ => {}
         }
     }
 
@@ -127,19 +310,42 @@ impl SettingsModel {
         if self.open_select.is_some() && !matches!(ctrl, Ctrl::Option(..) | Ctrl::Select(_)) {
             self.open_select = None;
         }
+        if !matches!(ctrl, Ctrl::Field(_)) {
+            self.focus = None;
+            self.select_all = false;
+        }
         match ctrl {
             Ctrl::Close => self.close_requested = true,
+            Ctrl::Field(id) => {
+                self.focus = Some(id);
+                self.select_all = true;
+            }
+            Ctrl::InstallPlugin => self.pending = Some(Pending::InstallPlugin),
+            Ctrl::Reconnect => self.pending = Some(Pending::Reconnect),
+            Ctrl::CheckUpdate => self.pending = Some(Pending::CheckUpdate),
+            Ctrl::CopyObs => self.pending = Some(Pending::CopyObs),
+            Ctrl::CopyDiag => self.pending = Some(Pending::CopyDiag),
+            Ctrl::GroupMap(i) => {
+                if let Some(row) = self.groups.get_mut(i as usize) {
+                    let cur = CLASS_CYCLE.iter().position(|c| *c == row.1.as_str()).unwrap_or(0);
+                    let next = CLASS_CYCLE[(cur + 1) % CLASS_CYCLE.len()];
+                    row.1 = next.to_string();
+                    self.touch();
+                }
+            }
             Ctrl::Select(key) => {
                 self.open_select = if self.open_select == Some(key) { None } else { Some(key) };
             }
             Ctrl::Option(key, i) => {
                 let v = match key {
+                    "source" => ["mock", "ts3", "ts6"].get(i as usize).copied().unwrap_or("mock"),
                     "language" => ["auto", "ru", "en"].get(i as usize).copied().unwrap_or("auto"),
                     "eq_style" => ["bars", "ring", "dots", "none"].get(i as usize).copied().unwrap_or("bars"),
                     "overlay_layer" => ["panel", "screen", "fullscreen"].get(i as usize).copied().unwrap_or("screen"),
                     _ => ["all", "own"].get(i as usize).copied().unwrap_or("all"),
                 };
                 match key {
+                    "source" => self.source = v.into(),
                     "language" => self.app.language = v.into(),
                     "eq_style" => self.app.eq_style = v.into(),
                     "overlay_layer" => self.desktop.overlay_layer = v.into(),
@@ -541,6 +747,37 @@ fn draw_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &st
 }
 
 /// Accent pill button («Переместить оверлей»).
+fn draw_field(
+    c: &Ctx,
+    buf: &mut SBuf,
+    x: f32,
+    y: f32,
+    w: f32,
+    label: &str,
+    value: &str,
+    focused: bool,
+    select_all: bool,
+) -> crate::layout::Rect {
+    buf.text(&c.fonts, x, y + 12.0, label, 11.5, false, c.pal.muted);
+    let by = y + 18.0;
+    let bh = 28.0;
+    buf.round_rect(x, by, w, bh, 7.0, c.pal.row_hover);
+    if focused {
+        buf.stroke_round_rect(x, by, w, bh, 7.0, c.pal.accent, 1.4);
+    }
+    let ty = by + bh * 0.62;
+    if focused && select_all {
+        let tw = c.fonts.measure(value, 12.5, false);
+        buf.fill_rect(x + 7.0, by + 6.0, tw + 3.0, bh - 12.0, c.pal.accent.scale_a(120.0));
+    }
+    buf.text(&c.fonts, x + 8.0, ty, value, 12.5, false, c.pal.text);
+    if focused {
+        let tw = c.fonts.measure(value, 12.5, false);
+        buf.fill_rect(x + 10.0 + tw, by + 7.0, 1.6, bh - 14.0, c.pal.text);
+    }
+    crate::layout::Rect { x, y: by, w, h: bh }
+}
+
 fn draw_button(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str) {
     buf.round_rect(x, y, w, h, 12.0, c.pal.accent.scale_a(235.0));
     let tw = c.fonts.measure(label, 13.5, true);
@@ -584,6 +821,13 @@ fn draw_slider(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, val
 }
 
 fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
+    if key == "source" {
+        return vec![
+            (tr(lang, "Демо-данные", "Mock data"), 0),
+            ("TeamSpeak 3".into(), 1),
+            ("TeamSpeak 6".into(), 2),
+        ];
+    }
     match key {
         "language" => vec![
             (tr(lang, "Авто", "Auto"), 0),
@@ -608,7 +852,15 @@ fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
     }
 }
 
-fn select_index(key: &str, app: &Appearance, desktop: &DesktopPrefs) -> u8 {
+fn select_index(key: &str, m: &SettingsModel) -> u8 {
+    if key == "source" {
+        return match m.source.as_str() {
+            "ts3" => 1,
+            "ts6" => 2,
+            _ => 0,
+        };
+    }
+    let (app, desktop) = (&m.app, &m.desktop);
     let v = match key {
         "language" => app.language.as_str(),
         "eq_style" => app.eq_style.as_str(),
@@ -965,7 +1217,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     }
     {
         let label = tr(&m.lang, "Индикатор речи", "Talking indicator");
-        let cur = select_index("eq_style", &m.app, &m.desktop);
+        let cur = select_index("eq_style", m);
         let opts = select_options("eq_style", &m.lang);
         let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
         let open = m.open_select == Some("eq_style");
@@ -1036,7 +1288,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             rect: crate::layout::Rect { x: pane_x + 4.0, y, w: tw, h: 26.0 },
             ctrl: Ctrl::Toggle(tkey),
         });
-        let cur = select_index(skey, &m.app, &m.desktop);
+        let cur = select_index(skey, m);
         let opts = select_options(skey, &m.lang);
         let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
         let open = m.open_select == Some(skey);
@@ -1052,7 +1304,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     y += 34.0;
     {
         let label = tr(&m.lang, "Слой оверлея", "Overlay layer");
-        let cur = select_index("overlay_layer", &m.app, &m.desktop);
+        let cur = select_index("overlay_layer", m);
         let opts = select_options("overlay_layer", &m.lang);
         let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
         let open = m.open_select == Some("overlay_layer");
@@ -1065,7 +1317,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     }
     {
         let label = tr(&m.lang, "Язык", "Language");
-        let cur = select_index("language", &m.app, &m.desktop);
+        let cur = select_index("language", m);
         let opts = select_options("language", &m.lang);
         let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
         let open = m.open_select == Some("language");
@@ -1089,6 +1341,130 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         });
         y += 30.0;
     }
+    // ---- Связь (Connection): source + TS3 plugin + TS6 ----
+    section(&mut buf, &c, y, &tr(&m.lang, "Связь", "Connection"));
+    y += 34.0;
+    {
+        let label = tr(&m.lang, "Источник данных", "Data source");
+        let cur = select_index("source", m);
+        let opts = select_options("source", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("source");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("source") });
+        y += 36.0;
+    }
+    {
+        buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 3", 12.5, true, pal.text);
+        y += 24.0;
+    }
+    for (id, ru, en) in [
+        ("ts3_host", "Хост", "Host"),
+        ("ts3_port", "Порт", "Port"),
+        ("ts3_key", "API ключ", "API key"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let focused = m.focus == Some(id);
+        let rect = draw_field(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &m.field_text(id), focused, focused && m.select_all);
+        regions.push(Region { rect, ctrl: Ctrl::Field(id) });
+        y += 56.0;
+    }
+    {
+        let label = tr(&m.lang, "Установить плагин", "Install plugin");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::InstallPlugin,
+        });
+        y += 42.0;
+    }
+    {
+        buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 6", 12.5, true, pal.text);
+        y += 24.0;
+    }
+    for (id, ru, en) in [
+        ("ts6_host", "Хост", "Host"),
+        ("ts6_port", "Порт", "Port"),
+        ("ts6_key", "API ключ", "API key"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let focused = m.focus == Some(id);
+        let rect = draw_field(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &m.field_text(id), focused, focused && m.select_all);
+        regions.push(Region { rect, ctrl: Ctrl::Field(id) });
+        y += 56.0;
+    }
+    {
+        let label = tr(&m.lang, "Переподключить", "Reconnect");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::Reconnect,
+        });
+        y += 42.0;
+    }
+    if !m.conn_note.is_empty() {
+        buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &m.conn_note, 11.5, false, pal.muted);
+        y += 24.0;
+    }
+    {
+        // «Группы сервера» — class mapping per server group (collapsed list)
+        let t = tr(&m.lang, "Группы сервера", "Server groups");
+        buf.text(&c.fonts, pane_x + 4.0, y + 13.0, &t, 12.5, true, pal.text);
+        y += 24.0;
+    }
+    for (i, (gid, cls)) in m.groups.iter().enumerate() {
+        let label = format!("#{} — {}", gid, class_ru(cls));
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 30.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 30.0 },
+            ctrl: Ctrl::GroupMap(i as u8),
+        });
+        y += 36.0;
+    }
+
+    // ---- Ещё (More): updates, OBS, diagnostics ----
+    section(&mut buf, &c, y, &tr(&m.lang, "Ещё", "More"));
+    y += 34.0;
+    {
+        let ver = format!("TS3-TS6 Notifier v{}", m.version);
+        buf.text(&c.fonts, pane_x + 4.0, y + 13.0, &ver, 12.0, false, pal.muted);
+        y += 26.0;
+    }
+    {
+        let label = tr(&m.lang, "Проверить обновления", "Check for updates");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::CheckUpdate,
+        });
+        y += 42.0;
+    }
+    if !m.update_note.is_empty() {
+        buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &m.update_note, 11.5, false, pal.muted);
+        y += 24.0;
+    }
+    {
+        let label = tr(&m.lang, "Скопировать ссылку для OBS", "Copy OBS browser-source URL");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::CopyObs,
+        });
+        y += 42.0;
+    }
+    {
+        let label = tr(&m.lang, "Скопировать диагностику", "Copy diagnostics report");
+        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+            ctrl: Ctrl::CopyDiag,
+        });
+        y += 42.0;
+    }
+
     let content_h = y + m.scroll - pane_y;
     buf.clear_clip();
     // scroll indicator
@@ -1147,7 +1523,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     // ---- dropdown popup (topmost layer) ----
     if let (Some(key), Some((px, py))) = (m.open_select, open_sel_at) {
         let opts = select_options(key, &m.lang);
-        let cur = select_index(key, &m.app, &m.desktop);
+        let cur = select_index(key, m);
         let row_h = 30.0f32;
         let pop_h = opts.len() as f32 * row_h + 10.0;
         let mut pop_y = py + 32.0;
@@ -1179,18 +1555,19 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
 
 /* ---------------- window runner ---------------- */
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::http::App;
 use crate::overlay::{Ev, Host};
 
 static SETTINGS_RECT: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
 
-/// The settings menu lives in the web UI (opened in the browser) now — there
-/// is no native settings window anymore, so the overlay never has to yield
-/// topmost z-order to it.
+static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// True while the settings window is open (the overlay leaves topmost z-order
+/// alone then, so the separate settings app stays usable above it).
 pub fn is_open() -> bool {
-    false
+    SETTINGS_OPEN.load(Ordering::SeqCst)
 }
 
 pub fn set_window_rect(x: f64, y: f64, w: f64, h: f64) {
@@ -1205,28 +1582,143 @@ pub fn rect_contains(px: f64, py: f64) -> bool {
     }
 }
 
-/// Open the settings menu in the web UI — the classic menu, now the single
-/// one («вернуть старое меню, но с новыми функциями»). The gear button and the
-/// tray entry both land in the browser on the settings page. A short debounce
-/// keeps double clicks from spawning extra tabs.
-pub fn spawn_once(_app: Arc<App>, port: u16) {
-    static LAST_OPEN_MS: AtomicU64 = AtomicU64::new(0);
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let last = LAST_OPEN_MS.load(Ordering::SeqCst);
-    if now_ms.saturating_sub(last) < 3_000 {
+/// Open the settings as a SEPARATE app in the taskbar («отдельным приложением
+/// в панели задач»). At most one window at a time; reopening is allowed after
+/// the window closes.
+pub fn spawn_once(app: Arc<App>, _port: u16) {
+    if SETTINGS_OPEN.swap(true, Ordering::SeqCst) {
         return;
     }
-    LAST_OPEN_MS.store(now_ms, Ordering::SeqCst);
-    let url = format!("http://127.0.0.1:{port}/?open=settings");
-    crate::overlay::open_url_external(&url);
+    struct OpenGuard;
+    impl Drop for OpenGuard {
+        fn drop(&mut self) {
+            SETTINGS_OPEN.store(false, Ordering::SeqCst);
+        }
+    }
+    std::thread::Builder::new()
+        .name("settings".into())
+        .spawn(move || {
+            // RAII: even a panic inside the settings UI must release the
+            // "already open" flag — otherwise settings can never open again
+            let _guard = OpenGuard;
+            #[cfg(any(windows, tsn_win32))]
+            crate::overlay::win32::run_settings(app.clone());
+            #[cfg(not(any(windows, tsn_win32)))]
+            let _ = &app;
+        })
+        .ok();
 }
 
-fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
+/* ---------------- update check ---------------- */
+
+/// Human-readable update status shown in «Ещё» (also mirrored over WS).
+pub static UPDATE_NOTE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// "v1.2.3"-style tag → numeric parts (missing parts count as 0).
+fn ver_parts(tag: &str) -> Vec<u64> {
+    tag.trim()
+        .trim_start_matches('v')
+        .split('.')
+        .map(|p| {
+            p.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+/// True when `remote` names a strictly newer version than `current`.
+fn ver_newer(remote: &str, current: &str) -> bool {
+    let (a, b) = (ver_parts(remote), ver_parts(current));
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// Check GitHub Releases for a newer version (background thread). Broadcasts
+/// `update-status` messages the web UI already understands, and stores the
+/// human line in [`UPDATE_NOTE`] for the settings window.
+pub fn start_update_check(app: Arc<App>) {
+    std::thread::Builder::new()
+        .name("update-check".into())
+        .spawn(move || {
+            *UPDATE_NOTE.lock().unwrap() = "checking".into();
+            app.broadcast(&crate::json::obj(vec![
+                ("type", crate::json::Json::s("update-status")),
+                ("status", crate::json::Json::s("checking")),
+            ]));
+            let tag = fetch_release_tag();
+            match tag {
+                Some(tag) if ver_newer(&tag, &app.version) => {
+                    *UPDATE_NOTE.lock().unwrap() = format!("available {tag}");
+                    app.broadcast(&crate::json::obj(vec![
+                        ("type", crate::json::Json::s("update-status")),
+                        ("status", crate::json::Json::s("available")),
+                        ("version", crate::json::Json::s(tag)),
+                    ]));
+                }
+                Some(_) => {
+                    *UPDATE_NOTE.lock().unwrap() = "latest".into();
+                    app.broadcast(&crate::json::obj(vec![
+                        ("type", crate::json::Json::s("update-status")),
+                        ("status", crate::json::Json::s("latest")),
+                    ]));
+                }
+                None => {
+                    *UPDATE_NOTE.lock().unwrap() = "error".into();
+                    app.broadcast(&crate::json::obj(vec![
+                        ("type", crate::json::Json::s("update-status")),
+                        ("status", crate::json::Json::s("error")),
+                    ]));
+                }
+            }
+        })
+        .ok();
+}
+
+/// Latest release tag from the GitHub API (""-free Option), or None.
+fn fetch_release_tag() -> Option<String> {
+    #[cfg(any(windows, tsn_win32))]
+    {
+        let url = "https://api.github.com/repos/drednight/TS3-TS6-Notifier/releases/latest";
+        let tmp = std::env::temp_dir().join("tsn-latest-release.json");
+        if !crate::overlay::win32::fetch_url_to_file(url, &tmp) {
+            return None;
+        }
+        let text = std::fs::read_to_string(&tmp).ok()?;
+        let json = crate::json::Json::parse(&text).ok()?;
+        let tag = json.get("tag_name")?.as_str()?.to_string();
+        if tag.is_empty() {
+            None
+        } else {
+            Some(tag)
+        }
+    }
+    #[cfg(not(any(windows, tsn_win32)))]
+    {
+        // dev/test hosts have no WinINet — report "no update info"
+        None
+    }
+}
+
+fn persist(app: &Arc<App>, m: &SettingsModel) -> bool {
+    let d = &m.desktop;
+    let ts_json = |t: &crate::config::TsEndpoint| {
+        crate::json::obj(vec![
+            ("host", crate::json::Json::s(t.host.clone())),
+            ("port", crate::json::Json::n(t.port as f64)),
+            ("apiKey", crate::json::Json::s(t.api_key.clone())),
+        ])
+    };
     let patch = crate::json::obj(vec![
-        ("appearance", crate::config::appearance_to_json(a)),
+        ("appearance", crate::config::appearance_to_json(&m.app)),
         (
             "desktop",
             crate::json::obj(vec![
@@ -1235,12 +1727,39 @@ fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
                 ("overlayLayer", crate::json::Json::s(d.overlay_layer.clone())),
             ]),
         ),
+        ("source", crate::json::Json::s(m.source.clone())),
+        ("ts3", ts_json(&m.ts3)),
+        ("ts6", ts_json(&m.ts6)),
+        (
+            "classes",
+            crate::json::obj(vec![
+                ("enabled", crate::json::Json::b(true)),
+                (
+                    "map",
+                    crate::json::obj(
+                        m.groups
+                            .iter()
+                            .map(|(id, cls)| {
+                                (
+                                    id.as_str(),
+                                    crate::json::Json::s(if cls.is_empty() { "none" } else { cls.as_str() }),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+            ]),
+        ),
     ]);
-    app.store.lock().unwrap().update(&patch);
+    let restart = app.store.lock().unwrap().update(&patch);
+    if restart {
+        (app.restart_connector)();
+    }
     app.broadcast(&crate::json::obj(vec![
         ("type", crate::json::Json::s("config")),
         ("config", app.config_json()),
     ]));
+    restart
 }
 
 /// Settings event loop (cross-platform; the host presents + pumps input).
@@ -1307,6 +1826,62 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                 Ev::DragMove(ex, _) => m.drag_to((ex - x as f32) / k),
                 Ev::DragEnd => m.drag_end(),
                 Ev::Wheel(dy) => m.wheel(dy, content_h),
+                Ev::Text(t) => m.text_input(&t),
+            }
+        }
+        {
+            // consume the update-check mailbox (status codes from the thread)
+            let mut note = UPDATE_NOTE.lock().unwrap();
+            if !note.is_empty() {
+                let code = std::mem::take(&mut *note);
+                m.update_note = if code == "checking" {
+                    tr(&m.lang, "Проверка обновлений…", "Checking for updates…")
+                } else if code == "latest" {
+                    tr(&m.lang, "У вас последняя версия ✓", "You are up to date ✓")
+                } else if code == "error" {
+                    tr(&m.lang, "Не удалось проверить обновления", "Update check failed")
+                } else if let Some(v) = code.strip_prefix("available ") {
+                    format!("{} {}", tr(&m.lang, "Доступна версия", "Update available"), v)
+                } else {
+                    code
+                };
+            }
+        }
+        if let Some(p) = m.pending.take() {
+            match p {
+                Pending::InstallPlugin => {
+                    let res = crate::http::plugin_install(&app.plugin_dll);
+                    let ok = matches!(res.get("ok"), Some(crate::json::Json::Bool(true)));
+                    m.conn_note = if ok {
+                        tr(&m.lang, "Плагин установлен ✓", "Plugin installed ✓")
+                    } else {
+                        tr(&m.lang, "Не удалось установить плагин", "Plugin install failed")
+                    };
+                }
+                Pending::Reconnect => {
+                    (app.restart_connector)();
+                    m.conn_note = tr(&m.lang, "Переподключено ✓", "Reconnected ✓");
+                }
+                Pending::CheckUpdate => {
+                    m.update_note = tr(&m.lang, "Проверка обновлений…", "Checking for updates…");
+                    start_update_check(app.clone());
+                }
+                Pending::CopyObs => {
+                    let url = format!("http://127.0.0.1:{}/?clean=1", crate::http::listen_port());
+                    #[cfg(any(windows, tsn_win32))]
+                    crate::overlay::win32::set_clipboard_text(&url);
+                    #[cfg(not(any(windows, tsn_win32)))]
+                    let _ = &url;
+                    m.update_note = tr(&m.lang, "Ссылка скопирована ✓", "URL copied ✓");
+                }
+                Pending::CopyDiag => {
+                    let report = crate::http::diagnostics(&app);
+                    #[cfg(any(windows, tsn_win32))]
+                    crate::overlay::win32::set_clipboard_text(&report);
+                    #[cfg(not(any(windows, tsn_win32)))]
+                    let _ = &report;
+                    m.update_note = tr(&m.lang, "Отчёт скопирован ✓", "Report copied ✓");
+                }
             }
         }
         if m.move_requested {
@@ -1319,7 +1894,9 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
         }
         if m.changed {
             m.changed = false;
-            persist(app, &m.app, &m.desktop);
+            if persist(app, m) {
+                m.conn_note = tr(&m.lang, "Переподключено ✓", "Reconnected ✓");
+            }
         }
         if m.close_requested {
             return;
@@ -1334,6 +1911,67 @@ mod tests {
 
     fn model() -> SettingsModel {
         SettingsModel::new(Appearance::default(), "0.1.0".into())
+    }
+
+    #[test]
+    fn text_fields_edit_and_replace() {
+        let mut m = model();
+        m.click(Ctrl::Field("ts3_host"), 0.0, 0.0);
+        assert_eq!(m.focus, Some("ts3_host"));
+        m.text_input("ex");
+        assert_eq!(m.ts3.host, "ex"); // select-all focus replaced the default
+        m.text_input("ample");
+        assert_eq!(m.ts3.host, "example");
+        m.text_input("\x08\x08");
+        assert_eq!(m.ts3.host, "examp");
+        // ports accept digits only, max 5
+        m.click(Ctrl::Field("ts3_port"), 0.0, 0.0);
+        m.text_input("1a2b3");
+        assert_eq!(m.ts3.port, 123);
+        // api keys stay free-form
+        m.click(Ctrl::Field("ts6_key"), 0.0, 0.0);
+        m.text_input("k-9!x");
+        assert_eq!(m.ts6.api_key, "k-9!x");
+    }
+
+    #[test]
+    fn source_select_switches_endpoint() {
+        let mut m = model();
+        m.click(Ctrl::Select("source"), 0.0, 0.0);
+        assert_eq!(m.open_select, Some("source"));
+        m.click(Ctrl::Option("source", 1), 0.0, 0.0);
+        assert_eq!(m.source, "ts3");
+        assert_eq!(m.open_select, None);
+    }
+
+    #[test]
+    fn pending_actions_queue_for_the_host() {
+        let mut m = model();
+        m.click(Ctrl::CheckUpdate, 0.0, 0.0);
+        assert_eq!(m.pending, Some(Pending::CheckUpdate));
+        m.click(Ctrl::InstallPlugin, 0.0, 0.0);
+        assert_eq!(m.pending, Some(Pending::InstallPlugin));
+    }
+
+    #[test]
+    fn group_rows_cycle_classes() {
+        let mut m = model();
+        assert_eq!(m.groups.len(), 17);
+        m.click(Ctrl::GroupMap(0), 0.0, 0.0);
+        assert_eq!(m.groups[0].1, "kanglong");
+        for _ in 0..CLASS_CYCLE.len() - 1 {
+            m.click(Ctrl::GroupMap(0), 0.0, 0.0);
+        }
+        assert_eq!(m.groups[0].1, ""); // wrapped around to «нет»
+    }
+
+    #[test]
+    fn version_compare_semver() {
+        assert!(ver_newer("v1.5.1", "1.5.0"));
+        assert!(ver_newer("1.4.13", "0.1.0"));
+        assert!(!ver_newer("v1.4.13", "1.5.0"));
+        assert!(!ver_newer("1.5.0", "1.5.0"));
+        assert!(ver_newer("2.0", "1.9.9"));
     }
 
     #[test]
@@ -1411,7 +2049,7 @@ mod tests {
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 12);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 8);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 9);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count() == 4);
     }
 
