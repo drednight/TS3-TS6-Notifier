@@ -28,7 +28,6 @@ impl Rect {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     Drag,
-    Gear,
     Save,
     Discard,
 }
@@ -694,27 +693,15 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let sv = inp.fonts.truncate(&sv, c.em(0.78), false, panel_w - c.s(31.0) - c.s(84.0));
             inp.fonts.draw(&mut buf, tx, cy + c.s(33.0) + c.em(0.78) * 0.6, &sv, c.em(0.78), false, inp.pal.muted);
         }
-        // right cluster: user count pill + gear
-        let gear_s = c.s(28.0);
-        let gx = px + panel_w - gear_s - c.s(8.0);
-        let gy = cy + (header_h - gear_s) * 0.5;
-        // gear pictogram
-        let (gcx, gcy) = (gx + gear_s * 0.5, gy + gear_s * 0.5);
-        buf.stroke_circle(gcx, gcy, c.s(4.6), inp.pal.icon, c.s(2.4));
-        buf.stroke_circle(gcx, gcy, c.s(1.4), inp.pal.icon, c.s(1.6));
-        for i in 0..8 {
-            let ang = i as f32 * std::f32::consts::PI / 4.0;
-            let (sn, cs) = (ang.sin(), ang.cos());
-            buf.line(gcx + cs * c.s(5.6), gcy + sn * c.s(5.6), gcx + cs * c.s(6.9), gcy + sn * c.s(6.9), c.s(2.8), inp.pal.icon);
-        }
-        hits.push((Rect { x: gx, y: gy, w: gear_s, h: gear_s }, Hit::Gear));
+        // right cluster: user count pill (the settings button lives in the
+        // tray now — «убери кнопку настроек с оверлея самого»)
         if a.show_user_count {
             let cnt = inp.user_count.to_string();
             let size = c.em(0.78);
             let tw = inp.fonts.measure(&cnt, size, true);
             let pw = tw + c.s(16.0);
             let ph = c.s(19.0);
-            let pxx = gx - c.s(6.0) - pw;
+            let pxx = px + panel_w - c.s(8.0) - pw;
             let pyy = cy + (header_h - ph) * 0.5;
             buf.round_rect(pxx, pyy, pw, ph, c.rad(ph * 0.5), inp.pal.row_hover);
             inp.fonts.draw(&mut buf, pxx + (pw - tw) * 0.5, pyy + ph * 0.68, &cnt, size, true, inp.pal.muted);
@@ -1013,7 +1000,7 @@ mod tests {
         assert_eq!(frame.buf.w, (PANEL_W + SHADOW_PAD * 2.0) as i32);
         // move-mode hits: save + discard + drag
         let has = |h: Hit| frame.hits.iter().any(|(_, x)| *x == h);
-        assert!(has(Hit::Save) && has(Hit::Discard) && has(Hit::Drag) && has(Hit::Gear));
+        assert!(has(Hit::Save) && has(Hit::Discard) && has(Hit::Drag));
         // talking outline pixels exist (talk-outline green around row)
         // center of panel is opaque
         let i = ((frame.buf.h / 2 * frame.buf.w + frame.buf.w / 2) * 4) as usize;
@@ -1050,7 +1037,7 @@ mod tests {
         };
         let frame = render_frame(&inp);
         assert_eq!(frame.panel_w, PANEL_W * 1.25);
-        assert!(frame.hits.iter().all(|(_, h)| *h == Hit::Gear) || frame.hits.is_empty());
+        assert!(frame.hits.is_empty());
     }
 }
 

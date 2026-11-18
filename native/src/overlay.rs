@@ -561,12 +561,6 @@ impl Overlay {
                     for (rect, hit) in &hits {
                         if rect.contains(lx as f32, ly as f32) {
                             match hit {
-                                Hit::Gear => {
-                                    #[cfg(any(windows, tsn_win32))]
-                                    crate::settings::spawn_once(self.app.clone(), self.port);
-                                    #[cfg(not(any(windows, tsn_win32)))]
-                                    host.open_url(&format!("http://127.0.0.1:{}/?open=settings", self.port));
-                                }
                                 Hit::Save => self.confirm_move(),
                                 Hit::Discard => self.cancel_move(),
                                 _ => {}
