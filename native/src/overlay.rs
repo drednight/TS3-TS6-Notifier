@@ -746,6 +746,9 @@ pub(crate) mod win32 {
         fn GetCursorPos(p: *mut POINT) -> i32;
         fn ScreenToClient(w: *mut c_void, p: *mut POINT) -> i32;
         fn SetForegroundWindow(w: *mut c_void) -> i32;
+        fn SetWindowTextW(w: *mut c_void, text: *const u16) -> i32;
+        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+        fn GetProcAddress(m: *mut c_void, name: *const u8) -> *mut c_void;
         fn SetWindowPos(
             w: *mut c_void,
             after: *mut c_void,
@@ -950,6 +953,7 @@ pub(crate) mod win32 {
     const DIB_RGB_COLORS: u32 = 0;
     const SPI_GETWORKAREA: u32 = 0x0030;
     const IDC_ARROW: usize = 32512;
+    const WS_EX_APPWINDOW: i32 = 0x0004_0000;
 
     /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta, timestamp ms).
     static WHEELS: std::sync::Mutex<Vec<(POINT, f32, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -967,11 +971,16 @@ pub(crate) mod win32 {
             let info = &*(l as *const MSLLHOOKSTRUCT);
             let delta = ((info.mouse_data >> 16) & 0xffff) as u16 as i16 as f32;
             let now = wheel_now_ms();
+            // MSLLHOOKSTRUCT.pt is always PHYSICAL; our windows live in the
+            // DPI-unaware logical space — convert before routing
+            let sc = dpi_scale();
+            let px = (info.pt.x as f64 / sc).round() as i32;
+            let py = (info.pt.y as f64 / sc).round() as i32;
             let mut q = WHEELS.lock().unwrap();
             // prune stale entries, then push — fresh events are NEVER dropped
             q.retain(|(_, _, ts)| now.saturating_sub(*ts) < WHEEL_TTL_MS);
             if q.len() < 64 {
-                q.push((POINT { x: info.pt.x, y: info.pt.y }, delta / 120.0 * 40.0, now));
+                q.push((POINT { x: px, y: py }, delta / 120.0 * 40.0, now));
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
@@ -1161,10 +1170,11 @@ pub(crate) mod win32 {
                     .map_or(true, |t| now.duration_since(t).as_millis() >= 500);
                 if due || resized {
                     self.topmost_at = Some(now);
-                    // while the settings window is open it owns the top of the
-                    // topmost band — re-asserting here would slide under it and
-                    // make the window look unfocusable
-                    if !crate::settings::is_open() {
+                    // while the settings window is open the OVERLAY leaves the top
+                    // of the topmost band alone (it would slide over the settings
+                    // window); the settings host itself must keep asserting — its
+                    // SWP_SHOWWINDOW is what makes the window appear
+                    if self.settings_host || !crate::settings::is_open() {
                         SetWindowPos(
                             self.hwnd,
                             HWND_TOPMOST as *mut c_void,
@@ -1461,7 +1471,38 @@ pub(crate) mod win32 {
         nid
     }
 
+    /// Ask for per-monitor DPI v2 on this thread (Win10 1607+): system menus
+    /// drawn by a DPI-unaware thread get bitmap-stretched and look blurry.
+    fn set_thread_dpi_aware() {
+        unsafe {
+            let u = GetModuleHandleW(wide("user32").as_ptr());
+            if !u.is_null() {
+                let p = GetProcAddress(u, b"SetThreadDpiAwarenessContext\0".as_ptr());
+                if !p.is_null() {
+                    let f: extern "system" fn(isize) -> isize = std::mem::transmute(p);
+                    f(-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+                }
+            }
+        }
+    }
+
+    /// Logical-pixel ratio of this DPI-unaware process (physical / logical).
+    fn dpi_scale() -> f64 {
+        unsafe {
+            let u = GetModuleHandleW(wide("user32").as_ptr());
+            if !u.is_null() {
+                let p = GetProcAddress(u, b"GetDpiForSystem\0".as_ptr());
+                if !p.is_null() {
+                    let f: extern "system" fn() -> u32 = std::mem::transmute(p);
+                    return ((f() as f64) / 96.0).max(1.0);
+                }
+            }
+            1.0
+        }
+    }
+
     fn show_tray_menu(hwnd: *mut c_void, app: &std::sync::Arc<crate::http::App>, port: u16) {
+        set_thread_dpi_aware();
         let cfg = app.store.lock().unwrap().get().clone();
         let ru = cfg.appearance.language != "en";
         unsafe {
@@ -1490,8 +1531,9 @@ pub(crate) mod win32 {
             let mut pt = POINT { x: 0, y: 0 };
             GetCursorPos(&mut pt);
             let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, null());
+            // DestroyMenu(menu) recursively destroys the attached submenus —
+            // destroying `sub` again corrupts the Win32 menu heap (app crash!)
             DestroyMenu(menu);
-            DestroyMenu(sub);
             if cmd == 0 {
                 return;
             }
@@ -1602,6 +1644,16 @@ pub(crate) mod win32 {
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
         let mut host = unsafe { WinHost::new() };
         host.settings_host = true;
+        unsafe {
+            // show a taskbar button while the settings window is open: no
+            // WS_EX_TOOLWINDOW, add WS_EX_APPWINDOW + a human title
+            SetWindowLongW(
+                host.hwnd,
+                GWL_EXSTYLE,
+                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_APPWINDOW,
+            );
+            SetWindowTextW(host.hwnd, wide("TS3-TS6 Notifier — Настройки").as_ptr());
+        }
         let cfg = app.store.lock().unwrap().get().clone();
         let mut m = crate::settings::SettingsModel::new_full(cfg.appearance.clone(), cfg.desktop.clone(), app.version.clone());
         let fonts = crate::font::Fonts::load();

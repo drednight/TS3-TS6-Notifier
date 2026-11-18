@@ -1124,12 +1124,20 @@ pub fn spawn_once(app: Arc<App>, port: u16) {
     let _ = port;
     #[cfg(not(any(windows, tsn_win32)))]
     let _ = &app;
+    struct OpenGuard;
+    impl Drop for OpenGuard {
+        fn drop(&mut self) {
+            SETTINGS_OPEN.store(false, Ordering::SeqCst);
+        }
+    }
     std::thread::Builder::new()
         .name("settings".into())
         .spawn(move || {
+            // RAII: even a panic inside the settings UI must release the
+            // "already open" flag — otherwise settings can never open again
+            let _guard = OpenGuard;
             #[cfg(any(windows, tsn_win32))]
             crate::overlay::win32::run_settings(app.clone());
-            SETTINGS_OPEN.store(false, Ordering::SeqCst);
         })
         .ok();
 }

@@ -218,9 +218,20 @@ fn main() {
             let store = store.clone();
             move || {
                 if let Some(app) = weak.upgrade() {
-                    let mut s = slot.lock().unwrap();
-                    s.stop();
-                    *s = start_connector(&store, &app);
+                    // a connector that fails to start must never poison the
+                    // slot lock or take the app down with it
+                    let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
+                    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.stop()));
+                    if stopped.is_err() {
+                        eprintln!("[server] connector stop panicked");
+                    }
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_connector(&store, &app))) {
+                        Ok(h) => *s = h,
+                        Err(_) => {
+                            eprintln!("[server] connector start panicked");
+                            *s = Handle::Stub;
+                        }
+                    }
                 }
             }
         }),
