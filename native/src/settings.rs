@@ -909,7 +909,7 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
         if m.close_requested {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(33));
     }
 }
 

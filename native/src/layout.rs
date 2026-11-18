@@ -34,6 +34,7 @@ pub enum Hit {
 }
 
 /// One feed (events/chat) line.
+#[derive(Debug, Clone)]
 pub struct FeedItem {
     pub nickname: String,
     pub text: String,

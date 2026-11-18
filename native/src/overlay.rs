@@ -279,6 +279,16 @@ pub struct Overlay {
     dragging: bool,
     drag_off: (f64, f64),
     last_size: (f64, f64),
+    /// Reusable fullscreen scratch buffer (screen/fullscreen layer) — the
+    /// per-frame alloc of a monitor-sized buffer was a system-wide freeze.
+    scratch: Option<crate::render::Buf>,
+    /// Dirty tracking: skip render+present when nothing changed.
+    last_key: Option<String>,
+    last_present_ms: u64,
+    /// Cached hit geometry for input between re-renders.
+    last_hits: Vec<(crate::layout::Rect, crate::layout::Hit)>,
+    last_geom: (f64, f64, f64, f64, f64), // px, py, pad, pw, ph
+    last_origin: (f64, f64),
 }
 
 impl Overlay {
@@ -296,6 +306,12 @@ impl Overlay {
             dragging: false,
             drag_off: (0.0, 0.0),
             last_size: (PANEL_W as f64, 200.0),
+            scratch: None,
+            last_key: None,
+            last_present_ms: 0,
+            last_hits: Vec::new(),
+            last_geom: (0.0, 0.0, 0.0, PANEL_W as f64, 200.0),
+            last_origin: (0.0, 0.0),
         }
     }
 
@@ -372,6 +388,37 @@ impl Overlay {
         let feed = build_feed(&state, &a, lang);
 
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
+
+        // ---- dirty check: an unchanged frame skips render + present ----
+        let anim_active = a.animations && (rows.iter().any(|u| u.talking) || !whisperers.is_empty());
+        let time_bucket = if anim_active {
+            now_ms / 33
+        } else if !feed.is_empty() {
+            now_ms / 500 // feed lines expire over time
+        } else {
+            0
+        };
+        let work = host.work_area();
+        let layer = cfg.desktop.overlay_layer.clone();
+        let key = format!(
+            "{}|{:?}|{:?}|{:?}|{:?}|{:.2}|{}|{:?}|{:?}|{}",
+            cfg.to_json().to_string(),
+            state,
+            rows,
+            whisperers,
+            feed,
+            self.roster_scroll,
+            move_mode as u8,
+            self.pending,
+            (work.0, work.1, work.2, work.3),
+            time_bucket
+        );
+        let force = now_ms.saturating_sub(self.last_present_ms) >= 2000;
+        let dirty = force || self.last_key.as_deref() != Some(key.as_str());
+
+        if dirty {
+        self.last_key = Some(key);
+        self.last_present_ms = now_ms;
         let inp = FrameInput {
             appearance: &a,
             pal: &pal,
@@ -397,42 +444,47 @@ impl Overlay {
         self.roster_scroll = frame.scroll_to;
 
         // placement (css px margins; frame sizes are scaled css px)
-        let work = host.work_area();
-        let (mut mx, mut my) = self.pending.unwrap_or((a.margin_x, a.margin_y));
+        let (mx, my) = self.pending.unwrap_or((a.margin_x, a.margin_y));
         let pw = frame.panel_w as f64;
         let ph = frame.panel_h as f64;
-        let (mx2, my2) = clamp_margins(work, pw, ph, mx, my);
-        mx = mx2;
-        my = my2;
+        let (mx, my) = clamp_margins(work, pw, ph, mx, my);
         let (px, py) = panel_pos(work, &a.corner, mx, my, pw, ph);
         self.last_size = (pw, ph);
         // window rect includes the shadow margin
         let pad = (SHADOW_PAD * a.scale.clamp(0.5, 3.0) as f32) as f64;
         let origin = (px - pad, py - pad);
-        let layer = self
-            .app
-            .store
-            .lock()
-            .unwrap()
-            .get()
-            .desktop
-            .overlay_layer
-            .clone();
         if layer == "panel" {
             // v1.4.5 memory saver: the window hugs the panel
             host.present(&frame.buf, frame.panel_w, frame.panel_h, origin.0, origin.1);
         } else {
             // 'screen'/'fullscreen': the window covers the WHOLE monitor, so
             // Windows keeps it above borderless/fullscreen games (v1.4.13).
+            // The monitor-sized scratch buffer is REUSED across frames.
             let (ax, ay, aw, ah) = host.screen_area();
-            let mut big = crate::render::Buf::new(aw as i32, ah as i32);
+            let need = self
+                .scratch
+                .as_ref()
+                .map_or(true, |b| b.w != aw as i32 || b.h != ah as i32);
+            if need {
+                self.scratch = Some(crate::render::Buf::new(aw as i32, ah as i32));
+            }
+            let big = self.scratch.as_mut().unwrap();
+            big.clear();
             big.blit_buf((origin.0 - ax).round() as i32, (origin.1 - ay).round() as i32, &frame.buf);
-            host.present(&big, aw as f32, ah as f32, ax, ay);
+            host.present(big, aw as f32, ah as f32, ax, ay);
+        }
+        self.last_hits = frame.hits;
+        self.last_geom = (px, py, pad, pw, ph);
+        self.last_origin = origin;
         }
 
-        // input
+        // input (cached geometry — identical across skipped frames)
+        let (px, py, pad, pw, ph) = self.last_geom;
+        let origin = self.last_origin;
+        let work = host.work_area();
+        let hits = self.last_hits.clone();
         let events = host.pump();
-        let click_through = self.app.store.lock().unwrap().get().desktop.click_through;
+        let click_through = cfg.desktop.click_through;
         let interactive_wanted = move_mode || self.dragging || !click_through;
         host.set_interactive(interactive_wanted);
         for ev in events {
@@ -440,7 +492,7 @@ impl Overlay {
                 Ev::Click(x, y) => {
                     let lx = x as f64 - origin.0;
                     let ly = y as f64 - origin.1;
-                    for (rect, hit) in &frame.hits {
+                    for (rect, hit) in &hits {
                         if rect.contains(lx as f32, ly as f32) {
                             match hit {
                                 Hit::Gear => {
@@ -865,6 +917,7 @@ pub(crate) mod win32 {
         hwnd: *mut c_void,
         hook: *mut c_void,
         last_rect: (f64, f64, f64, f64),
+        topmost_at: Option<std::time::Instant>,
         mem_dc: *mut c_void,
         dib: *mut c_void,
         dib_bits: *mut u8,
@@ -928,6 +981,7 @@ pub(crate) mod win32 {
                 hwnd,
                 hook,
                 last_rect: (0.0, 0.0, 0.0, 0.0),
+                topmost_at: None,
                 mem_dc: std::ptr::null_mut(),
                 dib: std::ptr::null_mut(),
                 dib_bits: std::ptr::null_mut(),
@@ -984,15 +1038,17 @@ pub(crate) mod win32 {
         fn present(&mut self, buf: &Buf, _pw: f32, _ph: f32, win_x: f64, win_y: f64) {
             self.last_rect = (win_x, win_y, buf.w as f64, buf.h as f64);
             unsafe {
+                let old_dim = (self.w, self.h);
                 self.ensure_surface(buf.w, buf.h);
-                // RGBA -> BGRA
-                let n = (buf.w * buf.h) as usize;
-                for i in 0..n {
-                    let s = i * 4;
-                    *self.dib_bits.add(s) = buf.px[s + 2];
-                    *self.dib_bits.add(s + 1) = buf.px[s + 1];
-                    *self.dib_bits.add(s + 2) = buf.px[s];
-                    *self.dib_bits.add(s + 3) = buf.px[s + 3];
+                let resized = old_dim != (self.w, self.h);
+                // RGBA -> BGRA (chunked slice copy — auto-vectorizable)
+                let n = (buf.w * buf.h * 4) as usize;
+                let dst = std::slice::from_raw_parts_mut(self.dib_bits, n);
+                for (d, s) in dst.chunks_exact_mut(4).zip(buf.px.chunks_exact(4)) {
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
+                    d[3] = s[3];
                 }
                 let pt_dst = POINT { x: win_x as i32, y: win_y as i32 };
                 let pt_src = POINT { x: 0, y: 0 };
@@ -1016,15 +1072,24 @@ pub(crate) mod win32 {
                     ULW_ALPHA,
                 );
                 ReleaseDC(self.hwnd, dc);
-                SetWindowPos(
-                    self.hwnd,
-                    HWND_TOPMOST as *mut c_void,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
+                // Re-assert TOPMOST at most ~2×/s (not every frame): a per-frame
+                // SetWindowPos on a fullscreen layered window stalls the compositor.
+                let now = std::time::Instant::now();
+                let due = self
+                    .topmost_at
+                    .map_or(true, |t| now.duration_since(t).as_millis() >= 500);
+                if due || resized {
+                    self.topmost_at = Some(now);
+                    SetWindowPos(
+                        self.hwnd,
+                        HWND_TOPMOST as *mut c_void,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                }
             }
         }
 
