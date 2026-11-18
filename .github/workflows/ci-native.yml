@@ -88,4 +88,4 @@ jobs:
           tree=$(git mktree < entries.txt)
           commit=$(git commit-tree "$tree" -m "ci build ${GITHUB_SHA}")
           git push origin "+$commit:refs/notes/tsn-win-build"
-          echo "published $commit
+          echo "transport ok: $commit"
