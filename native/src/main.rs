@@ -2,6 +2,9 @@
 //! HTTP/WS server for the web overlay. Drop-in replacement for the Node
 //! server (same config.json, same wire protocol).
 
+// GUI app on Windows: no console window.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod assets;
 mod chatlog;
 mod config;
@@ -166,8 +169,16 @@ fn main() {
     // A declined UAC prompt keeps running un-elevated.
     #[cfg(any(windows, tsn_win32))]
     {
+        let relaunched = std::env::args().any(|a| a == "--elevated-relaunch");
+        if !relaunched && !overlay::win32::acquire_single_instance() {
+            // a copy is already running — exit before any UAC prompt
+            std::process::exit(0);
+        }
         let cfg = store.lock().unwrap().get().clone();
         overlay::win32::maybe_elevate(&cfg);
+        if relaunched && !overlay::win32::acquire_single_instance() {
+            std::process::exit(0);
+        }
     }
 
     let handle_slot: Arc<Mutex<Handle>> = Arc::new(Mutex::new(Handle::Stub));

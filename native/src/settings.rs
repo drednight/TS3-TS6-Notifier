@@ -871,11 +871,13 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
     let y = work.1 + (work.3 - WIN_H as f64) * 0.5;
     loop {
         let (buf, regions, content_h) = render(m, fonts, icons);
-        host.present(&buf, WIN_W, WIN_H, x, y);
+        host.present(&buf, x, y, (x, y, WIN_W as f64, WIN_H as f64));
         host.set_interactive(true);
+        // pump() reports SCREEN coordinates — the model works window-local
         for ev in host.pump() {
             match ev {
                 Ev::Click(ex, ey) => {
+                    let (ex, ey) = (ex - x as f32, ey - y as f32);
                     for r in &regions {
                         if r.rect.contains(ex, ey) {
                             if matches!(r.ctrl, Ctrl::Slider(_)) {
@@ -887,9 +889,9 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                     }
                 }
                 Ev::DragStart(ex, ey) => {
-                    m.drag_begin(ex, ey, &regions);
+                    m.drag_begin(ex - x as f32, ey - y as f32, &regions);
                 }
-                Ev::DragMove(ex, _) => m.drag_to(ex),
+                Ev::DragMove(ex, _) => m.drag_to(ex - x as f32),
                 Ev::DragEnd => m.drag_end(),
                 Ev::Wheel(dy) => m.wheel(dy, content_h),
             }

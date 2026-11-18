@@ -220,7 +220,10 @@ pub enum Ev {
 }
 
 pub trait Host {
-    fn present(&mut self, buf: &crate::render::Buf, panel_w: f32, panel_h: f32, win_x: f64, win_y: f64);
+    /// Present `buf` as a window at (win_x, win_y). `hit` is the SCREEN rect
+    /// where wheel events belong to this window (the panel, not the whole
+    /// monitor-sized window in screen/fullscreen layer mode).
+    fn present(&mut self, buf: &crate::render::Buf, win_x: f64, win_y: f64, hit: (f64, f64, f64, f64));
     fn pump(&mut self) -> Vec<Ev>;
     fn set_interactive(&mut self, on: bool);
     fn open_url(&self, url: &str);
@@ -243,7 +246,7 @@ impl HeadlessHost {
 }
 
 impl Host for HeadlessHost {
-    fn present(&mut self, buf: &crate::render::Buf, _pw: f32, _ph: f32, _x: f64, _y: f64) {
+    fn present(&mut self, buf: &crate::render::Buf, _x: f64, _y: f64, _hit: (f64, f64, f64, f64)) {
         self.last_w = buf.w;
         self.last_h = buf.h;
     }
@@ -413,8 +416,11 @@ impl Overlay {
             (work.0, work.1, work.2, work.3),
             time_bucket
         );
+        let interactive_wanted = move_mode || self.dragging || !cfg.desktop.click_through;
+        let min_gap: u64 = if interactive_wanted { 32 } else { 66 }; // 30fps / 15fps
+        let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap;
         let force = now_ms.saturating_sub(self.last_present_ms) >= 2000;
-        let dirty = force || self.last_key.as_deref() != Some(key.as_str());
+        let dirty = force || (due && self.last_key.as_deref() != Some(key.as_str()));
 
         if dirty {
         self.last_key = Some(key);
@@ -453,9 +459,11 @@ impl Overlay {
         // window rect includes the shadow margin
         let pad = (SHADOW_PAD * a.scale.clamp(0.5, 3.0) as f32) as f64;
         let origin = (px - pad, py - pad);
+        // wheel/hit rect: the PANEL (frame buf incl. shadow pad), in screen px
+        let hit = (origin.0, origin.1, frame.buf.w as f64, frame.buf.h as f64);
         if layer == "panel" {
             // v1.4.5 memory saver: the window hugs the panel
-            host.present(&frame.buf, frame.panel_w, frame.panel_h, origin.0, origin.1);
+            host.present(&frame.buf, origin.0, origin.1, hit);
         } else {
             // 'screen'/'fullscreen': the window covers the WHOLE monitor, so
             // Windows keeps it above borderless/fullscreen games (v1.4.13).
@@ -471,7 +479,7 @@ impl Overlay {
             let big = self.scratch.as_mut().unwrap();
             big.clear();
             big.blit_buf((origin.0 - ax).round() as i32, (origin.1 - ay).round() as i32, &frame.buf);
-            host.present(big, aw as f32, ah as f32, ax, ay);
+            host.present(big, ax, ay, hit);
         }
         self.last_hits = frame.hits;
         self.last_geom = (px, py, pad, pw, ph);
@@ -484,8 +492,6 @@ impl Overlay {
         let work = host.work_area();
         let hits = self.last_hits.clone();
         let events = host.pump();
-        let click_through = cfg.desktop.click_through;
-        let interactive_wanted = move_mode || self.dragging || !click_through;
         host.set_interactive(interactive_wanted);
         for ev in events {
             match ev {
@@ -775,6 +781,8 @@ pub(crate) mod win32 {
     #[cfg_attr(windows, link(name = "kernel32"))]
     extern "system" {
         fn GetCurrentProcess() -> *mut c_void;
+        fn CreateMutexW(attr: *mut c_void, owner: i32, name: *const u16) -> *mut c_void;
+        fn GetLastError() -> u32;
         fn CloseHandle(h: *mut c_void) -> i32;
         fn GetModuleFileNameW(h: *mut c_void, buf: *mut u16, size: u32) -> u32;
     }
@@ -822,8 +830,40 @@ pub(crate) mod win32 {
                 .copied()
                 .chain(std::iter::once(0))
                 .collect();
-            let ret = ShellExecuteW(null_mut(), wide("runas").as_ptr(), exe.as_ptr(), null(), null(), 1);
+            let args: Vec<u16> = "--elevated-relaunch\0".encode_utf16().collect();
+            let ret = ShellExecuteW(null_mut(), wide("runas").as_ptr(), exe.as_ptr(), args.as_ptr(), null(), 1);
             ret as isize > 32
+        }
+    }
+
+    /// Named-mutex single-instance guard. True = this process runs the app.
+    /// The fresh handle is intentionally left open — Windows closes it at
+    /// process exit and the mutex then dies with the process.
+    pub fn acquire_single_instance() -> bool {
+        unsafe {
+            let name: Vec<u16> = "TSN_Notifier_SingleInstance_v1\0".encode_utf16().collect();
+            for attempt in 0..3 {
+                let h = CreateMutexW(null_mut(), 0, name.as_ptr());
+                if h.is_null() {
+                    return true; // cannot check — run anyway
+                }
+                if GetLastError() != 183 {
+                    return true; // created fresh
+                }
+                // Already exists: could be a relaunching parent that is about
+                // to exit (elevation handover) — retry briefly, then give up.
+                crate::overlay::win32::close_handle_retry(h);
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                }
+            }
+            false
+        }
+    }
+
+    fn close_handle_retry(h: *mut c_void) {
+        unsafe {
+            CloseHandle(h);
         }
     }
 
@@ -1035,8 +1075,8 @@ pub(crate) mod win32 {
     }
 
     impl Host for WinHost {
-        fn present(&mut self, buf: &Buf, _pw: f32, _ph: f32, win_x: f64, win_y: f64) {
-            self.last_rect = (win_x, win_y, buf.w as f64, buf.h as f64);
+        fn present(&mut self, buf: &Buf, win_x: f64, win_y: f64, hit: (f64, f64, f64, f64)) {
+            self.last_rect = hit;
             unsafe {
                 let old_dim = (self.w, self.h);
                 self.ensure_surface(buf.w, buf.h);
