@@ -9,7 +9,7 @@ use crate::model::UserState;
 use crate::render::Buf;
 use crate::theme::{parse_color, Palette, Rgba, StyleKind};
 
-pub const WIN_W: f32 = 900.0;
+pub const WIN_W: f32 = 1020.0;
 /// Scrollable left-pane height (title 58 + bottom margin 16).
 pub const PANE_H: f32 = WIN_H - 74.0;
 pub const WIN_H: f32 = 640.0;
@@ -81,6 +81,10 @@ pub enum Ctrl {
     CheckUpdate,
     /// «Перезапустить сейчас» — install a downloaded update and restart.
     InstallUpdate,
+    /// Left-nav page switch: (page index).
+    Nav(u8),
+    /// Expand/collapse «Группы сервера».
+    ToggleGroups,
     /// Copy the OBS browser-source URL to the clipboard.
     CopyObs,
     /// Copy the diagnostics report to the clipboard.
@@ -171,6 +175,10 @@ pub struct SettingsModel {
     pub update_note: String,
     /// A downloaded update is ready to install («Перезапустить сейчас»).
     pub update_ready: bool,
+    /// Left-nav page: 0 Вид, 1 Элементы, 2 Связь, 3 Обновления, 4 Ещё.
+    pub page: u8,
+    /// «Группы сервера» expanded (hidden by default).
+    pub groups_open: bool,
     /// Actions that need `Arc<App>` — performed by run_loop.
     pub pending: Option<Pending>,
 }
@@ -210,6 +218,8 @@ impl SettingsModel {
             conn_note: String::new(),
             update_note: String::new(),
             update_ready: false,
+            page: 0,
+            groups_open: false,
             pending: None,
         }
     }
@@ -331,6 +341,14 @@ impl SettingsModel {
             Ctrl::Reconnect => self.pending = Some(Pending::Reconnect),
             Ctrl::CheckUpdate => self.pending = Some(Pending::CheckUpdate),
             Ctrl::InstallUpdate => self.pending = Some(Pending::InstallUpdate),
+            Ctrl::Nav(n) => {
+                if self.page != n {
+                    self.page = n;
+                    self.scroll = 0.0;
+                    self.close_select();
+                }
+            }
+            Ctrl::ToggleGroups => self.groups_open = !self.groups_open,
             Ctrl::CopyObs => self.pending = Some(Pending::CopyObs),
             Ctrl::CopyDiag => self.pending = Some(Pending::CopyDiag),
             Ctrl::GroupMap(i) => {
@@ -412,6 +430,14 @@ impl SettingsModel {
                 }
                 "click_through" => {
                     self.desktop.click_through = !self.desktop.click_through;
+                    self.touch();
+                }
+                "autostart" => {
+                    self.desktop.autostart = !self.desktop.autostart;
+                    self.touch();
+                }
+                "visible" => {
+                    self.desktop.visible = !self.desktop.visible;
                     self.touch();
                 }
                 _ => {
@@ -809,18 +835,26 @@ fn draw_pin(c: &Ctx, buf: &mut SBuf, x: f32, y: f32) {
 }
 
 fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on: bool) {
-    buf.text(&c.fonts, x, y + 15.0, label, c.fs, false, c.pal.text);
-    let (tw, th) = (42.0, 24.0);
-    let tx = x + w - tw;
-    let ty = y + 1.0;
-    let bg = if on {
-        c.pal.accent.scale_a(220.0)
+    // «кнопками подсвечиваемыми если включено и не светящаяся если выключено»:
+    // the whole row is the button — lit (accent glow) when ON, dim but clearly
+    // bordered when OFF (no more black-on-black)
+    let h = 26.0;
+    let r = 8.0;
+    if on {
+        buf.round_rect(x, y, w, h, r, c.pal.accent.scale_a(46.0));
+        buf.stroke_round_rect(x, y, w, h, r, c.pal.accent, 1.4);
+        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(56.0), 1.0);
+        buf.text(&c.fonts, x + 12.0, y + 18.0, label, c.fs, true, c.pal.text);
+        buf.round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, c.pal.accent);
+        buf.circle(x + w - 11.5, y + 13.0, 4.4, Rgba::rgb(255, 255, 255));
     } else {
-        crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.35)
-    };
-    buf.round_rect(tx, ty, tw, th, th * 0.5, bg);
-    let kx = if on { tx + tw - th * 0.5 } else { tx + th * 0.5 };
-    buf.circle(kx, ty + th * 0.5, th * 0.38, Rgba::rgb(255, 255, 255));
+        buf.round_rect(x, y, w, h, r, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15));
+        buf.stroke_round_rect(x, y, w, h, r, c.pal.muted.scale_a(175.0), 1.2);
+        buf.text(&c.fonts, x + 12.0, y + 18.0, label, c.fs, false, c.pal.muted);
+        buf.round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.35));
+        buf.stroke_round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, c.pal.muted.scale_a(150.0), 1.0);
+        buf.circle(x + w - 21.5, y + 13.0, 4.4, c.pal.muted.scale_a(190.0));
+    }
 }
 
 /// Slider row: label left, value right (accent), track + in-bounds knob below.
@@ -914,7 +948,7 @@ fn draw_select(
     let bx = x + w - 194.0;
     buf.round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.row_hover);
     buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, if open { pal.accent } else { pal.muted.scale_a(90.0) }, 1.0);
-    buf.text(&c.fonts, bx + 12.0, y + 5.0, value, 12.0, false, pal.text);
+    buf.text(&c.fonts, bx + 12.0, y + 16.0, value, 12.0, false, pal.text);
     // chevron
     let cx = bx + 172.0;
     let cy = y + 11.0;
@@ -925,7 +959,7 @@ fn draw_select(
         buf.line(cx - 4.0, cy - 3.0, cx, cy + 3.0, 1.6, pal.muted);
         buf.line(cx, cy + 3.0, cx + 4.0, cy - 3.0, 1.6, pal.muted);
     }
-    buf.text(&c.fonts, x + 2.0, y + 5.0, label, 12.0, false, pal.text);
+    buf.text(&c.fonts, x + 2.0, y + 16.0, label, 12.0, false, pal.text);
     crate::layout::Rect { x: bx, y: y - 2.0, w: 190.0, h: 28.0 }
 }
 
@@ -1019,7 +1053,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     buf.fill_rect(0.0, 44.0, WIN_W, 1.0, pal.panel_border);
 
     // ---- left pane (scrollable) ----
-    let pane_x = 16.0;
+    let pane_x = 158.0;
     let pane_w = 452.0;
     let pane_y = 58.0;
     let pane_h = PANE_H;
@@ -1031,6 +1065,46 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         buf.fill_rect(pane_x + 4.0, y + 24.0, pane_w - 8.0, 1.0, c.pal.panel_border);
     };
 
+    // ---- left nav: pages ----
+    {
+        let pages = [
+            (0u8, tr(&m.lang, "Вид", "Appearance")),
+            (1, tr(&m.lang, "Элементы", "Elements")),
+            (2, tr(&m.lang, "Связь", "Connection")),
+            (3, tr(&m.lang, "Обновления", "Updates")),
+            (4, tr(&m.lang, "Ещё", "More")),
+        ];
+        let mut ny = pane_y;
+        for (n, label) in pages {
+            let active = m.page == n;
+            if active {
+                buf.round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.accent.scale_a(46.0));
+                buf.stroke_round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.accent, 1.4);
+                buf.stroke_round_rect(15.0, ny - 1.0, 128.0, 36.0, 10.0, pal.accent.scale_a(56.0), 1.0);
+            } else {
+                buf.round_rect(16.0, ny, 126.0, 34.0, 9.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15));
+                buf.stroke_round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.muted.scale_a(150.0), 1.1);
+            }
+            buf.text(
+                &c.fonts,
+                32.0,
+                ny + 22.0,
+                &label,
+                12.5,
+                active,
+                if active { pal.text } else { pal.muted },
+            );
+            regions.push(Region {
+                rect: crate::layout::Rect { x: 16.0, y: ny, w: 126.0, h: 34.0 },
+                ctrl: Ctrl::Nav(n),
+            });
+            ny += 42.0;
+        }
+    }
+
+    // ---- page content ----
+    if m.page == 0 {
+        // Вид: стиль, пресеты, цвета, размеры и эффекты, панель, положение
     section(&mut buf, &c, y, &tr(&m.lang, "Стиль панели", "Panel style"));
     y += 34.0;
     {
@@ -1137,6 +1211,25 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 52.0;
     }
 
+    section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
+    y += 34.0;
+    for (key, ru, en) in [
+        ("show_header", "Шапка", "Header"),
+        ("show_server_name", "Имя сервера", "Server name"),
+        ("show_user_count", "Счётчик", "User count"),
+        ("compact", "Компактный", "Compact"),
+        ("animations", "Анимации", "Animations"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = get_toggle(&m.app, key);
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
+    }
+
     section(&mut buf, &c, y, &tr(&m.lang, "Положение на экране", "Screen corner"));
     y += 34.0;
     // corner grid 2x2 (same control as the web main)
@@ -1180,6 +1273,30 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 52.0;
     }
 
+    {
+        let label = tr(&m.lang, "Слой оверлея", "Overlay layer");
+        let cur = select_index("overlay_layer", m);
+        let opts = select_options("overlay_layer", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("overlay_layer");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("overlay_layer") });
+        y += 36.0;
+    }
+    {
+        let label = tr(&m.lang, "Показывать оверлей", "Show overlay");
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, m.desktop.visible);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle("visible"),
+        });
+        y += 30.0;
+    }
+    } else if m.page == 1 {
+        // Элементы: состав канала, речь и шёпот, чат, события
     section(&mut buf, &c, y, &tr(&m.lang, "Состав канала", "Channel roster"));
     y += 34.0;
     for (key, ru, en) in [
@@ -1188,25 +1305,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         ("show_self", "Себя", "Self"),
         ("hide_query", "Скрыть query", "Hide query"),
         ("hide_empty", "Скрыть пустой", "Hide empty"),
-    ] {
-        let label = tr(&m.lang, ru, en);
-        let on = get_toggle(&m.app, key);
-        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
-        regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
-            ctrl: Ctrl::Toggle(key),
-        });
-        y += 30.0;
-    }
-
-    section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
-    y += 34.0;
-    for (key, ru, en) in [
-        ("show_header", "Шапка", "Header"),
-        ("show_server_name", "Имя сервера", "Server name"),
-        ("show_user_count", "Счётчик", "User count"),
-        ("compact", "Компактный", "Compact"),
-        ("animations", "Анимации", "Animations"),
     ] {
         let label = tr(&m.lang, ru, en);
         let on = get_toggle(&m.app, key);
@@ -1358,48 +1456,8 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 32.0;
     }
 
-    section(&mut buf, &c, y, &tr(&m.lang, "Система", "System"));
-    y += 34.0;
-    {
-        let label = tr(&m.lang, "Слой оверлея", "Overlay layer");
-        let cur = select_index("overlay_layer", m);
-        let opts = select_options("overlay_layer", &m.lang);
-        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
-        let open = m.open_select == Some("overlay_layer");
-        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
-        if open {
-            open_sel_at = Some((boxrect.x, boxrect.y));
-        }
-        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("overlay_layer") });
-        y += 36.0;
-    }
-    {
-        let label = tr(&m.lang, "Язык", "Language");
-        let cur = select_index("language", m);
-        let opts = select_options("language", &m.lang);
-        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
-        let open = m.open_select == Some("language");
-        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
-        if open {
-            open_sel_at = Some((boxrect.x, boxrect.y));
-        }
-        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("language") });
-        y += 36.0;
-    }
-    for (key, ru, en) in [
-        ("elevate", "Запуск от имени администратора", "Run as administrator"),
-        ("click_through", "Мышь проходит сквозь оверлей", "Mouse passes through the overlay"),
-    ] {
-        let label = tr(&m.lang, ru, en);
-        let on = if key == "elevate" { m.desktop.elevate } else { m.desktop.click_through };
-        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
-        regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
-            ctrl: Ctrl::Toggle(key),
-        });
-        y += 30.0;
-    }
-    // ---- Связь (Connection): source + TS3 plugin + TS6 ----
+    } else if m.page == 2 {
+        // Связь
     section(&mut buf, &c, y, &tr(&m.lang, "Связь", "Connection"));
     y += 34.0;
     {
@@ -1468,11 +1526,24 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 24.0;
     }
     {
-        // «Группы сервера» — class mapping per server group (collapsed list)
+        // «Группы сервера» — скрыты изначально, раскрываются по клику
         let t = tr(&m.lang, "Группы сервера", "Server groups");
-        buf.text(&c.fonts, pane_x + 4.0, y + 13.0, &t, 12.5, true, pal.text);
+        let (chx, chy) = (pane_x + 12.0, y + 11.0);
+        if m.groups_open {
+            buf.line(chx - 4.0, chy + 3.0, chx, chy - 3.0, 1.6, pal.accent);
+            buf.line(chx, chy - 3.0, chx + 4.0, chy + 3.0, 1.6, pal.accent);
+        } else {
+            buf.line(chx - 4.0, chy - 3.0, chx, chy + 3.0, 1.6, pal.muted);
+            buf.line(chx, chy + 3.0, chx + 4.0, chy - 3.0, 1.6, pal.muted);
+        }
+        buf.text(&c.fonts, pane_x + 26.0, y + 13.0, &t, 12.5, true, pal.text);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 24.0 },
+            ctrl: Ctrl::ToggleGroups,
+        });
         y += 24.0;
     }
+    if m.groups_open {
     for (i, (gid, cls)) in m.groups.iter().enumerate() {
         let label = format!("#{} — {}", gid, class_ru(cls));
         draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 30.0, &label);
@@ -1482,9 +1553,11 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         });
         y += 36.0;
     }
+    }
 
-    // ---- Ещё (More): updates, OBS, diagnostics ----
-    section(&mut buf, &c, y, &tr(&m.lang, "Ещё", "More"));
+    } else if m.page == 3 {
+        // Обновления
+    section(&mut buf, &c, y, &tr(&m.lang, "Обновления", "Updates"));
     y += 34.0;
     {
         let ver = format!("TS3-TS6 Notifier v{}", m.version);
@@ -1514,6 +1587,44 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         });
         y += 42.0;
     }
+    } else {
+        // Ещё: система + инструменты
+    section(&mut buf, &c, y, &tr(&m.lang, "Система", "System"));
+    y += 34.0;
+    {
+        let label = tr(&m.lang, "Язык", "Language");
+        let cur = select_index("language", m);
+        let opts = select_options("language", &m.lang);
+        let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+        let open = m.open_select == Some("language");
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("language") });
+        y += 36.0;
+    }
+    for (key, ru, en) in [
+        ("elevate", "Запуск от имени администратора", "Run as administrator"),
+        ("autostart", "Запуск с системой", "Launch at startup"),
+        ("click_through", "Мышь проходит сквозь оверлей", "Mouse passes through the overlay"),
+    ] {
+        let label = tr(&m.lang, ru, en);
+        let on = match key {
+            "elevate" => m.desktop.elevate,
+            "click_through" => m.desktop.click_through,
+            _ => m.desktop.autostart,
+        };
+        draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+        regions.push(Region {
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            ctrl: Ctrl::Toggle(key),
+        });
+        y += 30.0;
+    }
+    // ---- Связь (Connection): source + TS3 plugin + TS6 ----
+    section(&mut buf, &c, y, &tr(&m.lang, "Инструменты", "Tools"));
+    y += 34.0;
     {
         let label = tr(&m.lang, "Скопировать ссылку для OBS", "Copy OBS browser-source URL");
         draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
@@ -1531,6 +1642,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             ctrl: Ctrl::CopyDiag,
         });
         y += 42.0;
+    }
     }
 
     let content_h = y + m.scroll - pane_y;
@@ -1605,7 +1717,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             if *idx == cur {
                 buf.round_rect(px + 4.0, ry, 182.0, row_h - 4.0, 6.0, pal.accent.scale_a(52.0));
             }
-            buf.text(&c.fonts, px + 12.0, ry + 6.0, lbl, 12.0, false, pal.text);
+            buf.text(&c.fonts, px + 12.0, ry + 17.5, lbl, 12.0, false, pal.text);
             regions.push(Region {
                 rect: crate::layout::Rect { x: px, y: ry, w: 190.0, h: row_h - 2.0 },
                 ctrl: Ctrl::Option(key, *idx),
@@ -1631,6 +1743,13 @@ use crate::overlay::{Ev, Host};
 static SETTINGS_RECT: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
+
+static CLOSE_REQ: AtomicBool = AtomicBool::new(false);
+
+/// WM_CLOSE / Alt+F4 on the settings window — run_loop exits and destroys it.
+pub fn request_close() {
+    CLOSE_REQ.store(true, Ordering::SeqCst);
+}
 
 /// True while the settings window is open (the overlay leaves topmost z-order
 /// alone then, so the separate settings app stays usable above it).
@@ -1821,8 +1940,19 @@ pub fn start_update_check(app: Arc<App>) {
                         app.broadcast(&crate::json::obj(vec![
                             ("type", crate::json::Json::s("update-status")),
                             ("status", crate::json::Json::s("downloaded")),
-                            ("version", crate::json::Json::s(tag)),
+                            ("version", crate::json::Json::s(tag.clone())),
                         ]));
+                        // «предлагает обновиться и перезапустить» — tray prompt
+                        #[cfg(any(windows, tsn_win32))]
+                        {
+                            let ru = app.store.lock().unwrap().get().appearance.language != "en";
+                            let msg = if ru {
+                                format!("Обновление {tag} скачано — перезапустите приложение, чтобы установить")
+                            } else {
+                                format!("Update {tag} downloaded — restart the app to install")
+                            };
+                            crate::overlay::win32::tray_balloon("TS3-TS6 Notifier", &msg);
+                        }
                     } else {
                         *UPDATE_NOTE.lock().unwrap() = format!("dlfail {tag}");
                     }
@@ -1872,6 +2002,10 @@ fn fetch_release_tag() -> Option<String> {
 }
 
 fn persist(app: &Arc<App>, m: &SettingsModel) -> bool {
+    // «Запуск с системой» — keep the HKCU Run entry in sync with the toggle
+    #[cfg(any(windows, tsn_win32))]
+    crate::overlay::win32::set_autostart(m.desktop.autostart);
+
     let d = &m.desktop;
     let ts_json = |t: &crate::config::TsEndpoint| {
         crate::json::obj(vec![
@@ -1938,6 +2072,9 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
     let mut pos: Option<(f64, f64)> = None;
     let mut activated = false;
     loop {
+        if m.close_requested || CLOSE_REQ.swap(false, Ordering::SeqCst) {
+            break;
+        }
         let (x, y) = pos.unwrap_or((cx, cy));
         let (buf, regions, content_h) = render(m, fonts, icons, k);
         host.present(&buf, x, y, (x, y, kw as f64, kh as f64));
@@ -2215,17 +2352,39 @@ mod tests {
 
     #[test]
     fn frame_renders_with_regions() {
-        let m = model();
+        let mut m = model();
         let fonts = Fonts::load();
         let icons = Icons::load();
         let (buf, regions, _) = render(&m, &fonts, &icons, 1.0);
         assert_eq!((buf.w, buf.h), (WIN_W as i32, WIN_H as i32));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 15);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 9);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count() == 4);
+        // left nav: five pages
+        for n in 0..5u8 {
+            assert!(regions.iter().any(|r| r.ctrl == Ctrl::Nav(n)), "nav {n}");
+        }
+        // controls are spread across the pages — sum them up
+        let (mut presets, mut sliders, mut selects, mut corners) = (0, 0, 0, 0);
+        for page in 0..5u8 {
+            m.page = page;
+            let (_, regs, _) = render(&m, &fonts, &icons, 1.0);
+            presets += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count();
+            sliders += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count();
+            selects += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count();
+            corners += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count();
+        }
+        assert_eq!(presets, 8);
+        assert_eq!(sliders, 15);
+        assert_eq!(selects, 9);
+        assert_eq!(corners, 4);
+    }
+
+    #[test]
+    fn groups_hidden_by_default() {
+        let mut m = model();
+        assert!(!m.groups_open, "«Группы сервера» скрыты изначально");
+        m.click(Ctrl::ToggleGroups, 0.0, 0.0);
+        assert!(m.groups_open);
     }
 
     #[test]

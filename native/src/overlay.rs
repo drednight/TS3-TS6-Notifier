@@ -262,6 +262,8 @@ pub trait Host {
     fn present(&mut self, buf: &crate::render::Buf, win_x: f64, win_y: f64, hit: (f64, f64, f64, f64));
     fn pump(&mut self) -> Vec<Ev>;
     fn set_interactive(&mut self, on: bool);
+    /// Hide/show the overlay window («Показывать оверлей») without exiting.
+    fn set_visible(&mut self, _on: bool) {}
     fn open_url(&self, url: &str);
     /// Bring the window to the foreground (settings window on open).
     fn activate(&mut self) {}
@@ -402,6 +404,12 @@ impl Overlay {
             }
             Err(_) => self.last_cfg.clone(),
         };
+        // «Показывать оверлей» (tray toggle / Вид): hide the overlay window
+        // without exiting the app
+        host.set_visible(cfg.desktop.visible);
+        if !cfg.desktop.visible {
+            return;
+        }
         let a = cfg.appearance.clone();
         let pal = Palette::from_appearance(&a);
         let lang = match a.language.as_str() {
@@ -866,6 +874,7 @@ pub(crate) mod win32 {
         fn SetForegroundWindow(w: *mut c_void) -> i32;
         fn GetWindowRect(w: *mut c_void, r: *mut RECT) -> i32;
         fn GetForegroundWindow() -> *mut c_void;
+        fn ShowWindow(w: *mut c_void, cmd: i32) -> i32;
         fn GetWindowThreadProcessId(w: *mut c_void, pid: *mut u32) -> u32;
         fn SendMessageW(w: *mut c_void, msg: u32, wp: usize, lp: isize) -> isize;
         fn SetWindowTextW(w: *mut c_void, text: *const u16) -> i32;
@@ -939,6 +948,10 @@ pub(crate) mod win32 {
     #[cfg_attr(windows, link(name = "advapi32"))]
     extern "system" {
         fn OpenProcessToken(proc: *mut c_void, access: u32, token: *mut *mut c_void) -> i32;
+        fn RegOpenKeyExW(key: *mut c_void, sub: *const u16, opts: u32, sam: u32, out: *mut *mut c_void) -> i32;
+        fn RegSetValueExW(key: *mut c_void, name: *const u16, res: u32, ty: u32, data: *const u8, cb: u32) -> i32;
+        fn RegDeleteValueW(key: *mut c_void, name: *const u16) -> i32;
+        fn RegCloseKey(key: *mut c_void) -> i32;
         fn GetTokenInformation(token: *mut c_void, class: u32, info: *mut c_void, len: u32, out: *mut u32) -> i32;
     }
 
@@ -961,6 +974,10 @@ pub(crate) mod win32 {
     const TOKEN_QUERY: u32 = 0x0008;
     const TOKEN_ELEVATION_CLASS: u32 = 20;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const SW_HIDE: i32 = 0;
+    const SW_SHOWNA: i32 = 8;
+    const KEY_SET_VALUE: u32 = 0x0002;
+    const HKEY_CURRENT_USER: usize = 0x8000_0001;
     const MONITOR_DEFAULTTONEAREST: u32 = 2;
     const NIF_INFO: u32 = 0x10;
     const NIIF_INFO: u32 = 0x1;
@@ -1044,6 +1061,39 @@ pub(crate) mod win32 {
         }
         if relaunch_elevated() {
             std::process::exit(0);
+        }
+    }
+
+    /// HKCU Run entry — «Запуск с системой» (Launch at startup).
+    pub fn set_autostart(on: bool) -> bool {
+        unsafe {
+            let mut key: *mut c_void = null_mut();
+            let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER as *mut c_void,
+                wide(path).as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut key,
+            ) != 0
+            {
+                return false;
+            }
+            let name = wide("TS3-TS6 Notifier");
+            let ok = if on {
+                let mut exe = [0u16; 320];
+                let n = GetModuleFileNameW(null_mut(), exe.as_mut_ptr(), 320) as usize;
+                let exe = String::from_utf16_lossy(&exe[..n.min(320)]);
+                let data: Vec<u16> = format!("\"{}\"", exe)
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                RegSetValueExW(key, name.as_ptr(), 0, 1, data.as_ptr() as *const u8, data.len() as u32 * 2)
+            } else {
+                RegDeleteValueW(key, name.as_ptr())
+            };
+            RegCloseKey(key);
+            ok == 0
         }
     }
 
@@ -1137,6 +1187,7 @@ pub(crate) mod win32 {
     const WM_PASTE: u32 = 0x0302;
     const CF_UNICODETEXT: u32 = 13;
     const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_CLOSE: u32 = 0x0010;
     const WM_MOUSEMOVE: u32 = 0x0200;
     const WM_LBUTTONDOWN: u32 = 0x0201;
     const PM_REMOVE: u32 = 0x0001;
@@ -1216,6 +1267,8 @@ pub(crate) mod win32 {
         last_fg: *mut c_void,
         /// the foreground window covers its monitor — a game owns the screen
         fg_full: bool,
+        /// «Показывать оверлей» — window show state
+        visible_shown: bool,
         mem_dc: *mut c_void,
         dib: *mut c_void,
         dib_bits: *mut u8,
@@ -1252,6 +1305,16 @@ pub(crate) mod win32 {
                     );
                 }
                 DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_CLOSE => {
+                // the settings window «крестик»/Alt+F4: let settings.rs finish
+                // its loop (it destroys the window on the way out)
+                if settings_hwnd_is(hwnd) {
+                    crate::settings::request_close();
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wp, lp)
+                }
             }
             WM_PASTE => {
                 if settings_hwnd_is(hwnd) {
@@ -1323,6 +1386,7 @@ pub(crate) mod win32 {
                 topmost_at: None,
                 last_fg: null_mut(),
                 fg_full: false,
+                visible_shown: true,
                 mem_dc: std::ptr::null_mut(),
                 dib: std::ptr::null_mut(),
                 dib_bits: std::ptr::null_mut(),
@@ -1452,7 +1516,7 @@ pub(crate) mod win32 {
                         }
                     }
                 }
-                let interval: u128 = if self.fg_full { 220 } else { 500 };
+                let interval: u128 = if self.fg_full { 120 } else { 500 };
                 let now = std::time::Instant::now();
                 let due = self
                     .topmost_at
@@ -1536,7 +1600,12 @@ pub(crate) mod win32 {
                 let mut msg: MSG = std::mem::zeroed();
                 while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
                     let mut to_screen = |lp: isize| -> (f32, f32) {
-                        let mut p = POINT { x: (lp & 0xffff) as i32, y: ((lp >> 16) & 0xffff) as i32 };
+                        // lParam halves are SIGNED 16-bit — outside the window
+                        // they go negative; sign-extend or drags jump («прыгают»)
+                        let mut p = POINT {
+                            x: ((lp & 0xffff) as u16) as i16 as i32,
+                            y: (((lp >> 16) & 0xffff) as u16) as i16 as i32,
+                        };
                         ClientToScreen(self.hwnd, &mut p);
                         (p.x as f32, p.y as f32)
                     };
@@ -1565,6 +1634,14 @@ pub(crate) mod win32 {
             out
         }
 
+        fn set_visible(&mut self, on: bool) {
+            if self.visible_shown != on {
+                self.visible_shown = on;
+                unsafe {
+                    ShowWindow(self.hwnd, if on { SW_SHOWNA } else { SW_HIDE });
+                }
+            }
+        }
         fn set_interactive(&mut self, on: bool) {
             if self.interactive == on {
                 return;
@@ -1911,6 +1988,15 @@ pub(crate) mod win32 {
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
             AppendMenuW(menu, MF_STRING, 110, wide(if ru { "Открыть панель" } else { "Open panel" }).as_ptr());
             AppendMenuW(menu, MF_STRING, 111, wide(if ru { "Настройки" } else { "Settings" }).as_ptr());
+            {
+                let vis = app.store.lock().unwrap().get().desktop.visible;
+                let label = if ru {
+                    if vis { "Скрыть оверлей" } else { "Показывать оверлей" }
+                } else {
+                    if vis { "Hide overlay" } else { "Show overlay" }
+                };
+                AppendMenuW(menu, MF_STRING, 121, wide(label).as_ptr());
+            }
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
             AppendMenuW(menu, MF_STRING, 0, wide(&format!("TS3-TS6 Notifier v{}", app.version)).as_ptr());
             AppendMenuW(menu, MF_STRING, 120, wide(if ru { "Выход" } else { "Exit" }).as_ptr());
@@ -1937,6 +2023,14 @@ pub(crate) mod win32 {
                 ShellExecuteW(null_mut(), wide("open").as_ptr(), url.as_ptr(), null(), null(), 1);
             } else if cmd == 111 {
                 crate::settings::spawn_once(app.clone(), port);
+            } else if cmd == 121 {
+                // «отключает показ оверлея … не выходя из приложения»
+                let on = !app.store.lock().unwrap().get().desktop.visible;
+                let patch = crate::json::obj(vec![(
+                    "desktop",
+                    crate::json::obj(vec![("visible", crate::json::Json::b(on))]),
+                )]);
+                app.store.lock().unwrap().update(&patch);
             } else if cmd == 120 {
                 let mut nid = tray_nid(hwnd, null_mut(), "");
                 Shell_NotifyIconW(NIM_DELETE, &mut nid);

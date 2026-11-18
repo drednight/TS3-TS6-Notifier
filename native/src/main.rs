@@ -264,6 +264,25 @@ fn main() {
         let _overlay = overlay::spawn(app.clone(), port);
         println!("[overlay] native overlay started");
     }
+    // «Запуск с системой» — self-heal the HKCU Run entry
+    #[cfg(any(windows, tsn_win32))]
+    if app.store.lock().unwrap().get().desktop.autostart {
+        overlay::win32::set_autostart(true);
+    }
+    // Автопроверка обновлений: через минуту после старта, затем каждые 24 часа
+    {
+        let app = app.clone();
+        std::thread::Builder::new()
+            .name("update-timer".into())
+            .spawn(move || {
+                thread::sleep(Duration::from_secs(90));
+                loop {
+                    settings::start_update_check(app.clone());
+                    thread::sleep(Duration::from_secs(24 * 60 * 60));
+                }
+            })
+            .ok();
+    }
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
