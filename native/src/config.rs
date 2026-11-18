@@ -50,6 +50,9 @@ pub struct Appearance {
     pub eq_style: String,
     pub talking_first: bool,
     pub only_talking: bool,
+    /// Seconds a user lingers (fading out) after stopping talking while
+    /// «only talking» is on. 0 = remove immediately.
+    pub talking_fade: f64,
     pub compact: bool,
     pub hide_empty: bool,
     pub show_whispers: bool,
@@ -107,6 +110,7 @@ impl Default for Appearance {
             eq_style: "bars".into(),
             talking_first: true,
             only_talking: false,
+            talking_fade: 2.0,
             compact: false,
             hide_empty: false,
             show_whispers: true,
@@ -281,6 +285,7 @@ pub fn appearance_from_json_with(obj: &Json, base: &Appearance) -> Appearance {
         eq_style: pick_str(obj, "eqStyle", &d.eq_style),
         talking_first: pick_bool(obj, "talkingFirst", d.talking_first),
         only_talking: pick_bool(obj, "onlyTalking", d.only_talking),
+        talking_fade: pick_f64(obj, "talkingFade", d.talking_fade).clamp(0.0, 10.0),
         compact: pick_bool(obj, "compact", d.compact),
         hide_empty: pick_bool(obj, "hideEmpty", d.hide_empty),
         show_whispers: pick_bool(obj, "showWhispers", d.show_whispers),
@@ -336,6 +341,7 @@ pub fn appearance_to_json(a: &Appearance) -> Json {
         ("eqStyle", Json::s(a.eq_style.clone())),
         ("talkingFirst", Json::b(a.talking_first)),
         ("onlyTalking", Json::b(a.only_talking)),
+        ("talkingFade", Json::n(a.talking_fade)),
         ("compact", Json::b(a.compact)),
         ("hideEmpty", Json::b(a.hide_empty)),
         ("showWhispers", Json::b(a.show_whispers)),

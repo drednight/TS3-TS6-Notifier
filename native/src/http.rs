@@ -41,6 +41,19 @@ impl App {
     }
 
     pub fn push_state(&self, state: &OverlayState) {
+        // after a data-source switch stragglers from the previous connector
+        // (e.g. a queued mock frame) must not overwrite the new source's state
+        let want = {
+            let src = self.store.lock().unwrap().get().source.clone();
+            match src.as_str() {
+                "ts3" => "ts3",
+                "ts6" => "ts6",
+                _ => "mock",
+            }
+        };
+        if state.source != want {
+            return;
+        }
         *self.latest.write().unwrap() = state.clone();
         self.broadcast(&obj(vec![
             ("type", Json::s("state")),

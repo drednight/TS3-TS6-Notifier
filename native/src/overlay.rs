@@ -229,6 +229,12 @@ pub trait Host {
     fn open_url(&self, url: &str);
     /// Bring the window to the foreground (settings window on open).
     fn activate(&mut self) {}
+    /// Current top-left of the window in screen coords (survives user drags).
+    fn window_pos(&self) -> (f64, f64) {
+        (0.0, 0.0)
+    }
+    /// Native move loop for a borderless window (caption-drag trick).
+    fn begin_window_drag(&mut self) {}
     fn work_area(&self) -> (f64, f64, f64, f64);
     /// Full bounds of the target monitor ('screen'/'fullscreen' layer modes).
     fn screen_area(&self) -> (f64, f64, f64, f64);
@@ -239,18 +245,23 @@ pub struct HeadlessHost {
     pub last_w: i32,
     pub last_h: i32,
     pub interactive: bool,
+    pub last_pos: (f64, f64),
 }
 
 impl HeadlessHost {
     pub fn new() -> HeadlessHost {
-        HeadlessHost { last_w: 0, last_h: 0, interactive: false }
+        HeadlessHost { last_w: 0, last_h: 0, interactive: false, last_pos: (0.0, 0.0) }
     }
 }
 
 impl Host for HeadlessHost {
-    fn present(&mut self, buf: &crate::render::Buf, _x: f64, _y: f64, _hit: (f64, f64, f64, f64)) {
+    fn present(&mut self, buf: &crate::render::Buf, x: f64, y: f64, _hit: (f64, f64, f64, f64)) {
         self.last_w = buf.w;
         self.last_h = buf.h;
+        self.last_pos = (x, y);
+    }
+    fn window_pos(&self) -> (f64, f64) {
+        self.last_pos
     }
     fn pump(&mut self) -> Vec<Ev> {
         Vec::new()
@@ -277,6 +288,9 @@ pub struct Overlay {
     whisper_seen: HashMap<String, u64>,
     /// v1.4.12: outside whisperers (another channel) with their own linger.
     outside_whisper: HashMap<String, (UserState, u64)>,
+    /// «Только говорящие»: stopped talkers linger here, fading out over
+    /// `appearance.talking_fade` seconds before leaving the roster.
+    talk_fade: HashMap<String, (UserState, u64)>,
     /// roster scroll inside a height-capped panel (panelMaxHeight)
     roster_scroll: f32,
     pending: Option<(f64, f64)>,
@@ -311,6 +325,7 @@ impl Overlay {
             icons: Icons::load(),
             whisper_seen: HashMap::new(),
             outside_whisper: HashMap::new(),
+            talk_fade: HashMap::new(),
             roster_scroll: 0.0,
             pending: None,
             saved_margins: None,
@@ -362,7 +377,30 @@ impl Overlay {
             lang
         };
 
-        let all = roster_rows(&state.users, &a);
+        let mut all = roster_rows(&state.users, &a);
+        // «Только говорящие»: recent talkers linger and fade out of the roster
+        if a.only_talking && a.talking_fade > 0.0 {
+            let fade_ms = (a.talking_fade * 1000.0) as u64;
+            for u in &state.users {
+                if u.talking {
+                    self.talk_fade.insert(u.id.clone(), (u.clone(), now_ms));
+                }
+            }
+            self.talk_fade.retain(|_id, (_u, t)| now_ms.saturating_sub(*t) < fade_ms);
+            let mut extra: Vec<UserState> = Vec::new();
+            for (id, (u, t)) in self.talk_fade.iter() {
+                if !all.iter().any(|r| &r.id == id) {
+                    let age = now_ms.saturating_sub(*t) as f32;
+                    let mut u = u.clone();
+                    u.talking = false;
+                    u.fade = (1.0 - age / fade_ms as f32).clamp(0.0, 1.0);
+                    extra.push(u);
+                }
+            }
+            all.extend(extra);
+        } else {
+            self.talk_fade.clear();
+        }
         let linger = (a.whisper_delay.max(0.0) * 1000.0) as u64;
         let (rows, mut whisperers) = if a.show_whispers {
             split_whisper(all, &mut self.whisper_seen, now_ms, linger)
@@ -422,7 +460,8 @@ impl Overlay {
         } else {
             0
         };
-        let work = host.work_area();
+        // margins live against the FULL screen («по всему размеру экрана»)
+        let work = host.screen_area();
         let layer = cfg.desktop.overlay_layer.clone();
         let key = format!(
             "{}|{:?}|{:?}|{:?}|{:?}|{:.2}|{}|{:?}|{:?}|{}",
@@ -510,7 +549,7 @@ impl Overlay {
         // input (cached geometry — identical across skipped frames)
         let (px, py, pad, pw, ph) = self.last_geom;
         let origin = self.last_origin;
-        let work = host.work_area();
+        let work = host.screen_area();
         let hits = self.last_hits.clone();
         let events = host.pump();
         host.set_interactive(interactive_wanted);
@@ -746,6 +785,8 @@ pub(crate) mod win32 {
         fn GetCursorPos(p: *mut POINT) -> i32;
         fn ScreenToClient(w: *mut c_void, p: *mut POINT) -> i32;
         fn SetForegroundWindow(w: *mut c_void) -> i32;
+        fn GetWindowRect(w: *mut c_void, r: *mut RECT) -> i32;
+        fn SendMessageW(w: *mut c_void, msg: u32, wp: usize, lp: isize) -> isize;
         fn SetWindowTextW(w: *mut c_void, text: *const u16) -> i32;
         fn GetModuleHandleW(name: *const u16) -> *mut c_void;
         fn GetProcAddress(m: *mut c_void, name: *const u8) -> *mut c_void;
@@ -782,6 +823,7 @@ pub(crate) mod win32 {
         fn GetMonitorInfoW(m: *mut c_void, info: *mut MONITORINFO) -> i32;
         fn GetMessageW(m: *mut MSG, w: *mut c_void, min: u32, max: u32) -> i32;
         fn LoadIconW(inst: *mut c_void, name: *const u16) -> *mut c_void;
+        fn LoadImageW(inst: *mut c_void, name: *const u16, ty: u32, cx: i32, cy: i32, flags: u32) -> *mut c_void;
         fn CreateIconIndirect(info: *const ICONINFO) -> *mut c_void;
         fn SetTimer(w: *mut c_void, id: usize, ms: u32, proc: *mut c_void) -> usize;
         fn CreatePopupMenu() -> *mut c_void;
@@ -954,6 +996,16 @@ pub(crate) mod win32 {
     const SPI_GETWORKAREA: u32 = 0x0030;
     const IDC_ARROW: usize = 32512;
     const WS_EX_APPWINDOW: i32 = 0x0004_0000;
+    const HWND_NOTOPMOST: isize = -2;
+    const WM_ACTIVATE: u32 = 0x0006;
+    const WM_NCLBUTTONDOWN: u32 = 0x00A1;
+    const HTCAPTION: usize = 2;
+
+    static SETTINGS_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn settings_hwnd_is(hwnd: *mut c_void) -> bool {
+        hwnd as usize == SETTINGS_HWND.load(std::sync::atomic::Ordering::SeqCst) && !hwnd.is_null()
+    }
 
     /// Global wheel queue (WH_MOUSE_LL): (screen point, wheel delta, timestamp ms).
     static WHEELS: std::sync::Mutex<Vec<(POINT, f32, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -971,11 +1023,10 @@ pub(crate) mod win32 {
             let info = &*(l as *const MSLLHOOKSTRUCT);
             let delta = ((info.mouse_data >> 16) & 0xffff) as u16 as i16 as f32;
             let now = wheel_now_ms();
-            // MSLLHOOKSTRUCT.pt is always PHYSICAL; our windows live in the
-            // DPI-unaware logical space — convert before routing
-            let sc = dpi_scale();
-            let px = (info.pt.x as f64 / sc).round() as i32;
-            let py = (info.pt.y as f64 / sc).round() as i32;
+            // MSLLHOOKSTRUCT.pt is always PHYSICAL screen px; each host
+            // compares in its own coordinate space (see WinHost::pump)
+            let px = info.pt.x;
+            let py = info.pt.y;
             let mut q = WHEELS.lock().unwrap();
             // prune stale entries, then push — fresh events are NEVER dropped
             q.retain(|(_, _, ts)| now.saturating_sub(*ts) < WHEEL_TTL_MS);
@@ -1007,6 +1058,7 @@ pub(crate) mod win32 {
         interactive: bool,
         drag_pending: bool,
         settings_host: bool,
+        shown: bool,
     }
 
     unsafe extern "system" fn wnd_proc(hwnd: *mut c_void, msg: u32, wp: usize, lp: isize) -> isize {
@@ -1014,6 +1066,26 @@ pub(crate) mod win32 {
             WM_DESTROY => {
                 PostQuitMessage(0);
                 0
+            }
+            WM_ACTIVATE => {
+                // the settings window behaves like a normal app window: it is
+                // topmost only while it has focus (so it stays usable over the
+                // overlay) and drops behind other windows when deactivated
+                let is_settings = settings_hwnd_is(hwnd);
+                if is_settings {
+                    let active = (wp & 0xffff) as u16 != 0;
+                    let after = if active { HWND_TOPMOST } else { HWND_NOTOPMOST };
+                    SetWindowPos(
+                        hwnd,
+                        after as *mut c_void,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
@@ -1029,12 +1101,12 @@ pub(crate) mod win32 {
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 hInstance: std::ptr::null_mut(),
-                hIcon: std::ptr::null_mut(),
+                hIcon: app_icon(32, 32),
                 hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW as *const u16),
                 hbrBackground: std::ptr::null_mut(),
                 lpszMenuName: std::ptr::null(),
                 lpszClassName: cls.as_ptr(),
-                hIconSm: std::ptr::null_mut(),
+                hIconSm: app_icon(16, 16),
             };
             RegisterClassExW(&wc);
             let ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT;
@@ -1065,6 +1137,7 @@ pub(crate) mod win32 {
                 interactive: false,
                 drag_pending: false,
                 settings_host: false,
+                shown: false,
             }
         }
 
@@ -1170,11 +1243,24 @@ pub(crate) mod win32 {
                     .map_or(true, |t| now.duration_since(t).as_millis() >= 500);
                 if due || resized {
                     self.topmost_at = Some(now);
-                    // while the settings window is open the OVERLAY leaves the top
-                    // of the topmost band alone (it would slide over the settings
-                    // window); the settings host itself must keep asserting — its
-                    // SWP_SHOWWINDOW is what makes the window appear
-                    if self.settings_host || !crate::settings::is_open() {
+                    if self.settings_host {
+                        // shown once; z-order then follows WM_ACTIVATE (window
+                        // can go to the background like a normal app window)
+                        if !self.shown {
+                            self.shown = true;
+                            SetWindowPos(
+                                self.hwnd,
+                                HWND_NOTOPMOST as *mut c_void,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                            );
+                        }
+                    } else if !crate::settings::is_open() {
+                        // while the settings window is open the OVERLAY leaves the
+                        // top of the topmost band alone (it would slide over it)
                         SetWindowPos(
                             self.hwnd,
                             HWND_TOPMOST as *mut c_void,
@@ -1197,14 +1283,22 @@ pub(crate) mod win32 {
                 let mut kept: Vec<(POINT, f32, u64)> = Vec::new();
                 let (rx, ry, rw, rh) = self.last_rect;
                 let now = wheel_now_ms();
+                let ds = dpi_scale();
                 for (pt, delta, ts) in std::mem::take(&mut *WHEELS.lock().unwrap()) {
                     if now.saturating_sub(ts) >= WHEEL_TTL_MS {
                         continue;
                     }
-                    let mut inside = pt.x as f64 >= rx
-                        && pt.x as f64 <= rx + rw
-                        && pt.y as f64 >= ry
-                        && pt.y as f64 <= ry + rh;
+                    // the settings host's rect is PHYSICAL (DPI-aware thread);
+                    // the overlay's rects are LOGICAL — compare accordingly
+                    let (cx, cy) = if self.settings_host {
+                        (pt.x as f64, pt.y as f64)
+                    } else {
+                        (pt.x as f64 / ds, pt.y as f64 / ds)
+                    };
+                    let mut inside = cx >= rx
+                        && cx <= rx + rw
+                        && cy >= ry
+                        && cy <= ry + rh;
                     // the settings window wins the wheel wherever the two overlap
                     if inside
                         && !self.settings_host
@@ -1273,6 +1367,25 @@ pub(crate) mod win32 {
         fn activate(&mut self) {
             unsafe {
                 SetForegroundWindow(self.hwnd);
+            }
+        }
+
+        fn window_pos(&self) -> (f64, f64) {
+            unsafe {
+                let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                if GetWindowRect(self.hwnd, &mut r) != 0 {
+                    (r.left as f64, r.top as f64)
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+        }
+
+        fn begin_window_drag(&mut self) {
+            unsafe {
+                // borderless caption drag: DefWindowProc runs the modal move loop
+                ReleaseCapture();
+                SendMessageW(self.hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
             }
         }
 
@@ -1396,6 +1509,25 @@ pub(crate) mod win32 {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    /// The icon embedded by build.rs (RT_GROUP_ICON id 1); falls back to the
+    /// drawn placeholder / IDI_APPLICATION when the resource is missing.
+    fn app_icon(cx: i32, cy: i32) -> *mut c_void {
+        unsafe {
+            let inst = GetModuleHandleW(std::ptr::null());
+            let h = LoadImageW(inst, 1 as *const u16, 1 /* IMAGE_ICON */, cx, cy, 0x00000040 /* LR_DEFAULTCOLOR */);
+            if !h.is_null() {
+                return h;
+            }
+            if cx <= 32 && cy <= 32 {
+                let t = tray_icon();
+                if !t.is_null() {
+                    return t;
+                }
+            }
+            LoadIconW(null_mut(), 32512 as *const u16)
+        }
+    }
+
     fn tray_icon() -> *mut c_void {
         let size = 32i32;
         let mut b = crate::render::Buf::new(size, size);
@@ -1487,7 +1619,7 @@ pub(crate) mod win32 {
     }
 
     /// Logical-pixel ratio of this DPI-unaware process (physical / logical).
-    fn dpi_scale() -> f64 {
+    pub fn dpi_scale() -> f64 {
         unsafe {
             let u = GetModuleHandleW(wide("user32").as_ptr());
             if !u.is_null() {
@@ -1626,7 +1758,7 @@ pub(crate) mod win32 {
             let hwnd_addr = hwnd as usize;
             std::thread::spawn(move || unsafe {
                 let hwnd = hwnd_addr as *mut c_void;
-                let icon = tray_icon();
+                let icon = app_icon(32, 32);
                 let (tip, _) = status_text(&app);
                 let mut nid = tray_nid(hwnd, icon, &tip);
                 Shell_NotifyIconW(NIM_ADD, &mut nid);
@@ -1642,15 +1774,17 @@ pub(crate) mod win32 {
     }
 
     pub fn run_settings(app: std::sync::Arc<crate::http::App>) {
+        set_thread_dpi_aware(); // crisp rendering at fractional display scaling
         let mut host = unsafe { WinHost::new() };
         host.settings_host = true;
         unsafe {
-            // show a taskbar button while the settings window is open: no
-            // WS_EX_TOOLWINDOW, add WS_EX_APPWINDOW + a human title
+            SETTINGS_HWND.store(host.hwnd as usize, std::sync::atomic::Ordering::SeqCst);
+            // taskbar button + normal-window behaviour: not a tool window, not
+            // always-on-top (WM_ACTIVATE manages z-order), human title
             SetWindowLongW(
                 host.hwnd,
                 GWL_EXSTYLE,
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_APPWINDOW,
+                WS_EX_LAYERED | WS_EX_APPWINDOW,
             );
             SetWindowTextW(host.hwnd, wide("TS3-TS6 Notifier — Настройки").as_ptr());
         }

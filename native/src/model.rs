@@ -31,6 +31,8 @@ pub struct UserState {
     /// Only on rows from `OverlayState.whisperers`: the channel this person
     /// whispers FROM (they are not in your channel).
     pub whisper_channel: Option<String>,
+    /// Row opacity for the «only talking» fade-out linger (1.0 = fully visible).
+    pub fade: f32,
 }
 
 impl UserState {
@@ -52,6 +54,7 @@ impl UserState {
             avatar_hash: String::new(),
             server_groups: String::new(),
             whisper_channel: None,
+            fade: 1.0,
         }
     }
 

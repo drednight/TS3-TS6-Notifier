@@ -232,6 +232,14 @@ fn main() {
                             *s = Handle::Stub;
                         }
                     }
+                    // clear the previous source's panel right away («connecting»)
+                    let src = store.lock().unwrap().get().source.clone();
+                    let src: &'static str = match src.as_str() {
+                        "ts3" => "ts3",
+                        "ts6" => "ts6",
+                        _ => "mock",
+                    };
+                    app.push_state(&crate::model::OverlayState::empty(src, "connecting", ""));
                 }
             }
         }),

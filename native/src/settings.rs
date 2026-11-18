@@ -62,6 +62,8 @@ pub enum Ctrl {
     Swatch(u8),
     Style(u8),
     Corner(u8),
+    /// Window title bar drag area (moves the settings window).
+    DragWindow,
     Toggle(&'static str),
     Cycle(&'static str),
     Slider(&'static str),
@@ -153,7 +155,11 @@ impl SettingsModel {
                 self.touch();
             }
             Ctrl::Corner(i) => {
+                // the corner grid places the overlay exactly INTO the corner;
+                // the margin sliders then offset it from the screen edges
                 self.app.corner = ["tl", "tr", "bl", "br"].get(i as usize).copied().unwrap_or("tr").into();
+                self.app.margin_x = 0.0;
+                self.app.margin_y = 0.0;
                 self.touch();
             }
             Ctrl::MoveOverlay => self.move_requested = true,
@@ -214,6 +220,7 @@ impl SettingsModel {
                 self.touch();
             }
             Ctrl::Slider(_) => {}
+            Ctrl::DragWindow => {}
         }
     }
 
@@ -319,6 +326,7 @@ fn slider_range(key: &str) -> (f64, f64) {
         "blur" => (0.0, 40.0),
         "radius" => (0.0, 26.0),
         "whisper_delay" => (1.0, 30.0),
+        "talking_fade" => (0.0, 10.0),
         _ => (0.0, 200.0), // margin_x / margin_y
     }
 }
@@ -338,6 +346,7 @@ fn set_slider(app: &mut Appearance, key: &str, v: f64) {
         "margin_x" => app.margin_x = v,
         "margin_y" => app.margin_y = v,
         "whisper_delay" => app.whisper_delay = v.round().clamp(min, max),
+        "talking_fade" => app.talking_fade = v.round().clamp(min, max),
         _ => {}
     }
 }
@@ -354,7 +363,8 @@ fn get_slider(app: &Appearance, key: &str) -> f64 {
         "radius" => app.radius,
         "margin_x" => app.margin_x,
         "margin_y" => app.margin_y,
-        _ => app.whisper_delay,
+        "whisper_delay" => app.whisper_delay,
+        _ => app.talking_fade,
     }
 }
 
@@ -413,7 +423,69 @@ fn wrap_text(fonts: &crate::font::Fonts, text: &str, size: f32, max_w: f32) -> V
 }
 
 /// Glass mockup icon glyph (kind 0..7), centered at (cx, cy).
-fn draw_icon(b: &mut Buf, cx: f32, cy: f32, s: f32, kind: u8, col: Rgba, bg: Rgba) {
+/// Draw wrapper that scales every coordinate/size by `k` (DPI): the buffer is
+/// physical pixels while all layout math stays in logical units.
+pub struct SBuf {
+    b: crate::render::Buf,
+    k: f32,
+}
+
+impl SBuf {
+    fn s(&self, v: f32) -> f32 {
+        v * self.k
+    }
+    pub fn text(&mut self, fonts: &crate::font::Fonts, x: f32, y: f32, t: &str, size: f32, bold: bool, col: Rgba) {
+        let (x, y, size) = (self.s(x), self.s(y), self.s(size));
+        fonts.draw(&mut self.b, x, y, t, size, bold, col);
+    }
+    pub fn clear(&mut self) {
+        self.b.clear();
+    }
+    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, c: Rgba) {
+        self.b.fill_rect(self.s(x), self.s(y), self.s(w), self.s(h), c);
+    }
+    pub fn fill_rect_vgrad(&mut self, x: f32, y: f32, w: f32, h: f32, top: Rgba, bottom: Rgba) {
+        self.b.fill_rect_vgrad(self.s(x), self.s(y), self.s(w), self.s(h), top, bottom);
+    }
+    pub fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, c: Rgba) {
+        self.b.round_rect(self.s(x), self.s(y), self.s(w), self.s(h), self.s(radius), c);
+    }
+    pub fn stroke_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, c: Rgba, thickness: f32) {
+        self.b.stroke_round_rect(self.s(x), self.s(y), self.s(w), self.s(h), self.s(radius), c, self.s(thickness));
+    }
+    pub fn circle(&mut self, cx: f32, cy: f32, r: f32, c: Rgba) {
+        self.b.circle(self.s(cx), self.s(cy), self.s(r), c);
+    }
+    pub fn stroke_circle(&mut self, cx: f32, cy: f32, r: f32, c: Rgba, thickness: f32) {
+        self.b.stroke_circle(self.s(cx), self.s(cy), self.s(r), c, self.s(thickness));
+    }
+    pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, c: Rgba) {
+        self.b.line(self.s(x0), self.s(y0), self.s(x1), self.s(y1), self.s(thickness), c);
+    }
+    pub fn set_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.b.set_clip(self.s(x), self.s(y), self.s(w), self.s(h));
+    }
+    pub fn clear_clip(&mut self) {
+        self.b.clear_clip();
+    }
+    pub fn blit_rgba(&mut self, dx: f32, dy: f32, dw: f32, dh: f32, src: &[u8], sw: i32, sh: i32, circle_clip: bool) {
+        self.b.blit_rgba(self.s(dx), self.s(dy), self.s(dw), self.s(dh), src, sw, sh, circle_clip);
+    }
+}
+
+/// Physical/logical ratio of the current display (1.0 on non-windows).
+fn ui_scale() -> f32 {
+    #[cfg(any(windows, tsn_win32))]
+    {
+        crate::overlay::win32::dpi_scale() as f32
+    }
+    #[cfg(not(any(windows, tsn_win32)))]
+    {
+        1.0
+    }
+}
+
+fn draw_icon(b: &mut SBuf, cx: f32, cy: f32, s: f32, kind: u8, col: Rgba, bg: Rgba) {
     match kind {
         0 => b.stroke_circle(cx, cy, s, col, 2.0),                    // glass ring
         1 => {                                                        // crescent
@@ -453,7 +525,7 @@ fn draw_icon(b: &mut Buf, cx: f32, cy: f32, s: f32, kind: u8, col: Rgba, bg: Rgb
 }
 
 /// Preset tile (icon above label), Glass mockup.
-fn draw_tile(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, label: &str, icon: u8, active: bool) {
+fn draw_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str, icon: u8, active: bool) {
     let bg = if active {
         c.pal.accent.scale_a(36.0)
     } else {
@@ -465,24 +537,24 @@ fn draw_tile(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, label: &str
     let icol = if active { c.pal.accent } else { c.pal.icon };
     draw_icon(buf, x + w * 0.5, y + 18.0, 6.5, icon, icol, bg);
     let tw = c.fonts.measure(label, 12.5, true);
-    c.fonts.draw(buf, x + (w - tw) * 0.5, y + h - 11.0, label, 12.5, true, c.pal.text);
+    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h - 11.0, label, 12.5, true, c.pal.text);
 }
 
 /// Accent pill button («Переместить оверлей»).
-fn draw_button(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, label: &str) {
+fn draw_button(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str) {
     buf.round_rect(x, y, w, h, 12.0, c.pal.accent.scale_a(235.0));
     let tw = c.fonts.measure(label, 13.5, true);
-    c.fonts.draw(buf, x + (w - tw) * 0.5, y + h * 0.5 + 5.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
+    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h * 0.5 + 5.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
 }
 
 /// Small pin glyph on the preview card.
-fn draw_pin(c: &Ctx, buf: &mut Buf, x: f32, y: f32) {
+fn draw_pin(c: &Ctx, buf: &mut SBuf, x: f32, y: f32) {
     buf.circle(x, y, 3.2, c.pal.muted);
     buf.line(x, y + 3.0, x + 5.0, y + 8.0, 1.6, c.pal.muted);
 }
 
-fn draw_toggle(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, on: bool) {
-    c.fonts.draw(buf, x, y + 15.0, label, c.fs, false, c.pal.text);
+fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on: bool) {
+    buf.text(&c.fonts, x, y + 15.0, label, c.fs, false, c.pal.text);
     let (tw, th) = (42.0, 24.0);
     let tx = x + w - tw;
     let ty = y + 1.0;
@@ -497,10 +569,10 @@ fn draw_toggle(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, on: 
 }
 
 /// Slider row: label left, value right (accent), track + in-bounds knob below.
-fn draw_slider(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, label: &str, value_str: &str, value: f64, range: (f64, f64)) -> crate::layout::Rect {
-    c.fonts.draw(buf, x, y + 12.0, label, c.fs, false, c.pal.text);
+fn draw_slider(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, value_str: &str, value: f64, range: (f64, f64)) -> crate::layout::Rect {
+    buf.text(&c.fonts, x, y + 12.0, label, c.fs, false, c.pal.text);
     let vw = c.fonts.measure(value_str, c.fs, true);
-    c.fonts.draw(buf, x + w - vw, y + 12.0, value_str, c.fs, true, c.pal.accent);
+    buf.text(&c.fonts, x + w - vw, y + 12.0, value_str, c.fs, true, c.pal.accent);
     let track = crate::layout::Rect { x, y: y + 24.0, w, h: 8.0 };
     buf.round_rect(track.x, track.y, track.w, track.h, 4.0, c.pal.row_hover);
     let t = ((value - range.0) / (range.1 - range.0)).clamp(0.0, 1.0) as f32;
@@ -560,7 +632,7 @@ fn select_index(key: &str, app: &Appearance, desktop: &DesktopPrefs) -> u8 {
 /// Dropdown row: label left, value box + chevron right. Returns the value box rect.
 fn draw_select(
     c: &Ctx,
-    buf: &mut crate::render::Buf,
+    buf: &mut SBuf,
     x: f32,
     y: f32,
     w: f32,
@@ -572,7 +644,7 @@ fn draw_select(
     let bx = x + w - 194.0;
     buf.round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.row_hover);
     buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, if open { pal.accent } else { pal.muted.scale_a(90.0) }, 1.0);
-    c.fonts.draw(buf, bx + 12.0, y + 5.0, value, 12.0, false, pal.text);
+    buf.text(&c.fonts, bx + 12.0, y + 5.0, value, 12.0, false, pal.text);
     // chevron
     let cx = bx + 172.0;
     let cy = y + 11.0;
@@ -583,7 +655,7 @@ fn draw_select(
         buf.line(cx - 4.0, cy - 3.0, cx, cy + 3.0, 1.6, pal.muted);
         buf.line(cx, cy + 3.0, cx + 4.0, cy - 3.0, 1.6, pal.muted);
     }
-    c.fonts.draw(buf, x + 2.0, y + 5.0, label, 12.0, false, pal.text);
+    buf.text(&c.fonts, x + 2.0, y + 5.0, label, 12.0, false, pal.text);
     crate::layout::Rect { x: bx, y: y - 2.0, w: 190.0, h: 28.0 }
 }
 
@@ -632,10 +704,13 @@ fn sample_input<'a>(
 }
 
 /// Render the settings window; returns the buffer + interactive regions + content height.
-pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Region>, f32) {
+pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, Vec<Region>, f32) {
     let pal = Palette::from_appearance(&m.app);
     let c = Ctx { pal: &pal, fonts, fs: 13.0 };
-    let mut buf = Buf::new(WIN_W as i32, WIN_H as i32);
+    let mut buf = SBuf {
+        b: Buf::new(((WIN_W as f32) * k).round() as i32, ((WIN_H as f32) * k).round() as i32),
+        k,
+    };
     let mut regions: Vec<Region> = Vec::new();
     let mut open_sel_at: Option<(f32, f32)> = None;
 
@@ -650,13 +725,13 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     // ---- title bar (Glass: version pill next to the title, round close) ----
     let title = tr(&m.lang, "Настройки", "Settings");
     let full = format!("TS3-TS6 Notifier — {title}");
-    c.fonts.draw(&mut buf, 20.0, 28.0, &full, 15.0, true, pal.text);
+    buf.text(&c.fonts, 20.0, 28.0, &full, 15.0, true, pal.text);
     let ver = format!("v{}", m.version);
     let tw_full = c.fonts.measure(&full, 15.0, true);
     let vw = c.fonts.measure(&ver, 11.0, true);
     let vpx = 20.0 + tw_full + 10.0;
     buf.round_rect(vpx, 13.0, vw + 16.0, 20.0, 10.0, pal.row_hover);
-    c.fonts.draw(&mut buf, vpx + 8.0, 27.0, &ver, 11.0, true, pal.muted);
+    buf.text(&c.fonts, vpx + 8.0, 27.0, &ver, 11.0, true, pal.muted);
     let (cx, cy) = (WIN_W - 42.0, 25.0);
     buf.circle(cx, cy, 15.0, pal.row_hover);
     buf.line(cx - 5.0, cy - 5.0, cx + 5.0, cy + 5.0, 2.2, pal.text);
@@ -664,6 +739,11 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     regions.push(Region {
         rect: crate::layout::Rect { x: cx - 15.0, y: cy - 15.0, w: 30.0, h: 30.0 },
         ctrl: Ctrl::Close,
+    });
+    // dragging the title strip moves the window (like a normal app window)
+    regions.push(Region {
+        rect: crate::layout::Rect { x: 0.0, y: 0.0, w: WIN_W, h: 44.0 },
+        ctrl: Ctrl::DragWindow,
     });
     buf.fill_rect(0.0, 44.0, WIN_W, 1.0, pal.panel_border);
 
@@ -675,8 +755,8 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     buf.set_clip(pane_x, pane_y, pane_w, pane_h);
     let mut y = pane_y - m.scroll;
 
-    let section = |buf: &mut Buf, c: &Ctx, y: f32, text: &str| {
-        c.fonts.draw(buf, pane_x + 4.0, y + 16.0, text, 14.0, true, c.pal.accent);
+    let section = |buf: &mut SBuf, c: &Ctx, y: f32, text: &str| {
+        buf.text(&c.fonts, pane_x + 4.0, y + 16.0, text, 14.0, true, c.pal.accent);
         buf.fill_rect(pane_x + 4.0, y + 24.0, pane_w - 8.0, 1.0, c.pal.panel_border);
     };
 
@@ -741,7 +821,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
             .unwrap_or(0);
         let cname = tr(&m.lang, names_ru[idx], names_en[idx]);
         let cap = format!("{}: {} ({})", tr(&m.lang, "Цвет", "Color"), cname, m.app.accent);
-        c.fonts.draw(&mut buf, pane_x + 4.0, y + 12.0, &cap, 11.5, false, pal.muted);
+        buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &cap, 11.5, false, pal.muted);
         y += 26.0;
     }
 
@@ -903,6 +983,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
         regions.push(Region { rect: track, ctrl: Ctrl::Slider("whisper_delay") });
         y += 52.0;
     }
+    {
+        let label = tr(&m.lang, "Задержка исчезновения говорящих, с", "Talking fade-out, s");
+        let value = get_slider(&m.app, "talking_fade");
+        let vstr = if value <= 0.0 { tr(&m.lang, "выкл", "off") } else { format!("{value:.0}") };
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range("talking_fade"));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider("talking_fade") });
+        y += 52.0;
+    }
 
     section(&mut buf, &c, y, &tr(&m.lang, "Чат и уведомления", "Chat & notifications"));
     y += 34.0;
@@ -1019,7 +1107,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     buf.round_rect(pv_x, pane_y, pv_w, card_h, 12.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05));
     buf.stroke_round_rect(pv_x, pane_y, pv_w, card_h, 12.0, pal.panel_border, 1.0);
     let cap = tr(&m.lang, "Предпросмотр", "Preview");
-    c.fonts.draw(&mut buf, pv_x + 14.0, pane_y + 23.0, &cap, 13.0, true, pal.text);
+    buf.text(&c.fonts, pv_x + 14.0, pane_y + 23.0, &cap, 13.0, true, pal.text);
     draw_pin(&c, &mut buf, pv_x + pv_w - 22.0, pane_y + 18.0);
 
     let sample = sample_input(&m.app, &pal, fonts, icons);
@@ -1053,8 +1141,8 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     let hint2 = tr(&m.lang, "Изменения применяются сразу", "Changes apply immediately");
     let h1w = c.fonts.measure(&hint1, 11.5, false);
     let h2w = c.fonts.measure(&hint2, 11.5, false);
-    c.fonts.draw(&mut buf, pv_x + (pv_w - h1w) * 0.5, btn_y + 64.0, &hint1, 11.5, false, pal.muted);
-    c.fonts.draw(&mut buf, pv_x + (pv_w - h2w) * 0.5, btn_y + 82.0, &hint2, 11.5, false, pal.muted);
+    buf.text(&c.fonts, pv_x + (pv_w - h1w) * 0.5, btn_y + 64.0, &hint1, 11.5, false, pal.muted);
+    buf.text(&c.fonts, pv_x + (pv_w - h2w) * 0.5, btn_y + 82.0, &hint2, 11.5, false, pal.muted);
 
     // ---- dropdown popup (topmost layer) ----
     if let (Some(key), Some((px, py))) = (m.open_select, open_sel_at) {
@@ -1073,7 +1161,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
             if *idx == cur {
                 buf.round_rect(px + 4.0, ry, 182.0, row_h - 4.0, 6.0, pal.accent.scale_a(52.0));
             }
-            c.fonts.draw(&mut buf, px + 12.0, ry + 6.0, lbl, 12.0, false, pal.text);
+            buf.text(&c.fonts, px + 12.0, ry + 6.0, lbl, 12.0, false, pal.text);
             regions.push(Region {
                 rect: crate::layout::Rect { x: px, y: ry, w: 190.0, h: row_h - 2.0 },
                 ctrl: Ctrl::Option(key, *idx),
@@ -1086,7 +1174,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons) -> (Buf, Vec<Regi
     front.extend(back);
     let regions = front;
 
-    (buf, regions, content_h)
+    (buf.b, regions, content_h)
 }
 
 /* ---------------- window runner ---------------- */
@@ -1163,24 +1251,35 @@ fn persist(app: &Arc<App>, a: &Appearance, d: &DesktopPrefs) {
 
 /// Settings event loop (cross-platform; the host presents + pumps input).
 pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Icons, host: &mut dyn Host) {
+    // the window lives in PHYSICAL pixels (DPI-aware thread); all region and
+    // model math stays in logical units, so event coords are divided by `k`
+    let k = ui_scale();
+    let kw = (WIN_W as f32) * k;
+    let kh = (WIN_H as f32) * k;
     let work = host.work_area();
-    let x = work.0 + (work.2 - WIN_W as f64) * 0.5;
-    let y = work.1 + (work.3 - WIN_H as f64) * 0.5;
-    set_window_rect(x, y, WIN_W as f64, WIN_H as f64);
+    let cx = work.0 + (work.2 - kw as f64) * 0.5;
+    let cy = work.1 + (work.3 - kh as f64) * 0.5;
+    let mut pos: Option<(f64, f64)> = None;
     let mut activated = false;
     loop {
-        let (buf, regions, content_h) = render(m, fonts, icons);
-        host.present(&buf, x, y, (x, y, WIN_W as f64, WIN_H as f64));
+        let (x, y) = pos.unwrap_or((cx, cy));
+        let (buf, regions, content_h) = render(m, fonts, icons, k);
+        host.present(&buf, x, y, (x, y, kw as f64, kh as f64));
+        pos = Some(host.window_pos());
         host.set_interactive(true);
         if !activated {
             activated = true;
             host.activate();
         }
+        // publish our rect (PHYSICAL px) for the overlay's wheel routing
+        if let Some((wx, wy)) = pos {
+            set_window_rect(wx, wy, kw as f64, kh as f64);
+        }
         // pump() reports SCREEN coordinates — the model works window-local
         for ev in host.pump() {
             match ev {
                 Ev::Click(ex, ey) => {
-                    let (ex, ey) = (ex - x as f32, ey - y as f32);
+                    let (ex, ey) = ((ex - x as f32) / k, (ey - y as f32) / k);
                     let mut hit = false;
                     for r in &regions {
                         if r.rect.contains(ex, ey) {
@@ -1198,9 +1297,20 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                     }
                 }
                 Ev::DragStart(ex, ey) => {
-                    m.drag_begin(ex - x as f32, ey - y as f32, &regions);
+                    let (ex, ey) = ((ex - x as f32) / k, (ey - y as f32) / k);
+                    // dragging the window header moves the whole window
+                    let on_header = regions.iter().any(|r| {
+                        matches!(r.ctrl, Ctrl::DragWindow) && r.rect.contains(ex, ey)
+                    });
+                    if on_header {
+                        m.close_select();
+                        host.begin_window_drag();
+                        pos = Some(host.window_pos());
+                    } else {
+                        m.drag_begin(ex, ey, &regions);
+                    }
                 }
-                Ev::DragMove(ex, _) => m.drag_to(ex - x as f32),
+                Ev::DragMove(ex, _) => m.drag_to((ex - x as f32) / k),
                 Ev::DragEnd => m.drag_end(),
                 Ev::Wheel(dy) => m.wheel(dy, content_h),
             }
@@ -1301,12 +1411,12 @@ mod tests {
         let m = model();
         let fonts = Fonts::load();
         let icons = Icons::load();
-        let (buf, regions, _) = render(&m, &fonts, &icons);
+        let (buf, regions, _) = render(&m, &fonts, &icons, 1.0);
         assert_eq!((buf.w, buf.h), (WIN_W as i32, WIN_H as i32));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 11);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 12);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 8);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count() == 4);
     }
@@ -1336,8 +1446,13 @@ mod tests {
         let mut m = model();
         m.click(Ctrl::Corner(2), 0.0, 0.0);
         assert_eq!(m.app.corner, "bl");
+        // corner placement puts the overlay exactly INTO the corner: the
+        // margins reset and can then be fine-tuned with the sliders
+        assert_eq!(m.app.margin_x, 0.0);
+        assert_eq!(m.app.margin_y, 0.0);
         m.click(Ctrl::Corner(1), 0.0, 0.0);
         assert_eq!(m.app.corner, "tr");
+        assert_eq!((m.app.margin_x, m.app.margin_y), (0.0, 0.0));
     }
 }
 
@@ -1351,21 +1466,21 @@ mod qa {
         let mut m = SettingsModel::new(Appearance::default(), "0.1.0".into());
         let fonts = Fonts::load();
         let icons = Icons::load();
-        let (buf, _, ch) = render(&m, &fonts, &icons);
+        let (buf, _, ch) = render(&m, &fonts, &icons, 1.0);
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
         std::fs::create_dir_all(dir).unwrap();
         write_png(&format!("{dir}/settings.png"), &buf).unwrap();
         // middle — corner grid + roster sections
         m.scroll = 620.0;
-        let (bufm, _, _) = render(&m, &fonts, &icons);
+        let (bufm, _, _) = render(&m, &fonts, &icons, 1.0);
         write_png(&format!("{dir}/settings-middle.png"), &bufm).unwrap();
         // scrolled to the bottom — «Система» section
         m.wheel(-100000.0, ch);
-        let (buf2, _, _) = render(&m, &fonts, &icons);
+        let (buf2, _, _) = render(&m, &fonts, &icons, 1.0);
         write_png(&format!("{dir}/settings-bottom.png"), &buf2).unwrap();
         // dropdown open («Язык»)
         m.click(Ctrl::Select("language"), 0.0, 0.0);
-        let (buf3, _, _) = render(&m, &fonts, &icons);
+        let (buf3, _, _) = render(&m, &fonts, &icons, 1.0);
         write_png(&format!("{dir}/settings-select.png"), &buf3).unwrap();
     }
 }

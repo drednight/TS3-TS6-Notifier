@@ -742,7 +742,15 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
 
     for (i, u) in inp.users.iter().enumerate() {
         let key = inp.class_keys.get(i).and_then(|k| k.as_deref());
-        draw_user_row(&c, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, &you_label, &opts);
+        // «только говорящие»: rows fade out over `talking_fade` seconds
+        let faded;
+        let rc = if u.fade < 0.999 {
+            faded = inp.pal.fade(u.fade);
+            Ctx { pal: &faded, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk }
+        } else {
+            Ctx { pal: c.pal, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk }
+        };
+        draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, &you_label, &opts);
         cy += row_h + row_gap;
     }
     cy = (cy - row_gap).max(0.0) + list_pad;

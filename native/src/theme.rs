@@ -152,6 +152,35 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// Copy with every color's alpha multiplied by `k` (row fade-out).
+    pub fn fade(&self, k: f32) -> Palette {
+        let f = |c: Rgba| {
+            let a = ((c.0[3] as f32) * k).clamp(0.0, 255.0) as u8;
+            Rgba([c.0[0], c.0[1], c.0[2], a])
+        };
+        Palette {
+            accent: f(self.accent),
+            accent_rgb: self.accent_rgb,
+            panel_bg: f(self.panel_bg),
+            panel_border: f(self.panel_border),
+            text: f(self.text),
+            muted: f(self.muted),
+            icon: f(self.icon),
+            row_hover: f(self.row_hover),
+            talking_bg: f(self.talking_bg),
+            talk_outline: f(self.talk_outline),
+            nick: f(self.nick),
+            msg: f(self.msg),
+            danger: f(self.danger),
+            ok: f(self.ok),
+            warn: f(self.warn),
+            shadow: f(self.shadow),
+            glow: self.glow,
+            radius: self.radius,
+            opacity: self.opacity,
+        }
+    }
+
     pub fn from_appearance(a: &Appearance) -> Palette {
         let accent = parse_color(&a.accent);
         let theme = a.theme.as_str();
