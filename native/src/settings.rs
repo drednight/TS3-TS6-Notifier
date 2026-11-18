@@ -835,25 +835,20 @@ fn draw_pin(c: &Ctx, buf: &mut SBuf, x: f32, y: f32) {
 }
 
 fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on: bool) {
-    // «кнопками подсвечиваемыми если включено и не светящаяся если выключено»:
-    // the whole row is the button — lit (accent glow) when ON, dim but clearly
-    // bordered when OFF (no more black-on-black)
-    let h = 26.0;
-    let r = 8.0;
+    // «убери сами ползунки» — a plain highlightable BUTTON, a bit bigger than
+    // the action buttons: lit when ON, dim but clearly readable when OFF
+    let h = 36.0;
+    let r = 12.0;
     if on {
-        buf.round_rect(x, y, w, h, r, c.pal.accent.scale_a(46.0));
-        buf.stroke_round_rect(x, y, w, h, r, c.pal.accent, 1.4);
-        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(56.0), 1.0);
-        buf.text(&c.fonts, x + 12.0, y + 18.0, label, c.fs, true, c.pal.text);
-        buf.round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, c.pal.accent);
-        buf.circle(x + w - 11.5, y + 13.0, 4.4, Rgba::rgb(255, 255, 255));
+        buf.round_rect(x, y, w, h, r, c.pal.accent.scale_a(235.0));
+        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(80.0), 1.2);
+        let tw = c.fonts.measure(label, 13.5, true);
+        buf.text(&c.fonts, x + (w - tw) * 0.5, y + 23.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
     } else {
-        buf.round_rect(x, y, w, h, r, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15));
+        buf.round_rect(x, y, w, h, r, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.18));
         buf.stroke_round_rect(x, y, w, h, r, c.pal.muted.scale_a(175.0), 1.2);
-        buf.text(&c.fonts, x + 12.0, y + 18.0, label, c.fs, false, c.pal.muted);
-        buf.round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.35));
-        buf.stroke_round_rect(x + w - 32.0, y + 6.0, 22.0, 14.0, 7.0, c.pal.muted.scale_a(150.0), 1.0);
-        buf.circle(x + w - 21.5, y + 13.0, 4.4, c.pal.muted.scale_a(190.0));
+        let tw = c.fonts.measure(label, 13.5, false);
+        buf.text(&c.fonts, x + (w - tw) * 0.5, y + 23.0, label, 13.5, false, c.pal.muted);
     }
 }
 
@@ -1057,7 +1052,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     let pane_w = 452.0;
     let pane_y = 58.0;
     let pane_h = PANE_H;
-    buf.set_clip(pane_x, pane_y, pane_w, pane_h);
     let mut y = pane_y - m.scroll;
 
     let section = |buf: &mut SBuf, c: &Ctx, y: f32, text: &str| {
@@ -1102,6 +1096,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         }
     }
 
+    buf.set_clip(pane_x, pane_y, pane_w, pane_h);
     // ---- page content ----
     if m.page == 0 {
         // Вид: стиль, пресеты, цвета, размеры и эффекты, панель, положение
@@ -1224,10 +1219,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let on = get_toggle(&m.app, key);
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle(key),
         });
-        y += 30.0;
+        y += 40.0;
     }
 
     section(&mut buf, &c, y, &tr(&m.lang, "Положение на экране", "Screen corner"));
@@ -1290,10 +1285,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let label = tr(&m.lang, "Показывать оверлей", "Show overlay");
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, m.desktop.visible);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle("visible"),
         });
-        y += 30.0;
+        y += 40.0;
     }
     } else if m.page == 1 {
         // Элементы: состав канала, речь и шёпот, чат, события
@@ -1310,10 +1305,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let on = get_toggle(&m.app, key);
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle(key),
         });
-        y += 30.0;
+        y += 40.0;
     }
 
     section(&mut buf, &c, y, &tr(&m.lang, "Речь и шёпот", "Voice & whispers"));
@@ -1327,10 +1322,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let on = get_toggle(&m.app, key);
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle(key),
         });
-        y += 30.0;
+        y += 40.0;
     }
     {
         let label = tr(&m.lang, "Индикатор речи", "Talking indicator");
@@ -1386,10 +1381,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let on = get_toggle(&m.app, key);
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle(key),
         });
-        y += 30.0;
+        y += 40.0;
     }
     {
         // «Чат(панель событий) пропадает через определённое время» — chat rows
@@ -1409,10 +1404,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let on = get_toggle(&m.app, "show_events");
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle("show_events"),
         });
-        y += 32.0;
+        y += 40.0;
     }
     {
         let label = tr(&m.lang, "Количество событий", "Event count");
@@ -1441,19 +1436,19 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         let tw = pane_w - 8.0 - 200.0;
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, tw, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: tw, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: tw, h: 36.0 },
             ctrl: Ctrl::Toggle(tkey),
         });
         let cur = select_index(skey, m);
         let opts = select_options(skey, &m.lang);
         let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
         let open = m.open_select == Some(skey);
-        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, "", &value, open);
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y + 5.0, pane_w - 8.0, "", &value, open);
         if open {
             open_sel_at = Some((boxrect.x, boxrect.y));
         }
         regions.push(Region { rect: boxrect, ctrl: Ctrl::Select(skey) });
-        y += 32.0;
+        y += 44.0;
     }
 
     } else if m.page == 2 {
@@ -1617,10 +1612,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         };
         draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
         regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 26.0 },
+            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
             ctrl: Ctrl::Toggle(key),
         });
-        y += 30.0;
+        y += 40.0;
     }
     // ---- Связь (Connection): source + TS3 plugin + TS6 ----
     section(&mut buf, &c, y, &tr(&m.lang, "Инструменты", "Tools"));
