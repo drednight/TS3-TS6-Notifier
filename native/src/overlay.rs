@@ -408,6 +408,10 @@ impl Overlay {
         // without exiting the app
         host.set_visible(cfg.desktop.visible);
         if !cfg.desktop.visible {
+            // Hidden: still pump Win32 messages — the tray window is created on
+            // this thread and is driven by this pump; skipping it freezes the
+            // tray («после скрытия в трее не дает раскрыть ничего»).
+            let _ = host.pump();
             return;
         }
         let a = cfg.appearance.clone();

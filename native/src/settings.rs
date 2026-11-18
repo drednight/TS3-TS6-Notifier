@@ -1996,6 +1996,18 @@ fn fetch_release_tag() -> Option<String> {
     }
 }
 
+/// The desktop prefs object written by persist() — ALL toggles included
+/// (visible/autostart were silently dropped once).
+fn desktop_patch(d: &crate::config::DesktopPrefs) -> Vec<(&'static str, crate::json::Json)> {
+    vec![
+        ("elevate", crate::json::Json::b(d.elevate)),
+        ("clickThrough", crate::json::Json::b(d.click_through)),
+        ("overlayLayer", crate::json::Json::s(d.overlay_layer.clone())),
+        ("autostart", crate::json::Json::b(d.autostart)),
+        ("visible", crate::json::Json::b(d.visible)),
+    ]
+}
+
 fn persist(app: &Arc<App>, m: &SettingsModel) -> bool {
     // «Запуск с системой» — keep the HKCU Run entry in sync with the toggle
     #[cfg(any(windows, tsn_win32))]
@@ -2011,14 +2023,7 @@ fn persist(app: &Arc<App>, m: &SettingsModel) -> bool {
     };
     let patch = crate::json::obj(vec![
         ("appearance", crate::config::appearance_to_json(&m.app)),
-        (
-            "desktop",
-            crate::json::obj(vec![
-                ("elevate", crate::json::Json::b(d.elevate)),
-                ("clickThrough", crate::json::Json::b(d.click_through)),
-                ("overlayLayer", crate::json::Json::s(d.overlay_layer.clone())),
-            ]),
-        ),
+        ("desktop", crate::json::obj(desktop_patch(d))),
         ("source", crate::json::Json::s(m.source.clone())),
         ("ts3", ts_json(&m.ts3)),
         ("ts6", ts_json(&m.ts6)),
@@ -2106,8 +2111,13 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                 }
                 Ev::DragStart(ex, ey) => {
                     let (ex, ey) = ((ex - x as f32) / k, (ey - y as f32) / k);
-                    // dragging the window header moves the whole window
-                    let on_header = regions.iter().any(|r| {
+                    // dragging the window header moves the whole window — but a
+                    // press on the × must become a click: the native drag loop
+                    // would swallow the mouse-up and Close would never fire
+                    let over_close = regions.iter().any(|r| {
+                        matches!(r.ctrl, Ctrl::Close) && r.rect.contains(ex, ey)
+                    });
+                    let on_header = !over_close && regions.iter().any(|r| {
                         matches!(r.ctrl, Ctrl::DragWindow) && r.rect.contains(ex, ey)
                     });
                     if on_header {
@@ -2184,6 +2194,15 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                 ("active", crate::json::Json::b(true)),
             ]));
         }
+        if !m.changed {
+            // tray «Скрыть/Показывать оверлей» must survive later persists of
+            // our model — adopt external desktop changes while idle
+            if let Ok(g) = app.store.try_lock() {
+                let (v, a) = (g.get().desktop.visible, g.get().desktop.autostart);
+                m.desktop.visible = v;
+                m.desktop.autostart = a;
+            }
+        }
         if m.changed {
             m.changed = false;
             if persist(app, m) {
@@ -2203,6 +2222,36 @@ mod tests {
 
     fn model() -> SettingsModel {
         SettingsModel::new(Appearance::default(), "0.1.0".into())
+    }
+
+    #[test]
+    fn desktop_patch_keeps_visibility_and_autostart() {
+        let mut d = crate::config::DesktopPrefs::default();
+        d.visible = false;
+        d.autostart = true;
+        d.elevate = false;
+        let patch = crate::json::obj(vec![("desktop", crate::json::obj(desktop_patch(&d)))]);
+        let mut cfg = crate::config::AppConfig::default();
+        cfg.update_from(&patch); // returns "reconnect needed", not "changed"
+        assert!(!cfg.desktop.visible, "visible must persist");
+        assert!(cfg.desktop.autostart, "autostart must persist");
+        assert!(!cfg.desktop.elevate, "elevate must persist");
+    }
+
+    #[test]
+    fn close_not_eaten_by_header_drag() {
+        // the × region sits inside the header drag strip; the drag handler
+        // must yield to Close (see run_loop Ev::DragStart)
+        let m = model();
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let (_, regions, _) = render(&m, &fonts, &icons, 1.0);
+        let close = regions.iter().find(|r| r.ctrl == Ctrl::Close).expect("close region");
+        let drag = regions.iter().find(|r| r.ctrl == Ctrl::DragWindow).expect("drag region");
+        assert!(
+            drag.rect.contains(close.rect.x + 1.0, close.rect.y + 1.0),
+            "test precondition: close is inside the drag strip"
+        );
     }
 
     #[test]
