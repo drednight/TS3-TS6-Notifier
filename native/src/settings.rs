@@ -533,6 +533,9 @@ fn slider_range(key: &str) -> (f64, f64) {
         "radius" => (0.0, 26.0),
         "whisper_delay" => (1.0, 30.0),
         "talking_fade" => (0.0, 10.0),
+        "chat_delay" => (2.0, 60.0),
+        "events_delay" => (5.0, 60.0),
+        "events_count" => (1.0, 10.0),
         _ => (0.0, 200.0), // margin_x / margin_y
     }
 }
@@ -553,6 +556,9 @@ fn set_slider(app: &mut Appearance, key: &str, v: f64) {
         "margin_y" => app.margin_y = v,
         "whisper_delay" => app.whisper_delay = v.round().clamp(min, max),
         "talking_fade" => app.talking_fade = v.round().clamp(min, max),
+        "chat_delay" => app.chat_delay = v.round().clamp(min, max),
+        "events_delay" => app.events_delay = v.round().clamp(min, max),
+        "events_count" => app.events_count = v.round().clamp(min, max),
         _ => {}
     }
 }
@@ -570,7 +576,11 @@ fn get_slider(app: &Appearance, key: &str) -> f64 {
         "margin_x" => app.margin_x,
         "margin_y" => app.margin_y,
         "whisper_delay" => app.whisper_delay,
-        _ => app.talking_fade,
+        "talking_fade" => app.talking_fade,
+        "chat_delay" => app.chat_delay,
+        "events_delay" => app.events_delay,
+        "events_count" => app.events_count as f64,
+        _ => 0.0,
     }
 }
 
@@ -943,10 +953,11 @@ fn sample_input<'a>(
         channel_name: "Генеральный штаб",
         user_count: 4,
         users: vec![alice, me, bob],
+        talk_alphas: vec![],
         class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into())],
         whisper_keys: vec![("103".into(), Some("ghost".into()))],
         whisperers: vec![ghost],
-        feed: vec![FeedItem { nickname: "Мыsha".into(), text: "привет!".into(), kind: 1 }],
+        feed: vec![FeedItem { nickname: "Мыsha".into(), text: "привет!".into(), kind: 1, alpha: 1.0 }],
         lang: "ru",
         move_mode: false,
         now_ms: 1500,
@@ -1229,19 +1240,33 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 36.0;
     }
     {
-        let label = tr(&m.lang, "Задержка шёпота, с", "Whisper delay, s");
+        // unit lives in the value, not the label («убери ", с"»)
+        let label = tr(&m.lang, "Задержка шёпота", "Whisper delay");
         let value = get_slider(&m.app, "whisper_delay");
-        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &format!("{value:.0}"), value, slider_range("whisper_delay"));
+        let vstr = format!("{value:.0} {}", tr(&m.lang, "с", "s"));
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range("whisper_delay"));
         regions.push(Region { rect: track, ctrl: Ctrl::Slider("whisper_delay") });
         y += 52.0;
     }
     {
-        let label = tr(&m.lang, "Задержка исчезновения говорящих, с", "Talking fade-out, s");
+        let label = tr(&m.lang, "Задержка исчезновения говорящих", "Talking fade delay");
         let value = get_slider(&m.app, "talking_fade");
-        let vstr = if value <= 0.0 { tr(&m.lang, "выкл", "off") } else { format!("{value:.0}") };
+        let vstr = if value <= 0.0 {
+            tr(&m.lang, "выкл", "off")
+        } else {
+            format!("{value:.0} {}", tr(&m.lang, "с", "s"))
+        };
         let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range("talking_fade"));
         regions.push(Region { rect: track, ctrl: Ctrl::Slider("talking_fade") });
         y += 52.0;
+        // what the delay is tied to («не понятно к чему привязана»)
+        let hint = tr(
+            &m.lang,
+            "Подсветка говорящего плавно гаснет через это время после речи",
+            "The talking highlight fades out this many seconds after speech",
+        );
+        buf.text(&c.fonts, pane_x + 8.0, y + 2.0, &hint, c.fs * 0.85, false, c.pal.text.scale_a(150.0));
+        y += 22.0;
     }
 
     section(&mut buf, &c, y, &tr(&m.lang, "Чат и уведомления", "Chat & notifications"));
@@ -1260,6 +1285,16 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         });
         y += 30.0;
     }
+    {
+        // «Чат(панель событий) пропадает через определённое время» — chat rows
+        // live `chat_delay` seconds and fade out at the end
+        let label = tr(&m.lang, "Задержка чата", "Chat delay");
+        let value = get_slider(&m.app, "chat_delay");
+        let vstr = format!("{value:.0} {}", tr(&m.lang, "с", "s"));
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range("chat_delay"));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider("chat_delay") });
+        y += 52.0;
+    }
 
     section(&mut buf, &c, y, &tr(&m.lang, "События сервера", "Server events"));
     y += 34.0;
@@ -1272,6 +1307,21 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             ctrl: Ctrl::Toggle("show_events"),
         });
         y += 32.0;
+    }
+    {
+        let label = tr(&m.lang, "Количество событий", "Event count");
+        let value = get_slider(&m.app, "events_count");
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &format!("{value:.0}"), value, slider_range("events_count"));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider("events_count") });
+        y += 52.0;
+    }
+    {
+        let label = tr(&m.lang, "Задержка событий", "Event delay");
+        let value = get_slider(&m.app, "events_delay");
+        let vstr = format!("{value:.0} {}", tr(&m.lang, "с", "s"));
+        let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range("events_delay"));
+        regions.push(Region { rect: track, ctrl: Ctrl::Slider("events_delay") });
+        y += 52.0;
     }
     for (tkey, skey, ru, en) in [
         ("show_ev_join", "ev_scope_join", "Входы", "Joins"),
@@ -2048,7 +2098,7 @@ mod tests {
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count() == 8);
-        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 12);
+        assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Slider(_))).count() == 15);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count() == 9);
         assert!(regions.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count() == 4);
     }

@@ -106,10 +106,32 @@ fn event_action(ev: &str, detail: Option<&str>, lang: &str) -> String {
     }
 }
 
-/// Build feed rows from state.chat, applying showEv*/scope filters (newest last).
-pub fn build_feed(state: &OverlayState, a: &crate::config::Appearance, lang: &str) -> Vec<FeedItem> {
+/// Build feed rows from state.chat, applying showEv*/scope filters (newest
+/// last). Rows expire after `events_delay` / `chat_delay` seconds and fade out
+/// over the last third of their life («панель событий пропадает и затухает»).
+pub fn build_feed(
+    state: &OverlayState,
+    a: &crate::config::Appearance,
+    lang: &str,
+    now: u64,
+) -> Vec<FeedItem> {
     let mut out: Vec<FeedItem> = Vec::new();
     for m in state.chat.iter().rev() {
+        let lifetime = if m.event.is_some() {
+            (a.events_delay.max(1.0) * 1000.0) as u64
+        } else {
+            (a.chat_delay.max(1.0) * 1000.0) as u64
+        };
+        let age = now.saturating_sub(m.at); // `at: 0` (unstamped) counts as expired
+        if age >= lifetime {
+            continue;
+        }
+        let fade_span = (lifetime / 3).max(400);
+        let alpha = if age + fade_span >= lifetime {
+            ((lifetime - age) as f32 / fade_span as f32).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         if let Some(ev) = m.event {
             if !a.show_events {
                 continue;
@@ -132,6 +154,7 @@ pub fn build_feed(state: &OverlayState, a: &crate::config::Appearance, lang: &st
                 nickname: m.nickname.clone(),
                 text: event_action(ev, m.detail.as_deref(), lang),
                 kind: 0,
+                alpha,
             });
         } else {
             if !a.show_chat {
@@ -145,6 +168,7 @@ pub fn build_feed(state: &OverlayState, a: &crate::config::Appearance, lang: &st
                 nickname: m.nickname.clone(),
                 text: m.text.clone(),
                 kind: if is_private { 1 } else { 2 },
+                alpha,
             });
         }
         if out.len() >= a.events_count.max(1.0) as usize {
@@ -167,6 +191,15 @@ pub fn whisper_now(u: &UserState, seen: &mut HashMap<String, u64>, now: u64, lin
 }
 
 /// Split sorted users into (roster, whisper-block) preserving order.
+/// «Ограничение на показ одновременно до 10 человек на канале» — the cap
+/// applies to the roster only; the whisper section stays complete.
+pub(crate) const MAX_ROSTER: usize = 10;
+
+pub(crate) fn cap_roster(mut rows: Vec<UserState>) -> Vec<UserState> {
+    rows.truncate(MAX_ROSTER);
+    rows
+}
+
 pub fn split_whisper(
     users: Vec<UserState>,
     seen: &mut HashMap<String, u64>,
@@ -294,6 +327,8 @@ pub struct Overlay {
     /// «Только говорящие»: stopped talkers linger here, fading out over
     /// `appearance.talking_fade` seconds before leaving the roster.
     talk_fade: HashMap<String, (UserState, u64)>,
+    /// last tick a user was seen talking (highlight linger, «задержка исчезновения говорящих»)
+    talk_seen: HashMap<String, u64>,
     /// roster scroll inside a height-capped panel (panelMaxHeight)
     roster_scroll: f32,
     pending: Option<(f64, f64)>,
@@ -329,6 +364,7 @@ impl Overlay {
             whisper_seen: HashMap::new(),
             outside_whisper: HashMap::new(),
             talk_fade: HashMap::new(),
+            talk_seen: HashMap::new(),
             roster_scroll: 0.0,
             pending: None,
             saved_margins: None,
@@ -380,6 +416,19 @@ impl Overlay {
             lang
         };
 
+        // «Задержка исчезновения говорящих» — the talking highlight lingers and
+        // fades out over `talking_fade` seconds after speech stops (every mode).
+        let talk_fade_ms = (a.talking_fade.max(0.0) * 1000.0) as u64;
+        for u in &state.users {
+            if u.talking {
+                self.talk_seen.insert(u.id.clone(), now_ms);
+            }
+        }
+        if talk_fade_ms == 0 {
+            self.talk_seen.clear();
+        } else {
+            self.talk_seen.retain(|_, t| now_ms.saturating_sub(*t) <= talk_fade_ms);
+        }
         let mut all = roster_rows(&state.users, &a);
         // «Только говорящие»: recent talkers linger and fade out of the roster
         if a.only_talking && a.talking_fade > 0.0 {
@@ -405,11 +454,33 @@ impl Overlay {
             self.talk_fade.clear();
         }
         let linger = (a.whisper_delay.max(0.0) * 1000.0) as u64;
-        let (rows, mut whisperers) = if a.show_whispers {
+        let (mut rows, mut whisperers) = if a.show_whispers {
             split_whisper(all, &mut self.whisper_seen, now_ms, linger)
         } else {
             (all, Vec::new())
         };
+        // «до 10 человек на канале» — roster only; whisperers stay complete
+        rows = cap_roster(rows);
+        // per-row talking-highlight alpha: 1 while speaking, ramping to 0 over
+        // `talking_fade` after speech stops, 0 = no highlight
+        let talk_alphas: Vec<f32> = rows
+            .iter()
+            .map(|u| {
+                if u.talking {
+                    1.0
+                } else if talk_fade_ms == 0 {
+                    0.0
+                } else {
+                    match self.talk_seen.get(&u.id) {
+                        Some(t) => {
+                            let age = now_ms.saturating_sub(*t) as f32;
+                            (1.0 - age / talk_fade_ms as f32).clamp(0.0, 1.0)
+                        }
+                        None => 0.0,
+                    }
+                }
+            })
+            .collect();
         if a.show_whispers {
             // v1.4.12: people whispering from ANOTHER channel never reach the
             // roster — merge them into the whisper section with the same linger.
@@ -450,7 +521,7 @@ impl Overlay {
             .iter()
             .map(|u| (u.id.clone(), class_key_for(&u.server_groups, &groups, &cfg.classes.map)))
             .collect();
-        let feed = build_feed(&state, &a, lang);
+        let feed = build_feed(&state, &a, lang, now_ms);
 
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
 
@@ -498,6 +569,7 @@ impl Overlay {
             channel_name: &state.channel_name,
             user_count: rows.len() + whisperers.len(),
             users: rows,
+            talk_alphas,
             class_keys,
             whisper_keys,
             whisperers,
@@ -2040,7 +2112,7 @@ mod tests {
             nickname: "A".into(),
             text: "A".into(),
             kind: ChatKind::System,
-            at: 1,
+            at: 199_000,
             event: Some("join"),
             detail: Some("General".into()),
             own: Some(true),
@@ -2048,25 +2120,69 @@ mod tests {
         st.chat.push(m.clone());
         m.id = "c2".into();
         m.event = Some("leave");
-        m.at = 2;
+        m.at = 199_100;
         st.chat.push(m.clone());
         m.id = "c3".into();
         m.event = Some("move");
         m.own = Some(false); // filtered by own scope
-        m.at = 3;
+        m.at = 199_200;
         st.chat.push(m.clone());
         m.id = "c4".into();
         m.event = Some("move");
         m.own = Some(true);
         m.detail = Some("AFK".into());
-        m.at = 4;
+        m.at = 199_300;
         st.chat.push(m.clone());
-        let feed = build_feed(&st, &a, "ru");
+        let feed = build_feed(&st, &a, "ru", 200_000);
         // leave filtered, move-not-own filtered, cap 2 → newest pair
         assert_eq!(feed.len(), 2);
         assert_eq!(feed[0].nickname, "A");
         assert!(feed[0].text.contains("General"));
         assert!(feed[1].text.contains("AFK"));
+    }
+
+    #[test]
+    fn feed_rows_expire_and_fade() {
+        // «Чат(панель событий) пропадает через определённое время (затухает)»
+        let mut a = crate::config::Appearance::default();
+        a.chat_delay = 5.0;
+        a.events_delay = 5.0;
+        a.events_count = 10.0;
+        let mut st = OverlayState::empty("mock", "live", "");
+        for (id, at) in [("f1", 4_600u64), ("f2", 1_500), ("f3", 0)] {
+            st.chat.push(ChatMessage {
+                id: id.into(),
+                user_id: "1".into(),
+                nickname: "A".into(),
+                text: "hi".into(),
+                kind: ChatKind::Channel,
+                at,
+                event: None,
+                detail: None,
+                own: None,
+            });
+        }
+        let feed = build_feed(&st, &a, "ru", 5_000);
+        assert_eq!(feed.len(), 2, "expired row is dropped");
+        assert_eq!(feed[0].nickname, "A");
+        assert_eq!(feed[0].alpha, 1.0, "fresh row is opaque");
+        assert!(
+            feed[1].alpha < 1.0 && feed[1].alpha > 0.0,
+            "row fades during the last third of its life (got {})",
+            feed[1].alpha
+        );
+    }
+
+    #[test]
+    fn roster_caps_at_ten() {
+        // «до 10 человек на канале»; whisperers are split out BEFORE the cap
+        let users: Vec<UserState> = (0..15)
+            .map(|i| UserState::new(&format!("u{i}"), &format!("U{i}")))
+            .collect();
+        assert_eq!(cap_roster(users.clone()).len(), MAX_ROSTER);
+        let (roster, whisper) = split_whisper(users, &mut HashMap::new(), 1000, 4000);
+        assert!(whisper.is_empty(), "nobody whispered");
+        assert_eq!(cap_roster(roster).len(), MAX_ROSTER);
     }
 
     #[test]

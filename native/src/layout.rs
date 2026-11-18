@@ -38,6 +38,8 @@ pub struct FeedItem {
     pub nickname: String,
     pub text: String,
     pub kind: u8, // 0 = system event row, 1 = private chat, 2 = channel/server chat
+    /// 1.0 = fully visible, ramping to 0 as the row ages out
+    pub alpha: f32,
 }
 
 pub struct FrameInput<'a> {
@@ -50,6 +52,8 @@ pub struct FrameInput<'a> {
     pub channel_name: &'a str,
     pub user_count: usize,
     pub users: Vec<UserState>,
+    /// per-row talking-highlight alpha: 1 = speaking, ramp → 0 = fading out, 0 = none
+    pub talk_alphas: Vec<f32>,
     /// class keys aligned with `users` (avatar slot art)
     pub class_keys: Vec<Option<String>>,
     /// scroll offset (css px) inside a height-capped panel (panelMaxHeight)
@@ -359,6 +363,105 @@ fn draw_eq(c: &Ctx, buf: &mut Buf, right: f32, cy: f32, style: &str, talking: bo
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Word-wrap `text` into at most `cap` lines; line 0 fits `w_first`, later
+/// lines `w_rest`. Oversized words are hard-split; the last line gets an
+/// ellipsis when text remains. Long nick+message rows wrap to the next line.
+fn wrap_flow(
+    fonts: &Fonts,
+    text: &str,
+    size: f32,
+    bold: bool,
+    w_first: f32,
+    w_rest: f32,
+    cap: usize,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let w = if lines.is_empty() { w_first } else { w_rest };
+        let cand = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+        if fonts.measure(&cand, size, bold) <= w {
+            cur = cand;
+            continue;
+        }
+        if !cur.is_empty() {
+            lines.push(std::mem::take(&mut cur));
+        }
+        cur = word.to_string();
+        let w2 = if lines.is_empty() { w_first } else { w_rest };
+        while fonts.measure(&cur, size, bold) > w2 {
+            let mut acc = String::new();
+            let mut rest = String::new();
+            let mut it = cur.chars();
+            for ch in it.by_ref() {
+                let t = format!("{acc}{ch}");
+                if fonts.measure(&t, size, bold) > w2 && !acc.is_empty() {
+                    rest.push(ch);
+                    rest.extend(it);
+                    break;
+                }
+                acc = t;
+            }
+            if acc.is_empty() {
+                break;
+            }
+            lines.push(acc);
+            cur = rest;
+            if cur.is_empty() {
+                break;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    if lines.len() > cap {
+        lines.truncate(cap);
+        let w = if lines.len() == 1 { w_first } else { w_rest };
+        let mut last = lines.pop().unwrap();
+        while !last.is_empty() && fonts.measure(&format!("{last}…"), size, bold) > w {
+            last.pop();
+        }
+        lines.push(format!("{last}…"));
+    }
+    lines
+}
+
+/// Pre-wrapped feed-row geometry (draw-ready nick, text offset, lines, height).
+struct FeedGeo {
+    nick: String,
+    tx: f32,
+    lines: Vec<String>,
+    row_h: f32,
+}
+
+/// Wrap one feed row against row width `w0`; long nick+message rows wrap to the
+/// next line(s) — up to 3 lines total («переносить на некст строчку»).
+fn feed_wrap(c: &Ctx, item: &FeedItem, w0: f32) -> FeedGeo {
+    let size = c.em(0.92);
+    let nick = c.fonts.truncate(&item.nickname, size, true, w0 * 0.42);
+    let nick_w = c.fonts.measure(&nick, size, true);
+    let tx = c.s(8.0) + nick_w + c.s(6.0);
+    let first_w = (w0 - c.s(8.0) - tx).max(40.0);
+    let rest_w = (w0 - c.s(16.0)).max(40.0);
+    let text = if item.kind == 0 {
+        item.text.clone()
+    } else {
+        format!("— {}", item.text)
+    };
+    let lines = wrap_flow(c.fonts, &text, size, false, first_w, rest_w, 3);
+    let row_h = c.s(26.0) + (lines.len().saturating_sub(1) as f32) * c.s(16.0);
+    FeedGeo {
+        nick,
+        tx,
+        lines,
+        row_h,
+    }
+}
+
 fn draw_user_row(
     c: &Ctx,
     buf: &mut Buf,
@@ -369,36 +472,43 @@ fn draw_user_row(
     u: &UserState,
     class_key: Option<&str>,
     whisper: bool,
+    talk_alpha: f32,
     you_label: &str,
     opts: &RowOpts,
 ) {
     let pal = c.pal;
+    // talking-highlight alpha («Задержка исчезновения говорящих»): 1 = speaking,
+    // ramping to 0 as the highlight lingers after speech stops
+    let tpal = pal.fade(talk_alpha.clamp(0.0, 1.0));
     let radius = c.rad(pal.radius as f32 * 0.5 * c.k);
     let secc = if whisper { c.second() } else { pal.accent };
-    if u.talking && !whisper {
-        // v1.4.9 «Обводка говорящего» — highlight of the whole row strip (every style)
+    if !whisper && (u.talking || talk_alpha < 0.999) {
+        // v1.4.9 «Обводка говорящего» — highlight of the whole row strip (every
+        // style), lingering + fading out over `talking_fade` after speech stops
+        let bg = tpal.talking_bg;
+        let ac = tpal.accent;
         match c.sk {
             StyleKind::Neon => {
-                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
-                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), pal.accent);
-                buf.fill_rect(x, y, c.s(2.0), h, pal.accent.scale_a(120.0));
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), ac);
+                buf.fill_rect(x, y, c.s(2.0), h, ac.scale_a(120.0 * talk_alpha as f64));
             }
             StyleKind::Hud => {
-                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
-                buf.fill_rect(x, y, c.s(3.0), h, pal.accent);
-                buf.stroke_round_rect(x, y, w, h, radius, pal.accent.scale_a(90.0), 1.0);
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y, c.s(3.0), h, ac);
+                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(90.0 * talk_alpha as f64), 1.0);
             }
             StyleKind::Soft => {
-                buf.round_rect(x, y, w, h, h * 0.42, pal.talking_bg);
-                buf.stroke_round_rect(x, y, w, h, h * 0.42, pal.talk_outline.scale_a(150.0), c.s(1.5));
+                buf.round_rect(x, y, w, h, h * 0.42, bg);
+                buf.stroke_round_rect(x, y, w, h, h * 0.42, tpal.talk_outline.scale_a(150.0 * talk_alpha as f64), c.s(1.5));
             }
             StyleKind::Crt => {
-                buf.round_rect(x, y, w, h, radius, pal.accent.scale_a(30.0));
-                buf.stroke_round_rect(x, y, w, h, radius, pal.accent.scale_a(170.0), 1.0);
+                buf.round_rect(x, y, w, h, radius, ac.scale_a(30.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(170.0 * talk_alpha as f64), 1.0);
             }
             StyleKind::Glass => {
-                buf.round_rect(x, y, w, h, radius, pal.talking_bg);
-                buf.stroke_round_rect(x, y, w, h, radius, pal.talk_outline, c.s(2.0));
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.0));
             }
         }
     }
@@ -431,16 +541,16 @@ fn draw_user_row(
             c.fonts.draw(buf, cx - tw * 0.5, cy + size * 0.36, &ini, size, true, Rgba::rgb(255, 255, 255));
         }
     }
-    if u.talking {
-        let glow_a = (0.25 + 0.5 * pal.glow) as f32;
-        buf.stroke_circle(cx, cy, av * 0.5 + c.s(1.0), pal.accent, c.s(2.0));
+    if u.talking || talk_alpha < 0.999 {
+        let glow_a = ((0.25 + 0.5 * pal.glow) as f32) * talk_alpha;
+        buf.stroke_circle(cx, cy, av * 0.5 + c.s(1.0), tpal.accent, c.s(2.0));
         for i in 0..3 {
             let g = (i as f32 + 1.0) * c.s(2.5);
             buf.stroke_circle(
                 cx,
                 cy,
                 av * 0.5 + c.s(1.0) + g,
-                pal.accent.scale_a((255.0 * glow_a * 0.16) as f64),
+                tpal.accent.scale_a((255.0 * glow_a * 0.16) as f64),
                 c.s(2.2),
             );
         }
@@ -533,6 +643,12 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         eq_style: a.eq_style.clone(),
     };
     let you_label = tr(inp.lang, "Вы", "you");
+    // pre-wrapped feed rows (height estimate + draw share this)
+    let feed_geo: Vec<FeedGeo> = inp
+        .feed
+        .iter()
+        .map(|it| feed_wrap(&c, it, panel_w - c.s(20.0)))
+        .collect();
 
     // ---------------- layout pass (panel coords) ----------------
     let handle_h = if inp.move_mode { c.s(44.0) } else { 0.0 };
@@ -564,8 +680,8 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     }
     if !inp.feed.is_empty() {
         y += c.s(4.0);
-        for _ in &inp.feed {
-            y += feed_row_h + feed_gap;
+        for g in &feed_geo {
+            y += g.row_h + feed_gap;
         }
         y += c.s(2.0);
     }
@@ -719,7 +835,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     let content_h_total = (py + panel_h) - content_top;
     let content_total = list_h
         + (if inp.whisperers.is_empty() { 0.0 } else { whisper_head_h + c.s(2.0) + inp.whisperers.len() as f32 * (row_h + row_gap) + c.s(4.0) })
-        + (if inp.feed.is_empty() { 0.0 } else { c.s(4.0) + inp.feed.len() as f32 * (feed_row_h + feed_gap) + c.s(2.0) })
+        + (if inp.feed.is_empty() { 0.0 } else { c.s(4.0) + feed_geo.iter().map(|g| g.row_h + feed_gap).sum::<f32>() + c.s(2.0) })
         + (if inp.users.is_empty() && !a.hide_empty && inp.whisperers.is_empty() { c.s(118.0) } else { 0.0 })
         + list_pad * 2.0;
     scroll_max = (content_total - content_h_total).max(0.0);
@@ -740,7 +856,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         } else {
             Ctx { pal: c.pal, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk }
         };
-        draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, &you_label, &opts);
+        draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, inp.talk_alphas.get(i).copied().unwrap_or(1.0), &you_label, &opts);
         cy += row_h + row_gap;
     }
     cy = (cy - row_gap).max(0.0) + list_pad;
@@ -764,7 +880,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         cy += whisper_head_h + c.s(2.0);
         for u in &inp.whisperers {
             let key = inp.whisper_keys.iter().find(|(id, _)| *id == u.id).and_then(|(_, k)| k.as_deref());
-            draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, &you_label, &opts);
+            draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, 1.0, &you_label, &opts);
             // whisperPulse: whole-row opacity 0.55 ↔ 1 (2.6s)
             if c.anim {
                 let ph = ((c.now / 2600.0) % 1.0) as f32 * std::f32::consts::PI * 2.0;
@@ -776,33 +892,30 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         cy += c.s(4.0);
     }
 
-    // ---- feed (events + chat) ----
+    // ---- feed (events + chat) — long rows wrap, fading out with age ----
     if !inp.feed.is_empty() {
         cy += c.s(4.0);
-        for item in &inp.feed {
+        for (gi, item) in inp.feed.iter().enumerate() {
+            let g = &feed_geo[gi];
             let y0 = cy;
             let x0 = px + c.s(10.0);
-            let w0 = panel_w - c.s(20.0);
+            let size = c.em(0.92);
+            let line_h = c.s(16.0);
+            let al = item.alpha.clamp(0.0, 1.0) as f64;
             if item.kind == 1 {
                 let fr = c.rad(c.s(10.0));
-                buf.round_rect(x0, y0, w0, feed_row_h, fr, inp.pal.accent.scale_a(26.0));
-                buf.stroke_round_rect(x0, y0, w0, feed_row_h, fr, inp.pal.accent.scale_a(115.0), 1.0);
+                buf.round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.accent.scale_a(26.0 * al));
+                buf.stroke_round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.accent.scale_a(115.0 * al), 1.0);
             }
-            let size = c.em(0.92);
+            let rp = inp.pal.fade(item.alpha.clamp(0.0, 1.0));
             let baseline = y0 + feed_row_h * 0.5 + size * 0.35;
-            let nick_w = inp.fonts.measure(&item.nickname, size, true);
-            let nick = inp.fonts.truncate(&item.nickname, size, true, w0 * 0.42);
-            inp.fonts.draw(&mut buf, x0 + c.s(8.0), baseline, &nick, size, true, inp.pal.nick);
-            let tx = x0 + c.s(8.0) + nick_w + c.s(6.0);
-            if item.kind == 0 {
-                // minimal action text after the colored nick
-                let rest = inp.fonts.truncate(&item.text, size, false, x0 + w0 - c.s(8.0) - tx);
-                inp.fonts.draw(&mut buf, tx, baseline, &rest, size, false, inp.pal.msg);
-            } else {
-                let rest = inp.fonts.truncate(&format!("— {}", item.text), size, false, x0 + w0 - c.s(8.0) - tx);
-                inp.fonts.draw(&mut buf, tx, baseline, &rest, size, false, inp.pal.msg);
+            inp.fonts.draw(&mut buf, x0 + c.s(8.0), baseline, &g.nick, size, true, rp.nick);
+            for (li, ln) in g.lines.iter().enumerate() {
+                let bl = baseline + li as f32 * line_h;
+                let lx = if li == 0 { x0 + g.tx } else { x0 + c.s(8.0) };
+                inp.fonts.draw(&mut buf, lx, bl, ln, size, false, rp.msg);
             }
-            cy += feed_row_h + feed_gap;
+            cy += g.row_h + feed_gap;
         }
         cy += c.s(2.0);
     }
@@ -909,6 +1022,7 @@ mod tests {
                 { let mut u = crate::model::UserState::new("1", "A"); u.talking = true; u },
                 crate::model::UserState::new("2", "B"),
             ],
+            talk_alphas: vec![],
             class_keys: vec![None, None],
             whisper_keys: vec![],
             whisperers: vec![],
@@ -982,6 +1096,7 @@ mod tests {
             channel_name: "General",
             user_count: 2,
             users: vec![u1, u2],
+            talk_alphas: vec![],
             class_keys: vec![Some("archer".into()), None],
             whisper_keys: vec![],
             whisperers: {
@@ -990,7 +1105,7 @@ mod tests {
                 w.talking = true;
                 vec![w]
             },
-            feed: vec![FeedItem { nickname: "Alice".into(), text: "привет".into(), kind: 1 }],
+            feed: vec![FeedItem { nickname: "Alice".into(), text: "привет".into(), kind: 1 , alpha: 1.0 }],
             lang: "ru",
             move_mode: true,
             now_ms: 1000,
@@ -1028,6 +1143,7 @@ mod tests {
             channel_name: "C",
             user_count: 0,
             users: vec![],
+            talk_alphas: vec![],
             class_keys: vec![],
             whisper_keys: vec![],
             whisperers: vec![],
@@ -1084,6 +1200,7 @@ mod qa {
             channel_name: "Генеральный штаб",
             user_count: 4,
             users: vec![alice, me, bob, mk("102", "Мыsha Петров", false, false, false, false)],
+            talk_alphas: vec![],
             class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into()), None],
             whisper_keys: vec![("103".into(), Some("ghost".into()))],
             whisperers: {
@@ -1092,8 +1209,8 @@ mod qa {
                 vec![w]
             },
             feed: vec![
-                FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 },
-                FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 },
+                FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 , alpha: 1.0 },
+                FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 , alpha: 1.0 },
             ],
             lang: "ru",
             move_mode: true,
@@ -1120,6 +1237,7 @@ mod qa {
             channel_name: "—",
             user_count: 0,
             users: vec![],
+            talk_alphas: vec![],
             class_keys: vec![],
             whisper_keys: vec![],
             whisperers: vec![],
@@ -1166,6 +1284,7 @@ mod qa {
                 channel_name: "Генеральный штаб",
                 user_count: 4,
                 users: vec![s_alice, s_me, s_bob, mk("102", "Мыsha Петров", false, false, false, false)],
+                talk_alphas: vec![],
                 class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into()), None],
                 whisper_keys: vec![("103".into(), Some("ghost".into()))],
                 whisperers: {
@@ -1174,8 +1293,8 @@ mod qa {
                     vec![w]
                 },
                 feed: vec![
-                    FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 },
-                    FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 },
+                    FeedItem { nickname: "Мыsha".into(), text: "привет всем!".into(), kind: 1 , alpha: 1.0 },
+                    FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0 , alpha: 1.0 },
                 ],
                 lang: "ru",
                 move_mode: true,

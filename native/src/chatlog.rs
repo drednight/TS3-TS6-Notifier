@@ -18,7 +18,12 @@ impl ChatLog {
     }
 
     /// Push a message (id/at assigned here). Dedupe-merges into the recent tail.
-    pub fn push(&mut self, msg: ChatMessage) {
+    pub fn push(&mut self, mut msg: ChatMessage) {
+        // age-based expiry (chat/events delay) needs a real timestamp; most
+        // connectors construct messages with `at: 0`
+        if msg.at == 0 {
+            msg.at = crate::model::now_ms();
+        }
         let now = now_ms();
         // tail-scan dedupe
         let start = self.rows.len().saturating_sub(TAIL);
