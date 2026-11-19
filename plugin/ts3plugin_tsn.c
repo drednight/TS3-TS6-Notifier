@@ -36,7 +36,7 @@
 #include "ts3_functions.h"
 
 #define TSN_PORT 48912
-#define TSN_VERSION "1.2.0"
+#define TSN_VERSION "1.2.1"
 #define TSN_SEND_BUF (256 * 1024)
 
 static struct TS3Functions ts3funcs;
@@ -98,27 +98,34 @@ static int tsn_send_all(SOCKET s, const char* buf, int len) {
     return 1;
 }
 
-/* ---------- async send queue ----------
- * События приходят в потоках клиента TeamSpeak. Раньше каждый колбэк делал
- * блокирующую connect/send прямо там (до 2 с по таймауту сокета) — отсюда
- * «TS3 лагает из-за плагина». Теперь колбэки только кладут строку в очередь
- * (копия + критическая секция на микросекунды), а весь сокет-I/O ведёт
- * отдельный поток tsn_sender. Переполнение — роняем самое старое событие. */
+/* ---------- async send queue (v1.2.1) ----------
+ * События приходят в потоках клиента TeamSpeak и НЕ должны там блокироваться
+ * («ТС3 лагает из-за плагина»). Колбэки только кладут строку в кольцевую
+ * очередь (микросекунды), а отправку делает tsn_flush() — в потоке воркера
+ * (проверенная механика v2.0.24: try_connect + send под tsn_lock). Никаких
+ * дополнительных потоков и событий — минимум движущихся частей.
+ * Переполнение — роняем самое старое событие. */
 #define TSN_QUEUE 256
 static CRITICAL_SECTION q_lock;
-static HANDLE q_wake = NULL;
-static HANDLE tsn_send_thread = NULL;
 static char* q_items[TSN_QUEUE];
 static int q_head = 0, q_count = 0;
 
+static void q_sanity(void) {
+    if (q_count < 0 || q_count > TSN_QUEUE || q_head < 0 || q_head >= TSN_QUEUE) {
+        int i;
+        for (i = 0; i < TSN_QUEUE; i++) { free(q_items[i]); q_items[i] = NULL; }
+        q_head = 0; q_count = 0;
+    }
+}
 
 static void tsn_enqueue(const char* line, int len) {
-    if (!q_wake) return;
+    if (len <= 0 || len > 60000) return;
     char* copy = (char*)malloc((size_t)len + 1);
     if (!copy) return;
     memcpy(copy, line, (size_t)len);
     copy[len] = 0;
     EnterCriticalSection(&q_lock);
+    q_sanity();
     if (q_count == TSN_QUEUE) {
         free(q_items[q_head]);
         q_items[q_head] = NULL;
@@ -128,7 +135,28 @@ static void tsn_enqueue(const char* line, int len) {
     q_items[(q_head + q_count) % TSN_QUEUE] = copy;
     q_count++;
     LeaveCriticalSection(&q_lock);
-    SetEvent(q_wake);
+}
+
+static int q_depth(void) {
+    int d;
+    EnterCriticalSection(&q_lock);
+    d = q_count;
+    LeaveCriticalSection(&q_lock);
+    return d;
+}
+
+static char* q_pop(void) {
+    char* line = NULL;
+    EnterCriticalSection(&q_lock);
+    q_sanity();
+    if (q_count > 0) {
+        line = q_items[q_head];
+        q_items[q_head] = NULL;
+        q_head = (q_head + 1) % TSN_QUEUE;
+        q_count--;
+    }
+    LeaveCriticalSection(&q_lock);
+    return line;
 }
 
 static void tsn_send_raw(const char* line, int len) {
@@ -147,53 +175,43 @@ static void tsn_sendf(const char* fmt, ...) {
     tsn_send_raw(buf, n);
 }
 
-/* Единственный поток, который трогает сокет: connect + send. */
-static DWORD WINAPI tsn_sender(LPVOID arg) {
-    (void)arg;
-    while (tsn_running) {
-        WaitForSingleObject(q_wake, 500);
-        for (;;) {
-            EnterCriticalSection(&q_lock);
-            char* line = NULL;
-            if (q_count > 0) {
-                line = q_items[q_head];
-                q_items[q_head] = NULL;
-                q_head = (q_head + 1) % TSN_QUEUE;
-                q_count--;
-            }
-            LeaveCriticalSection(&q_lock);
-            if (!line) break;
-            int len = (int)strlen(line);
-            int failed = 0;
-            EnterCriticalSection(&tsn_lock);
-            int was = (tsn_sock != INVALID_SOCKET);
-            if (!tsn_try_connect()) {
-                /* приложение не запущено — роняем строку, клиент не ждёт */
-                failed = 1;
-            } else {
-                if (!was) {
-                    char hello[64];
-                    int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", TSN_VERSION);
-                    if (!tsn_send_all(tsn_sock, hello, n)) failed = 1;
-                    else InterlockedExchange(&tsn_resync, 1);
-                }
-                if (!failed && !tsn_send_all(tsn_sock, line, len)) {
-                    closesocket(tsn_sock);
-                    tsn_sock = INVALID_SOCKET;
-                    if (tsn_try_connect()) {
-                        tsn_send_all(tsn_sock, line, len);
-                        InterlockedExchange(&tsn_resync, 1);
-                    } else {
-                        failed = 1;
-                    }
-                }
-            }
-            LeaveCriticalSection(&tsn_lock);
-            free(line);
-            (void)failed;
+/* Единственное место, где трогается сокет. Вызывается только из потоков
+ * воркера и ридера (никогда — из колбэков клиента!). */
+static SOCKET tsn_hello_sock = INVALID_SOCKET; /* сокет, которому уже шли hello */
+static void tsn_drop_sock(void) {
+    if (tsn_sock != INVALID_SOCKET) closesocket(tsn_sock);
+    tsn_sock = INVALID_SOCKET;
+    tsn_hello_sock = INVALID_SOCKET;
+}
+static void tsn_flush(void) {
+    int guard;
+    EnterCriticalSection(&tsn_lock);
+    for (guard = 0; guard < 128; guard++) {
+        char* line = q_pop();
+        if (!line) break;
+        int len = (int)strlen(line);
+        if (!tsn_try_connect()) { free(line); continue; }
+        if (tsn_sock != tsn_hello_sock) {
+            char hello[64];
+            int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", TSN_VERSION);
+            if (n > 0) tsn_send_all(tsn_sock, hello, n);
+            tsn_hello_sock = tsn_sock;
+            InterlockedExchange(&tsn_resync, 1);
         }
+        if (!tsn_send_all(tsn_sock, line, len)) {
+            tsn_drop_sock();
+            if (tsn_try_connect()) {
+                char hello[64];
+                int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", TSN_VERSION);
+                if (n > 0) tsn_send_all(tsn_sock, hello, n);
+                tsn_hello_sock = tsn_sock;
+                tsn_send_all(tsn_sock, line, len);
+                InterlockedExchange(&tsn_resync, 1);
+            }
+        }
+        free(line);
     }
-    return 0;
+    LeaveCriticalSection(&tsn_lock);
 }
 
 /* ---------- state readers ---------- */
@@ -334,17 +352,21 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
     (void)arg;
     int tick = 0;
     while (tsn_running) {
-        Sleep(1000);
+        Sleep(20);
+        tsn_flush(); /* единственный регулярный отправщик */
         if (!tsn_running) break;
-        /* снимок после (пере)подключения — строка уйдёт через очередь */
-        if (InterlockedExchange(&tsn_resync, 0)) {
-            send_snapshot_all();
-        }
-        if ((++tick % 5) == 0) {
-            /* Heartbeat: the app uses traffic recency to tell a live plugin
-             * from a dead one — without it the overlay fell back to
-             * ClientQuery every quiet minute and flickered. */
-            tsn_sendf("{\"e\":\"ping\"}");
+        if (++tick >= 250) tick = 0;
+        if (tick % 50 == 0) { /* ~1 c */
+            /* снимок после (пере)подключения — строка уйдёт через очередь */
+            if (InterlockedExchange(&tsn_resync, 0)) {
+                send_snapshot_all();
+            }
+            if (tick == 0) { /* ~5 c */
+                /* Heartbeat: the app uses traffic recency to tell a live plugin
+                 * from a dead one — without it the overlay fell back to
+                 * ClientQuery every quiet minute and flickered. */
+                tsn_sendf("{\"e\":\"ping\",\"q\":%d}", q_depth());
+            }
         }
     }
     return 0;
@@ -353,21 +375,17 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
 PLUGINS_EXPORTDLL int ts3plugin_init(void) {
     InitializeCriticalSection(&tsn_lock);
     InitializeCriticalSection(&q_lock);
-    q_wake = CreateEvent(NULL, FALSE, FALSE, NULL);
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
     tsn_running = 1;
     tsn_thread = CreateThread(NULL, 0, tsn_worker, NULL, 0, NULL);
     CreateThread(NULL, 0, tsn_reader, NULL, 0, NULL);
-    tsn_send_thread = CreateThread(NULL, 0, tsn_sender, NULL, 0, NULL);
     return 0;
 }
 
 PLUGINS_EXPORTDLL void ts3plugin_shutdown(void) {
     tsn_running = 0;
-    if (q_wake) SetEvent(q_wake);
     if (tsn_thread) { WaitForSingleObject(tsn_thread, 3000); CloseHandle(tsn_thread); }
-    if (tsn_send_thread) { WaitForSingleObject(tsn_send_thread, 3000); CloseHandle(tsn_send_thread); }
     EnterCriticalSection(&tsn_lock);
     if (tsn_sock != INVALID_SOCKET) { closesocket(tsn_sock); tsn_sock = INVALID_SOCKET; }
     LeaveCriticalSection(&tsn_lock);
@@ -461,7 +479,7 @@ static DWORD WINAPI tsn_reader(LPVOID arg) {
         int n = recv(s, buf + used, (int)(sizeof(buf) - used - 1), 0);
         if (n <= 0) {
             EnterCriticalSection(&tsn_lock);
-            if (tsn_sock == s) { closesocket(s); tsn_sock = INVALID_SOCKET; }
+            if (tsn_sock == s) tsn_drop_sock();
             LeaveCriticalSection(&tsn_lock);
             used = 0;
             continue;
@@ -478,6 +496,7 @@ static DWORD WINAPI tsn_reader(LPVOID arg) {
         }
         memmove(buf, start, strlen(start) + 1);
         used = strlen(start);
+        tsn_flush(); /* быстрый ответ на {"cmd":"snapshot"} */
     }
     return 0;
 }

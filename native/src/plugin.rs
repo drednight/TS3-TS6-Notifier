@@ -215,6 +215,12 @@ fn handle_plugin_conn(
             continue;
         };
         if msg.get("e").map(|v| v.loose_str()).as_deref() == Some("ping") {
+            // Пинги не логируем (спам каждые 5 с), но рост очереди на стороне
+            // плагина — сигнал, что строки копятся (см. "q" в ping).
+            let backlog = msg.get("q").map(|v| v.loose_i64()).unwrap_or(0);
+            if backlog > 4 {
+                diag("plugin", &format!("plugin queue backlog: {backlog}"));
+            }
             continue;
         }
         diag("plugin", crate::diag::snip(trimmed, 240));
