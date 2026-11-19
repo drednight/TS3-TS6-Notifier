@@ -189,6 +189,51 @@ fn memory_rows() -> Vec<String> {
             }
         }
     }
+    #[cfg(any(windows, tsn_win32))]
+    {
+        // WorkingSetSize через psapi — как в диспетчере задач Windows
+        #[repr(C)]
+        struct Pmc {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set: usize,
+            working_set: usize,
+            quota_peak_paged: usize,
+            quota_paged: usize,
+            quota_peak_non_paged: usize,
+            quota_non_paged: usize,
+            pagefile: usize,
+            peak_pagefile: usize,
+        }
+        #[cfg_attr(windows, link(name = "psapi"))]
+        extern "system" {
+            fn GetProcessMemoryInfo(h: *mut std::ffi::c_void, c: *mut Pmc, cb: u32) -> i32;
+        }
+        #[cfg_attr(windows, link(name = "kernel32"))]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        }
+        unsafe {
+            let mut c = Pmc {
+                cb: std::mem::size_of::<Pmc>() as u32,
+                page_fault_count: 0,
+                peak_working_set: 0,
+                working_set: 0,
+                quota_peak_paged: 0,
+                quota_paged: 0,
+                quota_peak_non_paged: 0,
+                quota_non_paged: 0,
+                pagefile: 0,
+                peak_pagefile: 0,
+            };
+            if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 && c.working_set > 0 {
+                return vec![format!(
+                    "главный процесс (Rust/сервер): rss={:.1}MB",
+                    c.working_set as f64 / 1048576.0
+                )];
+            }
+        }
+    }
     vec!["главный процесс (Rust/сервер): rss=n/a".into()]
 }
 
