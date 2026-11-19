@@ -574,7 +574,9 @@ impl Overlay {
         );
         let interactive_wanted = move_mode || self.dragging || !cfg.desktop.click_through;
         let min_gap: u64 = 15; // up to ~60fps (dirty-check + 2s force keep idle cheap)
-        let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap;
+        // `|| now_ms < self.last_present_ms` — страховка от любых скачков
+        // часов назад: кадр обязан перерисоваться, а не ждать force-таймера
+        let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap || now_ms < self.last_present_ms;
         let force = now_ms.saturating_sub(self.last_present_ms) >= 2000;
         let dirty = force || (due && self.last_key.as_deref() != Some(key.as_str()));
 
