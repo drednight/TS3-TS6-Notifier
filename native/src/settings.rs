@@ -97,6 +97,8 @@ pub enum Ctrl {
     Field(&'static str),
     /// «Установить плагин» (TeamSpeak 3).
     InstallPlugin,
+    /// «Удалить плагин» (TeamSpeak 3).
+    RemovePlugin,
     /// «Переподключить» — restart the active connector.
     Reconnect,
     /// «Проверить обновления».
@@ -158,6 +160,7 @@ fn class_ru(key: &str) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pending {
     InstallPlugin,
+    RemovePlugin,
     Reconnect,
     CheckUpdate,
     /// Install a downloaded update and restart («Перезапустить сейчас»).
@@ -443,6 +446,7 @@ impl SettingsModel {
                 self.select_all = true;
             }
             Ctrl::InstallPlugin => self.pending = Some(Pending::InstallPlugin),
+            Ctrl::RemovePlugin => self.pending = Some(Pending::RemovePlugin),
             Ctrl::Reconnect => self.pending = Some(Pending::Reconnect),
             Ctrl::CheckUpdate => self.pending = Some(Pending::CheckUpdate),
             Ctrl::InstallUpdate => self.pending = Some(Pending::InstallUpdate),
@@ -2213,6 +2217,15 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     });
                     y += 42.0;
                 }
+                {
+                    let label = tr(&m.lang, "Удалить плагин", "Remove plugin");
+                    draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+                    regions.push(Region {
+                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+                        ctrl: Ctrl::RemovePlugin,
+                    });
+                    y += 42.0;
+                }
             } else {
                 {
                     buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 6", 12.5, true, pal.text);
@@ -2647,6 +2660,7 @@ pub fn plugin_result_text(res: &crate::json::Json, lang: &str) -> String {
                 "Файл плагина не найден в папке приложения",
                 "Plugin file not found in the app folder",
             ),
+            Some("not-found") => tr(lang, "Плагин не установлен", "Plugin is not installed"),
             Some("locked") => tr(
                 lang,
                 "Файл занят — закройте TeamSpeak 3 и повторите",
@@ -2655,6 +2669,20 @@ pub fn plugin_result_text(res: &crate::json::Json, lang: &str) -> String {
             Some("windows-only") => tr(lang, "Установка доступна только в Windows", "Install is Windows-only"),
             _ => tr(lang, "Не удалось установить плагин", "Plugin install failed"),
         };
+    }
+    if matches!(res.get("deleted"), Some(crate::json::Json::Bool(true))) {
+        return tr(
+            lang,
+            "Плагин удалён ✓ — перезапустите TeamSpeak 3",
+            "Plugin removed ✓ — restart TeamSpeak 3",
+        );
+    }
+    if matches!(res.get("moved"), Some(crate::json::Json::Bool(true))) {
+        return tr(
+            lang,
+            "Плагин отключён ✓ — перезапустите TeamSpeak 3 (файл был занят)",
+            "Plugin disabled ✓ — restart TeamSpeak 3 (the file was locked)",
+        );
     }
     if matches!(res.get("same"), Some(crate::json::Json::Bool(true))) {
         return tr(lang, "Плагин уже установлен ✓", "Plugin is already installed ✓");
@@ -2982,6 +3010,10 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                     let res = crate::http::plugin_install(&app.plugin_dll);
                     m.conn_note = plugin_result_text(&res, &m.lang);
                 }
+                Pending::RemovePlugin => {
+                    let res = crate::http::plugin_remove();
+                    m.conn_note = plugin_result_text(&res, &m.lang);
+                }
                 Pending::Reconnect => {
                     (app.restart_connector)();
                     m.conn_note = tr(&m.lang, "Переподключено ✓", "Reconnected ✓");
@@ -3166,6 +3198,8 @@ mod tests {
         assert_eq!(m.pending, Some(Pending::CheckUpdate));
         m.click(Ctrl::InstallPlugin, 0.0, 0.0);
         assert_eq!(m.pending, Some(Pending::InstallPlugin));
+        m.click(Ctrl::RemovePlugin, 0.0, 0.0);
+        assert_eq!(m.pending, Some(Pending::RemovePlugin));
     }
 
     #[test]
@@ -3182,6 +3216,12 @@ mod tests {
         assert!(plugin_result_text(&locked, "ru").contains("закройте TeamSpeak"));
         let other = obj(vec![("ok", Json::b(false)), ("error", Json::s("copy-failed"))]);
         assert!(plugin_result_text(&other, "ru").contains("Не удалось"));
+        let gone = obj(vec![("ok", Json::b(true)), ("deleted", Json::b(true))]);
+        assert!(plugin_result_text(&gone, "ru").contains("удалён"));
+        let moved = obj(vec![("ok", Json::b(true)), ("moved", Json::b(true))]);
+        assert!(plugin_result_text(&moved, "ru").contains("перезапустите"));
+        let missing = obj(vec![("ok", Json::b(false)), ("error", Json::s("not-found"))]);
+        assert!(plugin_result_text(&missing, "ru").contains("не установлен"));
     }
 
     #[test]
