@@ -182,7 +182,16 @@ fn handle_plugin_conn(
     stop: Arc<AtomicBool>,
 ) {
     let writer = Arc::new(Mutex::new(socket.try_clone().expect("clone socket")));
-    shared.sockets.lock().unwrap().push(writer);
+    shared.sockets.lock().unwrap().push(writer.clone());
+    // Каждое НОВОЕ соединение плагина сразу запрашивает полный снимок канала.
+    // Без этого после тихого переподключения плагина (события идут, hello — нет)
+    // own_cid оставался 0 и ростер был пустым навсегда.
+    {
+        let line = format!("{}\n", obj(vec![("cmd", Json::s("snapshot"))]).to_string());
+        if let Ok(mut g) = writer.lock() {
+            let _ = g.write_all(line.as_bytes());
+        }
+    }
     let reader = BufReader::new(socket);
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -504,6 +513,11 @@ impl PluginState {
         }
     }
 
+    /// No snapshot yet (own channel unknown) — roster cannot be built.
+    pub fn needs_snapshot(&self) -> bool {
+        self.own_cid == 0
+    }
+
     fn push_event(&mut self, nick: &str, uid: &str, event: &'static str, own: bool, detail: &str) {
         self.chat.push(sys_row(uid, nick, nick, event, detail, own));
     }
@@ -689,6 +703,7 @@ fn machine_loop(
 ) {
     let mut using_plugin = false;
     let mut plugin_state: Option<PluginState> = None;
+    let mut last_snapshot_req: u64 = 0;
     let mut hold_until: u64 = 0;
     let mut query_live = false;
     let mut query_stop: Option<Arc<AtomicBool>> = None;
@@ -706,12 +721,18 @@ fn machine_loop(
                     plugin_state = Some(PluginState::new(emit.clone()));
                     println!("[ts3] plugin bridge active — ClientQuery connector paused");
                     bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                    last_snapshot_req = now_ms();
                 }
             }
             ConnEvent::Line(msg) => {
                 if using_plugin {
                     if let Some(ps) = plugin_state.as_mut() {
                         ps.ingest(&msg);
+                        // страховка: снимок потерян/не пришёл — переспрашиваем
+                        if ps.needs_snapshot() && now_ms().saturating_sub(last_snapshot_req) > 3000 {
+                            last_snapshot_req = now_ms();
+                            bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                        }
                     }
                 }
             }
@@ -759,6 +780,7 @@ fn machine_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::sync::Mutex;
 
     fn capture() -> (Emit, Arc<Mutex<Vec<OverlayState>>>) {
@@ -899,5 +921,28 @@ mod tests {
             .expect("snapshot must reach the app despite multi-byte chars");
         assert_eq!(msg.get("e").map(|v| v.loose_str()).as_deref(), Some("snapshot"));
         bridge.stop();
+    }
+
+    #[test]
+    fn new_connection_is_asked_for_a_snapshot() {
+        // каждое новое соединение плагина должно получать {"cmd":"snapshot"} —
+        // иначе после тихого переподключения ростер оставался пустым
+        let (bridge, _line_rx, _active_rx, _idle_rx) = PluginBridge::start(0, 45_000).unwrap();
+        let mut sock = TcpStream::connect(("127.0.0.1", bridge.port())).unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut buf = [0u8; 128];
+        let n = sock.read(&mut buf).expect("app must request a snapshot on connect");
+        let got = String::from_utf8_lossy(&buf[..n]).into_owned();
+        assert!(got.contains("\"cmd\"") && got.contains("snapshot"), "expected snapshot request, got {got:?}");
+        bridge.stop();
+    }
+
+    #[test]
+    fn needs_snapshot_until_one_arrives() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        assert!(ps.needs_snapshot());
+        ps.ingest(&snapshot_line());
+        assert!(!ps.needs_snapshot());
     }
 }

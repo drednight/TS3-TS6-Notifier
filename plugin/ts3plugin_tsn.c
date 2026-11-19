@@ -42,6 +42,7 @@ static struct TS3Functions ts3funcs;
 static SOCKET tsn_sock = INVALID_SOCKET;
 static CRITICAL_SECTION tsn_lock;
 static volatile LONG tsn_running = 0;
+static volatile LONG tsn_resync = 0; /* socket was silently reconnected — resend snapshot */
 static HANDLE tsn_thread = NULL;
 
 /* ---------- tiny JSON helpers ---------- */
@@ -102,7 +103,10 @@ static void tsn_send_raw(const char* line, int len) {
     if (!tsn_send_all(tsn_sock, line, len)) {
         closesocket(tsn_sock);
         tsn_sock = INVALID_SOCKET;
-        if (tsn_try_connect()) tsn_send_all(tsn_sock, line, len);
+        if (tsn_try_connect()) {
+            tsn_send_all(tsn_sock, line, len);
+            InterlockedExchange(&tsn_resync, 1);
+        }
     }
     LeaveCriticalSection(&tsn_lock);
 }
@@ -279,8 +283,9 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
                 ok = 0;
             }
         }
+        int resync = InterlockedExchange(&tsn_resync, 0);
         LeaveCriticalSection(&tsn_lock);
-        if (ok && !was) send_snapshot_all();
+        if (ok && (!was || resync)) send_snapshot_all();
         tick++;
         Sleep(ok ? 1000 : 3000);
     }
