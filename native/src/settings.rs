@@ -930,9 +930,15 @@ fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on:
 
 /// Slider row: label left, value right (accent), track + in-bounds knob below.
 fn draw_slider(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, value_str: &str, value: f64, range: (f64, f64)) -> crate::layout::Rect {
-    // mockup: label left, value right (white), thin track + glowing white thumb
-    buf.text(&c.fonts, x, y + 12.0, label, c.fs, false, c.pal.text);
+    // mockup: label left, value right (white), thin track + glowing white thumb;
+    // a long label shrinks to fit so it never touches the value
     let vw = c.fonts.measure(value_str, c.fs, true);
+    let mut lfs = c.fs;
+    let lw = c.fonts.measure(label, lfs, false);
+    if lw + vw + 20.0 > w {
+        lfs *= ((w - vw - 20.0) / lw).max(0.8);
+    }
+    buf.text(&c.fonts, x, y + 12.0, label, lfs, false, c.pal.text);
     buf.text(&c.fonts, x + w - vw, y + 12.0, value_str, c.fs, true, c.pal.text);
     let track = crate::layout::Rect { x, y: y + 27.0, w, h: 5.0 };
     buf.round_rect(
@@ -1045,24 +1051,27 @@ fn draw_select(
     open: bool,
 ) -> crate::layout::Rect {
     let pal = &c.pal;
-    let bx = x + w - 174.0;
+    // label left, box right; the box shrinks in narrow cards so they never overlap
+    let lw = if label.is_empty() { 0.0 } else { c.fonts.measure(label, 12.0, false) + 16.0 };
+    let bw = (w - lw).clamp(110.0, 170.0);
+    let bx = x + w - bw;
     buf.round_rect(
         bx,
         y - 2.0,
-        170.0,
+        bw,
         28.0,
         7.0,
         crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05),
     );
     if open {
-        buf.stroke_round_rect(bx, y - 2.0, 170.0, 28.0, 7.0, pal.accent, 1.3);
-        buf.stroke_round_rect(bx - 2.0, y - 4.0, 174.0, 32.0, 9.0, pal.accent.scale_a(50.0), 1.1);
+        buf.stroke_round_rect(bx, y - 2.0, bw, 28.0, 7.0, pal.accent, 1.3);
+        buf.stroke_round_rect(bx - 2.0, y - 4.0, bw + 4.0, 32.0, 9.0, pal.accent.scale_a(50.0), 1.1);
     } else {
-        buf.stroke_round_rect(bx, y - 2.0, 170.0, 28.0, 7.0, pal.muted.scale_a(110.0), 1.0);
+        buf.stroke_round_rect(bx, y - 2.0, bw, 28.0, 7.0, pal.muted.scale_a(110.0), 1.0);
     }
     buf.text(&c.fonts, bx + 12.0, y + 16.0, value, 12.0, false, pal.text);
     // chevron
-    let cx = bx + 152.0;
+    let cx = bx + bw - 18.0;
     let cy = y + 11.0;
     if open {
         buf.line(cx - 4.0, cy + 3.0, cx, cy - 3.0, 1.6, pal.accent);
@@ -1072,7 +1081,7 @@ fn draw_select(
         buf.line(cx, cy + 3.0, cx + 4.0, cy - 3.0, 1.6, pal.muted);
     }
     buf.text(&c.fonts, x + 2.0, y + 16.0, label, 12.0, false, pal.text);
-    crate::layout::Rect { x: bx, y: y - 2.0, w: 190.0, h: 28.0 }
+    crate::layout::Rect { x: bx, y: y - 2.0, w: bw, h: 28.0 }
 }
 
 fn sample_input<'a>(
@@ -1299,7 +1308,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     }
     // two-column body (mockup format); wide pages span the full row
     let cols_y = y;
-    let wide = m.page >= 3;
+    let wide = m.page == 1 || m.page >= 3;
     let col_w = (base_w - 24.0) * 0.5;
     let mut bottom = y;
     for col in 0..2u8 {
@@ -1418,9 +1427,37 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                 }
             }
         } else if m.page == 1 {
-            if col == 0 {
-                section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
-                y += 34.0;
+            // «Элементы» — «Карточки секций» (elements-vid3-1): шесть тёмных
+            // стеклянных карточек 2×3, каждая со своим заголовком
+            let gap = 18.0;
+            let cw = (pane_w - gap) * 0.5;
+            let draw_card = |buf: &mut SBuf, c: &Ctx, x: f32, y: f32, w: f32, h: f32, title: &str| {
+                let bg = crate::theme::mix(c.pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05);
+                buf.round_rect(x, y, w, h, 16.0, bg);
+                buf.stroke_round_rect(x, y, w, h, 16.0, c.pal.muted.scale_a(110.0), 1.1);
+                buf.text(&c.fonts, x + 16.0, y + 26.0, title, 15.0, true, c.pal.text);
+            };
+            // высоты карточек по содержимому; строке задаёт высоту большая
+            let h_p: f32 = 38.0 + 5.0 * 40.0 + 14.0;
+            let h_s: f32 = 38.0 + 5.0 * 40.0 + 14.0;
+            let h_v: f32 = 38.0 + 3.0 * 40.0 + 36.0 + 52.0 + 52.0 + 22.0 + 14.0;
+            let h_c: f32 = 38.0 + 3.0 * 40.0 + 52.0 + 14.0;
+            let h_e: f32 = 38.0 + 40.0 + 52.0 + 52.0 + 14.0;
+            let h_k: f32 = 38.0 + 5.0 * 82.0 + 14.0;
+            let row0 = h_p.max(h_s);
+            let row1 = h_v.max(h_c);
+            let row2 = h_e.max(h_k);
+            let (x0, x1) = (pane_x, pane_x + cw + gap);
+            let y0 = y;
+            let y1 = y0 + row0 + gap;
+            let y2 = y1 + row1 + gap;
+
+            // ---- карточка «Панель» ----
+            draw_card(&mut buf, &c, x0, y0, cw, row0, &tr(&m.lang, "Панель", "Panel"));
+            {
+                let pane_x = x0 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y0 + 44.0;
                 for (key, ru, en) in [
                     ("show_header", "Шапка", "Header"),
                     ("show_server_name", "Имя сервера", "Server name"),
@@ -1437,8 +1474,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     });
                     y += 40.0;
                 }
-                section(&mut buf, &c, y, &tr(&m.lang, "Состав канала", "Channel roster"));
-                y += 34.0;
+            }
+
+            // ---- карточка «Состав канала» ----
+            draw_card(&mut buf, &c, x1, y0, cw, row0, &tr(&m.lang, "Состав канала", "Channel roster"));
+            {
+                let pane_x = x1 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y0 + 44.0;
                 for (key, ru, en) in [
                     ("show_avatars", "Аватарки", "Avatars"),
                     ("show_badges", "Бейджи", "Badges"),
@@ -1455,9 +1498,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     });
                     y += 40.0;
                 }
+            }
 
-                section(&mut buf, &c, y, &tr(&m.lang, "Речь и шёпот", "Voice & whispers"));
-                y += 34.0;
+            // ---- карточка «Речь и шёпот» ----
+            draw_card(&mut buf, &c, x0, y1, cw, row1, &tr(&m.lang, "Речь и шёпот", "Voice & whispers"));
+            {
+                let pane_x = x0 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y1 + 44.0;
                 for (key, ru, en) in [
                     ("talking_first", "Говорящие первыми", "Talking first"),
                     ("only_talking", "Только говорящие", "Only talking"),
@@ -1514,9 +1562,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     buf.text(&c.fonts, pane_x + 8.0, y + 2.0, &hint, c.fs * 0.85, false, c.pal.text.scale_a(150.0));
                     y += 22.0;
                 }
-            } else {
-                section(&mut buf, &c, y, &tr(&m.lang, "Чат и уведомления", "Chat & notifications"));
-                y += 34.0;
+            }
+
+            // ---- карточка «Чат и уведомления» ----
+            draw_card(&mut buf, &c, x1, y1, cw, row1, &tr(&m.lang, "Чат и уведомления", "Chat & notifications"));
+            {
+                let pane_x = x1 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y1 + 44.0;
                 for (key, ru, en) in [
                     ("show_chat", "Чат", "Chat"),
                     ("chat_private", "Только личные", "Private only"),
@@ -1541,9 +1594,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     regions.push(Region { rect: track, ctrl: Ctrl::Slider("chat_delay") });
                     y += 52.0;
                 }
+            }
 
-                section(&mut buf, &c, y, &tr(&m.lang, "События сервера", "Server events"));
-                y += 34.0;
+            // ---- карточка «События сервера» ----
+            draw_card(&mut buf, &c, x0, y2, cw, row2, &tr(&m.lang, "События сервера", "Server events"));
+            {
+                let pane_x = x0 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y2 + 44.0;
                 {
                     let label = tr(&m.lang, "Показывать события", "Show events");
                     let on = get_toggle(&m.app, "show_events");
@@ -1569,6 +1627,14 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     regions.push(Region { rect: track, ctrl: Ctrl::Slider("events_delay") });
                     y += 52.0;
                 }
+            }
+
+            // ---- карточка «Типы событий» ----
+            draw_card(&mut buf, &c, x1, y2, cw, row2, &tr(&m.lang, "Типы событий", "Event kinds"));
+            {
+                let pane_x = x1 + 16.0;
+                let pane_w = cw - 32.0;
+                let mut y = y2 + 44.0;
                 for (tkey, skey, ru, en) in [
                     ("show_ev_join", "ev_scope_join", "Входы", "Joins"),
                     ("show_ev_leave", "ev_scope_leave", "Выходы", "Leaves"),
@@ -1597,6 +1663,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     y += 42.0;
                 }
             }
+            y = y2 + row2 + 6.0;
         } else if m.page == 2 {
             if col == 0 {
                 section(&mut buf, &c, y, &tr(&m.lang, "Связь", "Connection"));
@@ -2684,8 +2751,13 @@ mod qa {
         for page in 0..5u8 {
             m.page = page;
             m.scroll = 0.0;
-            let (bp, _, _) = render(&m, &fonts, &icons, 1.0);
+            let (bp, _, chp) = render(&m, &fonts, &icons, 1.0);
             write_png(&format!("{dir}/settings-p{page}.png"), &bp).unwrap();
+            if page == 1 {
+                m.scroll = (chp - PANE_H).max(0.0);
+                let (bs, _, _) = render(&m, &fonts, &icons, 1.0);
+                write_png(&format!("{dir}/settings-p1-bottom.png"), &bs).unwrap();
+            }
         }
         m.page = 0;
         // middle — corner grid + roster sections
