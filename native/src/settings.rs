@@ -2638,6 +2638,34 @@ fn update_marker_path() -> std::path::PathBuf {
     std::env::temp_dir().join("tsn-update-pending.txt")
 }
 
+/// Human-readable result of «Установить плагин» (maps plugin_install errors).
+pub fn plugin_result_text(res: &crate::json::Json, lang: &str) -> String {
+    if !matches!(res.get("ok"), Some(crate::json::Json::Bool(true))) {
+        return match res.get("error").and_then(|e| e.as_str()) {
+            Some("dll-missing") => tr(
+                lang,
+                "Файл плагина не найден в папке приложения",
+                "Plugin file not found in the app folder",
+            ),
+            Some("locked") => tr(
+                lang,
+                "Файл занят — закройте TeamSpeak 3 и повторите",
+                "File is locked — close TeamSpeak 3 and try again",
+            ),
+            Some("windows-only") => tr(lang, "Установка доступна только в Windows", "Install is Windows-only"),
+            _ => tr(lang, "Не удалось установить плагин", "Plugin install failed"),
+        };
+    }
+    if matches!(res.get("same"), Some(crate::json::Json::Bool(true))) {
+        return tr(lang, "Плагин уже установлен ✓", "Plugin is already installed ✓");
+    }
+    tr(
+        lang,
+        "Плагин установлен ✓ — перезапустите TeamSpeak 3 и включите его в Add-ons",
+        "Plugin installed ✓ — restart TeamSpeak 3 and enable it in Add-ons",
+    )
+}
+
 /// Translate an update-check mailbox code into the «Ещё» status line.
 pub fn update_note_text(code: &str, lang: &str) -> String {
     let ru = lang == "ru";
@@ -2952,12 +2980,7 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
             match p {
                 Pending::InstallPlugin => {
                     let res = crate::http::plugin_install(&app.plugin_dll);
-                    let ok = matches!(res.get("ok"), Some(crate::json::Json::Bool(true)));
-                    m.conn_note = if ok {
-                        tr(&m.lang, "Плагин установлен ✓", "Plugin installed ✓")
-                    } else {
-                        tr(&m.lang, "Не удалось установить плагин", "Plugin install failed")
-                    };
+                    m.conn_note = plugin_result_text(&res, &m.lang);
                 }
                 Pending::Reconnect => {
                     (app.restart_connector)();
@@ -3143,6 +3166,22 @@ mod tests {
         assert_eq!(m.pending, Some(Pending::CheckUpdate));
         m.click(Ctrl::InstallPlugin, 0.0, 0.0);
         assert_eq!(m.pending, Some(Pending::InstallPlugin));
+    }
+
+    #[test]
+    fn plugin_result_messages() {
+        use crate::json::{obj, Json};
+        let ok = obj(vec![("ok", Json::b(true)), ("path", Json::s("x"))]);
+        assert!(plugin_result_text(&ok, "ru").contains("установлен"));
+        let same = obj(vec![("ok", Json::b(true)), ("same", Json::b(true))]);
+        assert!(plugin_result_text(&same, "ru").contains("уже установлен"));
+        let miss = obj(vec![("ok", Json::b(false)), ("error", Json::s("dll-missing"))]);
+        assert!(plugin_result_text(&miss, "ru").contains("не найден"));
+        assert!(plugin_result_text(&miss, "en").contains("not found"));
+        let locked = obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
+        assert!(plugin_result_text(&locked, "ru").contains("закройте TeamSpeak"));
+        let other = obj(vec![("ok", Json::b(false)), ("error", Json::s("copy-failed"))]);
+        assert!(plugin_result_text(&other, "ru").contains("Не удалось"));
     }
 
     #[test]
