@@ -154,10 +154,10 @@ impl Ts3Session {
             self.talk_diag_skipped += 1;
             if self.talk_diag_skipped % 10 == 1 {
                 let suffix = if self.talk_diag_skipped > 1 { " …" } else { "" };
-                diag("ts3", &format!("{}{}", &line[..line.len().min(240)], suffix));
+                diag("ts3", &format!("{}{}", crate::diag::snip(line, 240), suffix));
             }
         } else {
-            diag("ts3", &line[..line.len().min(240)]);
+            diag("ts3", crate::diag::snip(line, 240));
         }
         let fields = ts3_parse_fields(if space < line.len() { &line[space + 1..] } else { "" });
         let schandlerid = f_int(&fields, "schandlerid");

@@ -86,13 +86,23 @@ static int tsn_try_connect(void) {
     return 1;
 }
 
+static int tsn_send_all(SOCKET s, const char* buf, int len) {
+    int sent = 0;
+    while (sent < len) {
+        int n = send(s, buf + sent, len - sent, 0);
+        if (n <= 0) return 0;
+        sent += n;
+    }
+    return 1;
+}
+
 static void tsn_send_raw(const char* line, int len) {
     EnterCriticalSection(&tsn_lock);
     if (!tsn_try_connect()) { LeaveCriticalSection(&tsn_lock); return; }
-    if (send(tsn_sock, line, len, 0) != len) {
+    if (!tsn_send_all(tsn_sock, line, len)) {
         closesocket(tsn_sock);
         tsn_sock = INVALID_SOCKET;
-        if (tsn_try_connect()) send(tsn_sock, line, len, 0);
+        if (tsn_try_connect()) tsn_send_all(tsn_sock, line, len);
     }
     LeaveCriticalSection(&tsn_lock);
 }
@@ -253,7 +263,7 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
         if (ok && !was) {
             char hello[64];
             int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", ts3plugin_version());
-            if (send(tsn_sock, hello, n, 0) != n) {
+            if (!tsn_send_all(tsn_sock, hello, n)) {
                 closesocket(tsn_sock);
                 tsn_sock = INVALID_SOCKET;
                 ok = 0;
@@ -263,7 +273,7 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
             /* Heartbeat: the app uses traffic recency to tell a live plugin
              * from a dead one — without it the overlay fell back to
              * ClientQuery every quiet minute and flickered. */
-            if (send(tsn_sock, "{\"e\":\"ping\"}\n", 13, 0) != 13) {
+            if (!tsn_send_all(tsn_sock, "{\"e\":\"ping\"}\n", 13)) {
                 closesocket(tsn_sock);
                 tsn_sock = INVALID_SOCKET;
                 ok = 0;

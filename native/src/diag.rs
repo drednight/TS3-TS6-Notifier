@@ -14,6 +14,19 @@ fn hhmmss_local() -> String {
     format!("{:02}:{:02}:{:02}", day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)
 }
 
+/// Truncate to at most `max` BYTES at a char boundary — safe log snippets.
+/// (Byte-slicing UTF-8 text at a fixed index panics on multi-byte nicks.)
+pub fn snip(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 pub fn hhmmss(ms: u64) -> String {
     let day_secs = (ms / 1000) % 86_400;
     format!("{:02}:{:02}:{:02}", day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)

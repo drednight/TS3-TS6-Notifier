@@ -202,13 +202,13 @@ fn handle_plugin_conn(
             let _ = active_tx.send(());
         }
         let Ok(msg) = Json::parse(trimmed) else {
-            diag("plugin", &format!("bad line: {}", &trimmed[..trimmed.len().min(120)]));
+            diag("plugin", &format!("bad line: {}", crate::diag::snip(trimmed, 120)));
             continue;
         };
         if msg.get("e").map(|v| v.loose_str()).as_deref() == Some("ping") {
             continue;
         }
-        diag("plugin", &trimmed[..trimmed.len().min(240)]);
+        diag("plugin", crate::diag::snip(trimmed, 240));
         if line_tx.send(msg).is_err() {
             break;
         }
@@ -872,5 +872,32 @@ mod tests {
         let st = ps.build_state();
         assert_eq!(st.chat.len(), 0, "mass snapshot must not announce joins: {:?}", st.chat);
         let _ = (before, after);
+    }
+
+    #[test]
+    fn long_multibyte_line_does_not_kill_the_bridge() {
+        // Regression: the diag log sliced `&trimmed[..240]` BY BYTES — a
+        // snapshot line with кириллица/греческим ником, пересекающим байт 240,
+        // паниковал поток соединения, и ростер канала оставался пустым навсегда.
+        let (bridge, line_rx, _active_rx, _idle_rx) = PluginBridge::start(0, 45_000).unwrap();
+        let mut s = String::from(
+            r#"{"e":"snapshot","server":"S","own":1,"owncid":7,"owncname":"Home","clients":[{"id":1,"name":""#,
+        );
+        let head = s.len();
+        s.push_str(&"Ы".repeat(200));
+        s.push_str(r#"","cid":7,"groups":"","cname":"Home"}]}"#);
+        if s.is_char_boundary(240) {
+            s.insert(head, 'x'); // сместить границу в середину 2-байтового символа
+        }
+        assert!(!s.is_char_boundary(240), "fixture must cross the byte-240 boundary");
+        assert!(s.len() > 240);
+        let mut sock = TcpStream::connect(("127.0.0.1", bridge.port())).unwrap();
+        sock.write_all(s.as_bytes()).unwrap();
+        sock.write_all(b"\n").unwrap();
+        let msg = line_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("snapshot must reach the app despite multi-byte chars");
+        assert_eq!(msg.get("e").map(|v| v.loose_str()).as_deref(), Some("snapshot"));
+        bridge.stop();
     }
 }
