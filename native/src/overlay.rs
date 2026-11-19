@@ -17,35 +17,31 @@ use crate::theme::Palette;
 /* ---------------- placement math (pure, tested) ---------------- */
 
 /// Panel top-left within the work area, from corner + margins (css px).
-pub fn panel_pos(work: (f64, f64, f64, f64), corner: &str, mx: f64, my: f64, pw: f64, ph: f64) -> (f64, f64) {
-    let (wx, wy, ww, wh) = work;
-    match corner {
-        "tl" => (wx + mx, wy + my),
-        "tr" => (wx + ww - mx - pw, wy + my),
-        "bl" => (wx + mx, wy + wh - my - ph),
-        _ => (wx + ww - mx - pw, wy + wh - my - ph), // br
-    }
+/// «Координата X/Y» — ABSOLUTE panel top-left inside the work area. The panel
+/// fills downward from this fixed top edge; clamp_coords keeps it on screen.
+pub fn panel_pos(work: (f64, f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
+    (work.0 + x, work.1 + y)
 }
 
-/// Inverse: margins from the panel top-left. Grows past half-screen fine.
-pub fn margins_from_pos(work: (f64, f64, f64, f64), corner: &str, px: f64, py: f64, pw: f64, ph: f64) -> (f64, f64) {
-    let (wx, wy, ww, wh) = work;
-    let mx = match corner {
-        "tl" | "bl" => px - wx,
-        _ => wx + ww - px - pw,
-    };
-    let my = match corner {
-        "tl" | "tr" => py - wy,
-        _ => wy + wh - py - ph,
-    };
-    (mx, my)
+/// Inverse: work-area coordinates from a panel top-left position.
+pub fn coords_from_pos(work: (f64, f64, f64, f64), px: f64, py: f64) -> (f64, f64) {
+    (px - work.0, py - work.1)
 }
 
 /// Clamp so the panel always stays fully visible («оверлей всегда на экране»).
-pub fn clamp_margins(work: (f64, f64, f64, f64), pw: f64, ph: f64, mx: f64, my: f64) -> (f64, f64) {
+pub fn clamp_coords(work: (f64, f64, f64, f64), pw: f64, ph: f64, x: f64, y: f64) -> (f64, f64) {
     let max_x = (work.2 - pw).max(0.0);
     let max_y = (work.3 - ph).max(0.0);
-    (mx.clamp(0.0, max_x), my.clamp(0.0, max_y))
+    (x.clamp(0.0, max_x), y.clamp(0.0, max_y))
+}
+
+/// Corner preset («Положение» grid): snap coordinates for that corner using
+/// the live panel size — the settings window cannot know it.
+pub fn corner_coords(work: (f64, f64, f64, f64), corner: &str, pw: f64, ph: f64) -> (f64, f64) {
+    let (_wx, _wy, ww, wh) = work;
+    let x = if corner == "tl" || corner == "bl" { 0.0 } else { (ww - pw).max(0.0) };
+    let y = if corner == "tl" || corner == "tr" { 0.0 } else { (wh - ph).max(0.0) };
+    (x, y)
 }
 
 /* ---------------- feed / whisper helpers (pure, tested) ---------------- */
@@ -334,6 +330,8 @@ pub struct Overlay {
     /// roster scroll inside a height-capped panel (panelMaxHeight)
     roster_scroll: f32,
     pending: Option<(f64, f64)>,
+    /// last applied «Положение» corner — a change snaps the panel there
+    last_corner: Option<String>,
     saved_margins: Option<(f64, f64)>,
     dragging: bool,
     drag_off: (f64, f64),
@@ -369,6 +367,7 @@ impl Overlay {
             talk_seen: HashMap::new(),
             roster_scroll: 0.0,
             pending: None,
+            last_corner: None,
             saved_margins: None,
             dragging: false,
             drag_off: (0.0, 0.0),
@@ -596,12 +595,32 @@ impl Overlay {
         // auto-follow the first talking row inside a capped panel
         self.roster_scroll = frame.scroll_to;
 
-        // placement (css px margins; frame sizes are scaled css px)
-        let (mx, my) = self.pending.unwrap_or((a.margin_x, a.margin_y));
+        // placement: «Координата X/Y» are ABSOLUTE work-area coordinates
+        let (mut cx, mut cy) = self.pending.unwrap_or((a.margin_x, a.margin_y));
         let pw = frame.panel_w as f64;
         let ph = frame.panel_h as f64;
-        let (mx, my) = clamp_margins(work, pw, ph, mx, my);
-        let (px, py) = panel_pos(work, &a.corner, mx, my, pw, ph);
+        // «Положение» grid = one-click snap to that corner (live panel size),
+        // then the real coordinates go back to the config so the sliders stay
+        // truthful
+        if self.last_corner.is_none() {
+            self.last_corner = Some(a.corner.clone());
+        } else if self.last_corner.as_deref() != Some(a.corner.as_str()) {
+            self.last_corner = Some(a.corner.clone());
+            let (sx, sy) = corner_coords(work, &a.corner, pw, ph);
+            let patch = crate::json::obj(vec![(
+                "appearance",
+                crate::json::obj(vec![
+                    ("marginX", crate::json::Json::n(sx)),
+                    ("marginY", crate::json::Json::n(sy)),
+                ]),
+            )]);
+            self.app.store.lock().unwrap().update(&patch);
+            self.pending = Some((sx, sy));
+            cx = sx;
+            cy = sy;
+        }
+        let (cx, cy) = clamp_coords(work, pw, ph, cx, cy);
+        let (px, py) = panel_pos(work, cx, cy);
         self.last_size = (pw, ph);
         // window rect includes the shadow margin
         let pad = (SHADOW_PAD * a.scale.clamp(0.5, 3.0) as f32) as f64;
@@ -666,8 +685,8 @@ impl Overlay {
                     let npx = x as f64 - self.drag_off.0 + pad;
                     let npy = y as f64 - self.drag_off.1 + pad;
                     let _ = (px, py);
-                    let (mmx, mmy) = margins_from_pos(work, &a.corner, npx, npy, pw, ph);
-                    let (mmx, mmy) = clamp_margins(work, pw, ph, mmx, mmy);
+                    let (mmx, mmy) = coords_from_pos(work, npx, npy);
+                    let (mmx, mmy) = clamp_coords(work, pw, ph, mmx, mmy);
                     self.pending = Some((mmx, mmy));
                 }
                 Ev::Wheel(dy) => {
@@ -2305,19 +2324,24 @@ mod tests {
     use crate::model::ChatMessage;
 
     #[test]
-    fn margin_roundtrip_and_clamp() {
+    fn coords_roundtrip_and_clamp() {
         let work = (0.0, 0.0, 1920.0, 1040.0);
         let (pw, ph) = (292.0, 400.0);
-        for corner in ["tl", "tr", "bl", "br"] {
-            let (x, y) = panel_pos(work, corner, 18.0, 24.0, pw, ph);
-            let (mx, my) = margins_from_pos(work, corner, x, y, pw, ph);
-            assert!((mx - 18.0).abs() < 1e-6 && (my - 24.0).abs() < 1e-6, "{corner}");
+        // «Координата X/Y» are absolute: position round-trips through the
+        // panel top-left for any spot on the screen
+        for (x, y) in [(0.0, 0.0), (18.0, 24.0), (900.0, 500.0), (1628.0, 640.0)] {
+            let (px, py) = panel_pos(work, x, y);
+            let (rx, ry) = coords_from_pos(work, px, py);
+            assert!((rx - x).abs() < 1e-6 && (ry - y).abs() < 1e-6, "{x},{y}");
         }
-        // clamped: panel always fully visible
-        let (mx, my) = clamp_margins(work, pw, ph, -50.0, 9999.0);
-        assert_eq!((mx, my), (0.0, 1040.0 - ph));
-        let (mx, my) = clamp_margins(work, pw, ph, 9999.0, -5.0);
-        assert_eq!((mx, my), (1920.0 - pw, 0.0));
+        // clamped: panel always fully visible («не уводя за рамки экрана»)
+        let (cx, cy) = clamp_coords(work, pw, ph, -50.0, 9999.0);
+        assert_eq!((cx, cy), (0.0, 1040.0 - ph));
+        let (cx, cy) = clamp_coords(work, pw, ph, 9999.0, -5.0);
+        assert_eq!((cx, cy), (1920.0 - pw, 0.0));
+        // corner presets snap exactly into the corner
+        assert_eq!(corner_coords(work, "tl", pw, ph), (0.0, 0.0));
+        assert_eq!(corner_coords(work, "br", pw, ph), (1920.0 - pw, 1040.0 - ph));
     }
 
     #[test]

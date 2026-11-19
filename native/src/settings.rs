@@ -392,11 +392,9 @@ impl SettingsModel {
                 self.touch();
             }
             Ctrl::Corner(i) => {
-                // the corner grid places the overlay exactly INTO the corner;
-                // the margin sliders then offset it from the screen edges
+                // «Положение» = one-click snap: the overlay knows the live panel
+                // size, snaps to the corner and writes real coordinates back
                 self.app.corner = ["tl", "tr", "bl", "br"].get(i as usize).copied().unwrap_or("tr").into();
-                self.app.margin_x = 0.0;
-                self.app.margin_y = 0.0;
                 self.touch();
             }
             Ctrl::MoveOverlay => self.move_requested = true,
@@ -827,9 +825,19 @@ fn draw_field(
     buf.text(&c.fonts, x, y + 12.0, label, 11.5, false, c.pal.muted);
     let by = y + 18.0;
     let bh = 28.0;
-    buf.round_rect(x, by, w, bh, 7.0, c.pal.row_hover);
+    buf.round_rect(
+        x,
+        by,
+        w,
+        bh,
+        7.0,
+        crate::theme::mix(c.pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05),
+    );
     if focused {
         buf.stroke_round_rect(x, by, w, bh, 7.0, c.pal.accent, 1.4);
+        buf.stroke_round_rect(x - 2.0, by - 2.0, w + 4.0, bh + 4.0, 9.0, c.pal.accent.scale_a(50.0), 1.1);
+    } else {
+        buf.stroke_round_rect(x, by, w, bh, 7.0, c.pal.muted.scale_a(110.0), 1.0);
     }
     let ty = by + bh * 0.62;
     if focused && select_all {
@@ -846,6 +854,9 @@ fn draw_field(
 
 fn draw_button(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str) {
     buf.round_rect(x, y, w, h, 12.0, c.pal.accent.scale_a(235.0));
+    // soft glow halo (vid-3)
+    buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, 13.0, c.pal.accent.scale_a(85.0), 1.2);
+    buf.stroke_round_rect(x - 3.0, y - 3.0, w + 6.0, h + 6.0, 15.0, c.pal.accent.scale_a(40.0), 1.1);
     let tw = c.fonts.measure(label, 13.5, true);
     buf.text(&c.fonts, x + (w - tw) * 0.5, y + h * 0.5 + 5.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
 }
@@ -863,7 +874,8 @@ fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on:
     let r = 12.0;
     if on {
         buf.round_rect(x, y, w, h, r, c.pal.accent.scale_a(235.0));
-        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(80.0), 1.2);
+        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(90.0), 1.2);
+        buf.stroke_round_rect(x - 3.5, y - 3.5, w + 7.0, h + 7.0, r + 3.5, c.pal.accent.scale_a(42.0), 1.1);
         let tw = c.fonts.measure(label, 13.5, true);
         buf.text(&c.fonts, x + (w - tw) * 0.5, y + 23.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
     } else {
@@ -880,12 +892,21 @@ fn draw_slider(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, val
     let vw = c.fonts.measure(value_str, c.fs, true);
     buf.text(&c.fonts, x + w - vw, y + 12.0, value_str, c.fs, true, c.pal.accent);
     let track = crate::layout::Rect { x, y: y + 24.0, w, h: 8.0 };
-    buf.round_rect(track.x, track.y, track.w, track.h, 4.0, c.pal.row_hover);
+    buf.round_rect(
+        track.x,
+        track.y,
+        track.w,
+        track.h,
+        4.0,
+        crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.22),
+    );
+    buf.stroke_round_rect(track.x, track.y, track.w, track.h, 4.0, c.pal.muted.scale_a(90.0), 1.0);
     let t = ((value - range.0) / (range.1 - range.0)).clamp(0.0, 1.0) as f32;
     let kx = track.x + 8.0 + (track.w - 16.0) * t;
     buf.round_rect(track.x, track.y, (kx - track.x).max(4.0), track.h, 4.0, c.pal.accent);
+    buf.circle(kx, track.y + 4.0, 11.0, c.pal.accent.scale_a(45.0));
     buf.circle(kx, track.y + 4.0, 8.0, Rgba::rgb(255, 255, 255));
-    buf.stroke_circle(kx, track.y + 4.0, 8.0, c.pal.accent.scale_a(120.0), 1.2);
+    buf.stroke_circle(kx, track.y + 4.0, 8.0, c.pal.accent.scale_a(150.0), 1.2);
     track
 }
 
@@ -983,8 +1004,20 @@ fn draw_select(
 ) -> crate::layout::Rect {
     let pal = &c.pal;
     let bx = x + w - 194.0;
-    buf.round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.row_hover);
-    buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, if open { pal.accent } else { pal.muted.scale_a(90.0) }, 1.0);
+    buf.round_rect(
+        bx,
+        y - 2.0,
+        190.0,
+        28.0,
+        7.0,
+        crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05),
+    );
+    if open {
+        buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.accent, 1.3);
+        buf.stroke_round_rect(bx - 2.0, y - 4.0, 194.0, 32.0, 9.0, pal.accent.scale_a(50.0), 1.1);
+    } else {
+        buf.stroke_round_rect(bx, y - 2.0, 190.0, 28.0, 7.0, pal.muted.scale_a(110.0), 1.0);
+    }
     buf.text(&c.fonts, bx + 12.0, y + 16.0, value, 12.0, false, pal.text);
     // chevron
     let cx = bx + 172.0;
@@ -1098,7 +1131,8 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
 
     let section = |buf: &mut SBuf, c: &Ctx, y: f32, text: &str| {
         buf.text(&c.fonts, pane_x + 4.0, y + 16.0, text, 14.0, true, c.pal.accent);
-        buf.fill_rect(pane_x + 4.0, y + 24.0, pane_w - 8.0, 1.0, c.pal.panel_border);
+        buf.fill_rect(pane_x + 4.0, y + 23.5, pane_w - 8.0, 1.6, c.pal.accent.scale_a(180.0));
+        buf.fill_rect(pane_x + 4.0, y + 25.5, pane_w - 8.0, 1.2, c.pal.accent.scale_a(60.0));
     };
 
     // ---- left nav: pages (big highlightable buttons) ----
@@ -1110,52 +1144,85 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             (3, tr(&m.lang, "Обновления", "Updates")),
             (4, tr(&m.lang, "Ещё", "More")),
         ];
-        let (bx, bw, bh) = (14.0f32, 152.0f32, 46.0f32);
+        let (bx, bw, bh) = (12.0f32, 156.0f32, 48.0f32);
         let mut ny = pane_y;
         for (n, label) in pages {
             let active = m.page == n;
             if active {
-                buf.round_rect(bx, ny, bw, bh, 13.0, pal.accent.scale_a(235.0));
+                buf.round_rect(bx, ny, bw, bh, 16.0, pal.accent.scale_a(235.0));
                 buf.stroke_round_rect(
                     bx - 1.0,
                     ny - 1.0,
                     bw + 2.0,
                     bh + 2.0,
-                    14.0,
-                    pal.accent.scale_a(80.0),
-                    1.3,
+                    17.0,
+                    pal.accent.scale_a(95.0),
+                    1.4,
                 );
-                let tw = c.fonts.measure(&label, 13.5, true);
+                // soft glow halo (vid-3)
+                buf.stroke_round_rect(
+                    bx - 3.5,
+                    ny - 3.5,
+                    bw + 7.0,
+                    bh + 7.0,
+                    19.5,
+                    pal.accent.scale_a(42.0),
+                    1.2,
+                );
+                let tw = c.fonts.measure(&label, 14.0, true);
                 buf.text(
                     &c.fonts,
                     bx + (bw - tw) * 0.5,
-                    ny + 28.5,
+                    ny + 30.0,
                     &label,
-                    13.5,
+                    14.0,
                     true,
                     Rgba::rgb(255, 255, 255),
                 );
             } else {
+                // glass pill (vid-3) with generous radius (vid-2)
                 buf.round_rect(
                     bx,
                     ny,
                     bw,
                     bh,
-                    13.0,
-                    crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15),
+                    16.0,
+                    crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05),
                 );
-                buf.stroke_round_rect(bx, ny, bw, bh, 13.0, pal.muted.scale_a(150.0), 1.1);
-                let tw = c.fonts.measure(&label, 13.0, false);
-                buf.text(&c.fonts, bx + (bw - tw) * 0.5, ny + 28.0, &label, 13.0, false, pal.muted);
+                buf.stroke_round_rect(bx, ny, bw, bh, 16.0, pal.muted.scale_a(135.0), 1.1);
+                let tw = c.fonts.measure(&label, 13.5, false);
+                buf.text(&c.fonts, bx + (bw - tw) * 0.5, ny + 29.5, &label, 13.5, false, pal.muted);
             }
             regions.push(Region {
                 rect: crate::layout::Rect { x: bx, y: ny, w: bw, h: bh },
                 ctrl: Ctrl::Nav(n),
             });
-            ny += bh + 10.0;
+            ny += bh + 12.0;
         }
     }
 
+    // frosted glass content column with a soft accent glow (vid-3)
+    {
+        let (gx, gy, gw, gh) = (pane_x - 7.0, pane_y - 7.0, pane_w + 14.0, pane_h + 14.0);
+        buf.round_rect(
+            gx,
+            gy,
+            gw,
+            gh,
+            17.0,
+            crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05).scale_a(232.0),
+        );
+        buf.stroke_round_rect(gx, gy, gw, gh, 17.0, pal.accent.scale_a(70.0), 1.2);
+        buf.stroke_round_rect(
+            gx - 2.5,
+            gy - 2.5,
+            gw + 5.0,
+            gh + 5.0,
+            19.5,
+            pal.accent.scale_a(32.0),
+            1.1,
+        );
+    }
     buf.set_clip(pane_x, pane_y, pane_w, pane_h);
     // ---- page content ----
     if m.page == 0 {
@@ -1320,7 +1387,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         }
         y += gh + 12.0;
     }
-    for (key, ru, en) in [("margin_x", "Отступ X", "Margin X"), ("margin_y", "Отступ Y", "Margin Y")] {
+    for (key, ru, en) in [("margin_x", "Координата X", "X coordinate"), ("margin_y", "Координата Y", "Y coordinate")] {
         let label = tr(&m.lang, ru, en);
         let value = get_slider(&m.app, key);
         let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &format!("{value:.0}"), value, slider_range(key));
@@ -1726,8 +1793,17 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     let pv_w = WIN_W - pv_x - 16.0;
     let btn_y = WIN_H - 100.0;
     let card_h = btn_y - 16.0 - pane_y;
-    buf.round_rect(pv_x, pane_y, pv_w, card_h, 12.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05));
-    buf.stroke_round_rect(pv_x, pane_y, pv_w, card_h, 12.0, pal.panel_border, 1.0);
+    buf.round_rect(pv_x, pane_y, pv_w, card_h, 14.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.055));
+    buf.stroke_round_rect(pv_x, pane_y, pv_w, card_h, 14.0, pal.accent.scale_a(70.0), 1.2);
+    buf.stroke_round_rect(
+        pv_x - 2.5,
+        pane_y - 2.5,
+        pv_w + 5.0,
+        card_h + 5.0,
+        16.5,
+        pal.accent.scale_a(32.0),
+        1.1,
+    );
     let cap = tr(&m.lang, "Предпросмотр", "Preview");
     buf.text(&c.fonts, pv_x + 14.0, pane_y + 23.0, &cap, 13.0, true, pal.text);
     draw_pin(&c, &mut buf, pv_x + pv_w - 22.0, pane_y + 18.0);
@@ -2272,9 +2348,14 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
             // tray «Скрыть/Показывать оверлей» must survive later persists of
             // our model — adopt external desktop changes while idle
             if let Ok(g) = app.store.try_lock() {
-                let (v, a) = (g.get().desktop.visible, g.get().desktop.autostart);
+                let cfg = g.get();
+                let (v, a) = (cfg.desktop.visible, cfg.desktop.autostart);
                 m.desktop.visible = v;
                 m.desktop.autostart = a;
+                // corner snap / overlay drag write real coordinates back
+                m.app.margin_x = cfg.appearance.margin_x;
+                m.app.margin_y = cfg.appearance.margin_y;
+                m.app.corner = cfg.appearance.corner.clone();
             }
         }
         if m.changed {
@@ -2554,17 +2635,16 @@ mod tests {
     }
 
     #[test]
-    fn corner_grid_sets_placement() {
+    fn corner_grid_requests_snap() {
         let mut m = model();
+        let before = (m.app.margin_x, m.app.margin_y);
         m.click(Ctrl::Corner(2), 0.0, 0.0);
         assert_eq!(m.app.corner, "bl");
-        // corner placement puts the overlay exactly INTO the corner: the
-        // margins reset and can then be fine-tuned with the sliders
-        assert_eq!(m.app.margin_x, 0.0);
-        assert_eq!(m.app.margin_y, 0.0);
+        // the overlay snaps to the corner with its LIVE panel size and writes
+        // the real coordinates back — the model must not guess them here
+        assert_eq!((m.app.margin_x, m.app.margin_y), before);
         m.click(Ctrl::Corner(1), 0.0, 0.0);
         assert_eq!(m.app.corner, "tr");
-        assert_eq!((m.app.margin_x, m.app.margin_y), (0.0, 0.0));
     }
 }
 
