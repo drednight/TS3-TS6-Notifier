@@ -279,7 +279,24 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
     let acc = c.pal.accent;
     match c.sk {
         StyleKind::Glass => {
-            buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+            // слоистое стекло: двойной контур + диагональный блик
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(48.0), 1.1);
+            buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, Rgba::rgb(255, 255, 255).scale_a(16.0), 1.0);
+            // диагональный блик «///» в правом верхнем углу
+            for k in 0..3 {
+                let base_x = x + w - c.s(58.0) + k as f32 * c.s(9.0);
+                let base_y = y + c.s(4.0) + k as f32 * c.s(3.5);
+                for i in 0..6 {
+                    let t = i as f32 / 6.0;
+                    let sx = base_x + c.s(13.0) * t;
+                    let sy = base_y + c.s(8.5) * t;
+                    let a2 = (48.0 * (1.0 - t * 0.7)) as u8;
+                    if a2 == 0 {
+                        continue;
+                    }
+                    buf.fill_rect(sx, sy, c.s(2.2), c.s(2.2), Rgba::rgb(255, 255, 255).scale_a(a2 as f64));
+                }
+            }
         }
         StyleKind::Neon => {
             // glowing double frame
@@ -287,28 +304,51 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, acc.scale_a(42.0), 1.0);
         }
         StyleKind::Hud => {
-            // tactical corner brackets + thin line
-            buf.stroke_round_rect(x, y, w, h, r, b.scale_a(120.0), 1.0);
-            let t = c.s(2.0);
-            let arm = c.s(14.0);
-            let a = acc.scale_a(190.0);
-            buf.line(x, y, x + arm, y, t, a);
-            buf.line(x, y, x, y + arm, t, a);
-            buf.line(x + w - arm, y, x + w, y, t, a);
-            buf.line(x + w, y, x + w, y + arm, t, a);
-            buf.line(x, y + h - arm, x, y + h, t, a);
-            buf.line(x, y + h, x + arm, y + h, t, a);
-            buf.line(x + w - arm, y + h, x + w, y + h, t, a);
-            buf.line(x + w, y + h - arm, x + w, y + h, t, a);
+            // тактический трафарет: пунктирный контур + асимметричные скобки TL/BR
+            {
+                let t = c.s(1.6);
+                let a = acc.scale_a(150.0);
+                let dash = c.s(8.0);
+                let gap = c.s(5.0);
+                let mut px2 = x;
+                while px2 < x + w - dash {
+                    buf.fill_rect(px2, y, dash, t, a);
+                    buf.fill_rect(px2, y + h - t, dash, t, a);
+                    px2 += dash + gap;
+                }
+                let mut py2 = y;
+                while py2 < y + h - dash {
+                    buf.fill_rect(x, py2, t, dash, a);
+                    buf.fill_rect(x + w - t, py2, t, dash, a);
+                    py2 += dash + gap;
+                }
+            }
+            let t2 = c.s(2.2);
+            let arm = c.s(16.0);
+            let a2 = acc.scale_a(210.0);
+            buf.line(x, y, x + arm, y, t2, a2);
+            buf.line(x, y, x, y + arm, t2, a2);
+            buf.line(x + w - arm, y + h, x + w, y + h, t2, a2);
+            buf.line(x + w, y + h - arm, x + w, y + h, t2, a2);
         }
         StyleKind::Soft => {
             // no hard border — soft light rim only
             buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(28.0), 1.0);
         }
         StyleKind::Crt => {
-            // screen bezel: hairline + inner inset frame
-            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 1.0);
-            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), r, acc.scale_a(38.0), 1.0);
+            // экранная трубка: толстый бейзел + яркое кольцо + «винты» по углам
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(70.0), 3.0);
+            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), r, acc.scale_a(120.0), 1.0);
+            let d = c.s(2.2);
+            let dots = [
+                (x + c.s(12.0), y + c.s(12.0)),
+                (x + w - c.s(12.0), y + c.s(12.0)),
+                (x + c.s(12.0), y + h - c.s(12.0)),
+                (x + w - c.s(12.0), y + h - c.s(12.0)),
+            ];
+            for (dx, dy) in dots {
+                buf.circle(dx, dy, d, acc.scale_a(150.0));
+            }
         }
         StyleKind::Minimal => {
             buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
@@ -332,40 +372,94 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             }
         }
         StyleKind::Ice => {
-            // crystalline double rim + sparkle ticks at the top corners
-            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(70.0), 1.2);
-            buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, mix(acc, Rgba::rgb(255, 255, 255), 0.5).scale_a(50.0), 1.0);
-            let t = c.s(1.4);
-            let cols = [x + c.s(9.0), x + w - c.s(9.0)];
-            for cx2 in cols {
-                buf.line(cx2 - c.s(3.5), y + c.s(6.0), cx2 + c.s(3.5), y + c.s(6.0), t, Rgba::rgb(255, 255, 255).scale_a(120.0));
-                buf.line(cx2, y + c.s(2.5), cx2, y + c.s(9.5), t, Rgba::rgb(255, 255, 255).scale_a(120.0));
+            // ледяной контур + бахрома-сосульки по верхней кромке
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(85.0), 1.3);
+            buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, mix(acc, Rgba::rgb(255, 255, 255), 0.55).scale_a(55.0), 1.0);
+            let n = 26;
+            for i in 0..n {
+                let fx = x + c.s(6.0) + (w - c.s(12.0)) * (i as f32 / (n - 1) as f32);
+                let len = c.s(3.0) + c.s(6.0) * (((i * 7) % 5) as f32 / 4.0);
+                buf.fill_rect(fx, y, c.s(1.2), len, Rgba::rgb(255, 255, 255).scale_a(95.0));
             }
         }
         StyleKind::Lava => {
-            // warm heavy frame + hot gradient top edge
-            buf.stroke_round_rect(x, y, w, h, r, mix(acc, Rgba::rgb(255, 90, 20), 0.35), 2.0);
-            for i in 0..12 {
-                let t = i as f32 / 12.0;
-                let warm = mix(acc, Rgba::rgb(255, 160, 40), (0.5 - 0.5 * t) as f64);
-                buf.fill_rect(x + r + (w - 2.0 * r) * t, y, (w - 2.0 * r) / 12.0 + 1.0, c.s(2.2), warm.scale_a(150.0));
+            // тлеющий низ: тёплый контур + раскалённое подсвечивание снизу
+            buf.stroke_round_rect(x, y, w, h, r, mix(acc, Rgba::rgb(255, 90, 20), 0.35), 1.8);
+            for i in 0..3 {
+                let warm = mix(acc, Rgba::rgb(255, 150, 40), (0.2 + 0.25 * i as f32) as f64);
+                buf.fill_rect(x + r + c.s(4.0), y + h - c.s(1.0) - i as f32 * c.s(2.2), w - 2.0 * r - c.s(8.0), c.s(2.0), warm.scale_a(120.0 - 30.0 * i as f64));
+            }
+            let embers = [x + w * 0.22, x + w * 0.5, x + w * 0.78];
+            for (i, ex) in embers.iter().enumerate() {
+                let warm = mix(acc, Rgba::rgb(255, 170, 50), 0.6);
+                buf.circle(*ex, y + h - c.s(3.0), c.s(1.2 + (i % 2) as f32), warm.scale_a(170.0));
             }
         }
         StyleKind::Retro => {
-            // chunky hard double frame, square corners
-            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 2.4);
-            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), 0.0, acc.scale_a(60.0), 1.2);
+            // пиксельная рамка из чередующихся блоков + внутренний контур
+            let t = c.s(3.0);
+            let blk = c.s(9.0);
+            let gap = c.s(5.0);
+            let a = acc.scale_a(165.0);
+            let mut px2 = x;
+            while px2 < x + w {
+                let seg = blk.min(x + w - px2);
+                buf.fill_rect(px2, y, seg, t, a);
+                buf.fill_rect(px2, y + h - t, seg, t, a);
+                px2 += blk + gap;
+            }
+            let mut py2 = y;
+            while py2 < y + h {
+                let seg = blk.min(y + h - py2);
+                buf.fill_rect(x, py2, t, seg, a);
+                buf.fill_rect(x + w - t, py2, t, seg, a);
+                py2 += blk + gap;
+            }
+            buf.stroke_round_rect(x + c.s(3.5), y + c.s(3.5), w - c.s(7.0), h - c.s(7.0), 0.0, acc.scale_a(60.0), 1.1);
         }
     }
 }
 
-/// Style-based row grid line («сетка строк»): subtle separator per style.
-fn row_grid_line(c: &Ctx) -> Option<Rgba> {
+/// Style-based row grid («сетка строк»): hairline / dashed / dotted per style.
+/// Minimal & Cyber keep their approved solid hairlines exactly.
+fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
     match c.sk {
-        StyleKind::Hud | StyleKind::Minimal | StyleKind::Crt => Some(c.pal.muted.scale_a(48.0)),
-        StyleKind::Cyber | StyleKind::Retro => Some(c.pal.accent.scale_a(40.0)),
-        StyleKind::Ice => Some(Rgba::rgb(255, 255, 255).scale_a(24.0)),
-        _ => None,
+        StyleKind::Minimal => {
+            buf.fill_rect(x, y, w, 1.0, c.pal.muted.scale_a(48.0));
+        }
+        StyleKind::Cyber => {
+            buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(40.0));
+        }
+        StyleKind::Glass | StyleKind::Ice => {
+            buf.fill_rect(x, y, w, 1.0, Rgba::rgb(255, 255, 255).scale_a(26.0));
+        }
+        StyleKind::Hud => {
+            // пунктир
+            let mut dx = x;
+            while dx < x + w {
+                let seg = c.s(4.0).min(x + w - dx);
+                if seg <= 0.0 {
+                    break;
+                }
+                buf.fill_rect(dx, y, seg, 1.0, c.pal.muted.scale_a(48.0));
+                dx += c.s(8.0);
+            }
+        }
+        StyleKind::Crt => {
+            buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(32.0));
+        }
+        StyleKind::Retro => {
+            // точечный пунктир
+            let mut dx = x;
+            while dx < x + w {
+                buf.fill_rect(dx, y, c.s(2.0), 1.0, c.pal.accent.scale_a(45.0));
+                dx += c.s(5.0);
+            }
+        }
+        StyleKind::Lava => {
+            buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(38.0));
+        }
+        _ => {}
     }
 }
 
@@ -597,9 +691,10 @@ fn draw_user_row(
         let ac = tpal.accent;
         match c.sk {
             StyleKind::Glass => {
-                // классическая обводка строки целиком
+                // стеклянная плита: чистая обводка + блик сверху
                 buf.round_rect(x, y, w, h, radius, bg);
-                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.0));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.5));
+                buf.fill_rect(x + c.s(10.0), y + c.s(1.5), w * 0.38, c.s(1.8), Rgba::rgb(255, 255, 255).scale_a(75.0 * talk_alpha as f64));
             }
             StyleKind::Neon => {
                 // неон: гало-обводка + яркая полоса снизу
@@ -609,13 +704,26 @@ fn draw_user_row(
                 buf.fill_rect(x + c.s(6.0), y + h - c.s(2.5), w - c.s(12.0), c.s(2.0), ac);
             }
             StyleKind::Hud => {
-                // тактический индикатор: бар слева + засечки + рамка
+                // трафарет статуса: сплошной бар + квадрат-индикатор + пунктирная рамка
                 buf.round_rect(x, y, w, h, radius, bg);
-                buf.fill_rect(x, y, c.s(3.5), h, ac);
-                for i in 0..3 {
-                    buf.fill_rect(x + c.s(5.0), y + h * (0.22 + 0.28 * i as f32), c.s(7.0), c.s(2.0), ac.scale_a(150.0 * talk_alpha as f64));
+                buf.fill_rect(x, y, c.s(3.0), h, ac);
+                buf.fill_rect(x + c.s(5.5), y + h * 0.5 - c.s(1.9), c.s(3.8), c.s(3.8), ac.scale_a(190.0 * talk_alpha as f64));
+                let t = c.s(1.5);
+                let a2 = tpal.talk_outline.scale_a(150.0 * talk_alpha as f64);
+                let dash = c.s(6.0);
+                let gap = c.s(4.0);
+                let mut dx = x;
+                while dx < x + w - dash {
+                    buf.fill_rect(dx, y, dash, t, a2);
+                    buf.fill_rect(dx, y + h - t, dash, t, a2);
+                    dx += dash + gap;
                 }
-                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(85.0 * talk_alpha as f64), 1.0);
+                let mut dy = y + dash + gap;
+                while dy < y + h - dash - gap {
+                    buf.fill_rect(x, dy, t, dash, a2);
+                    buf.fill_rect(x + w - t, dy, t, dash, a2);
+                    dy += dash + gap;
+                }
             }
             StyleKind::Soft => {
                 // мягкое подчёркивание снизу, pill-фон
@@ -628,11 +736,14 @@ fn draw_user_row(
                 }
             }
             StyleKind::Crt => {
-                // фосфорная полоса: заливка + яркие линии сверху/снизу
-                buf.round_rect(x, y, w, h, radius, ac.scale_a(34.0 * talk_alpha as f64));
-                buf.fill_rect(x, y, w, c.s(2.0), tpal.talk_outline.scale_a(190.0 * talk_alpha as f64));
-                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), tpal.talk_outline.scale_a(190.0 * talk_alpha as f64));
-                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(120.0 * talk_alpha as f64), 1.0);
+                // строчная развёртка: яркие линии через строку + торцевые скобки
+                buf.round_rect(x, y, w, h, radius, ac.scale_a(30.0 * talk_alpha as f64));
+                for i in 0..3 {
+                    let ly = y + h * (0.22 + 0.28 * i as f32);
+                    buf.fill_rect(x + c.s(4.0), ly, w - c.s(8.0), c.s(1.8), tpal.talk_outline.scale_a((190.0 - 45.0 * i as f64) * talk_alpha as f64));
+                }
+                buf.fill_rect(x, y + h * 0.2, c.s(2.2), h * 0.6, ac.scale_a(170.0 * talk_alpha as f64));
+                buf.fill_rect(x + w - c.s(2.2), y + h * 0.2, c.s(2.2), h * 0.6, ac.scale_a(170.0 * talk_alpha as f64));
             }
             StyleKind::Minimal => {
                 // только акцентный бар слева, без обводки
@@ -656,27 +767,49 @@ fn draw_user_row(
                 buf.fill_rect(x, y + cut, c.s(2.5), h - cut * 2.0, ac.scale_a(110.0 * talk_alpha as f64));
             }
             StyleKind::Ice => {
-                // двойная ледяная обводка + блик сверху
+                // изморозь: бликующая обводка + сосульки внутри строки
                 buf.round_rect(x, y, w, h, radius, bg);
-                buf.stroke_round_rect(x, y, w, h, radius, Rgba::rgb(255, 255, 255).scale_a(120.0 * talk_alpha as f64), 1.4);
-                buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), radius, tpal.talk_outline.scale_a(140.0 * talk_alpha as f64), 1.0);
-                buf.fill_rect(x + c.s(8.0), y + c.s(1.5), w - c.s(16.0), c.s(1.2), Rgba::rgb(255, 255, 255).scale_a(90.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, Rgba::rgb(255, 255, 255).scale_a(115.0 * talk_alpha as f64), 1.3);
+                buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), radius, tpal.talk_outline.scale_a(130.0 * talk_alpha as f64), 1.0);
+                let n = 18;
+                for i in 0..n {
+                    let fx = x + c.s(8.0) + (w - c.s(16.0)) * (i as f32 / (n - 1) as f32);
+                    let len = c.s(2.5) + c.s(4.5) * (((i * 5) % 4) as f32 / 3.0);
+                    buf.fill_rect(fx, y, c.s(1.1), len, Rgba::rgb(255, 255, 255).scale_a(85.0 * talk_alpha as f64));
+                }
             }
             StyleKind::Lava => {
-                // раскалённая полоса снизу (градиент углей) + тёплая рамка
+                // раскалённый разлом: яркий низ, тлеющие бока, искры
                 buf.round_rect(x, y, w, h, radius, bg);
-                let steps = 10;
-                for i in 0..steps {
-                    let t = i as f32 / steps as f32;
-                    let warm = mix(ac, Rgba::rgb(255, 150, 40), (0.5 - 0.5 * t) as f64);
-                    buf.fill_rect(x + w * t, y + h - c.s(3.5), w / steps as f32 + 1.0, c.s(3.5), warm.scale_a(170.0 * talk_alpha as f64));
+                let warm_hi = mix(ac, Rgba::rgb(255, 170, 50), 0.55);
+                buf.fill_rect(x + c.s(4.0), y + h - c.s(3.0), w - c.s(8.0), c.s(3.0), warm_hi.scale_a(190.0 * talk_alpha as f64));
+                buf.fill_rect(x, y + h * 0.35, c.s(1.6), h * 0.65, warm_hi.scale_a(110.0 * talk_alpha as f64));
+                buf.fill_rect(x + w - c.s(1.6), y + h * 0.35, c.s(1.6), h * 0.65, warm_hi.scale_a(110.0 * talk_alpha as f64));
+                buf.fill_rect(x + c.s(4.0), y, w - c.s(8.0), c.s(1.2), ac.scale_a(70.0 * talk_alpha as f64));
+                let es = [x + w * 0.3, x + w * 0.62, x + w * 0.85];
+                for ex in es {
+                    buf.circle(ex, y + h - c.s(2.0), c.s(1.3), mix(ac, Rgba::rgb(255, 200, 90), 0.7).scale_a(200.0 * talk_alpha as f64));
                 }
-                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(75.0 * talk_alpha as f64), 1.0);
             }
             StyleKind::Retro => {
-                // жёсткий блок-выделение, прямые углы
-                buf.round_rect(x, y, w, h, radius, ac.scale_a(42.0 * talk_alpha as f64));
-                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.2));
+                // аркадная выделялка: угловые скобки-пиксели + пунктир снизу
+                buf.round_rect(x, y, w, h, radius, bg);
+                let t = c.s(3.0);
+                let arm = c.s(8.0);
+                let a2 = tpal.talk_outline.scale_a(210.0 * talk_alpha as f64);
+                buf.fill_rect(x, y, arm, t, a2);
+                buf.fill_rect(x, y, t, arm, a2);
+                buf.fill_rect(x + w - arm, y, arm, t, a2);
+                buf.fill_rect(x + w - t, y, t, arm, a2);
+                buf.fill_rect(x, y + h - t, arm, t, a2);
+                buf.fill_rect(x, y + h - arm, t, arm, a2);
+                buf.fill_rect(x + w - arm, y + h - t, arm, t, a2);
+                buf.fill_rect(x + w - t, y + h - arm, t, arm, a2);
+                let mut dx = x + c.s(10.0);
+                while dx < x + w - c.s(10.0) {
+                    buf.fill_rect(dx, y + h - c.s(2.2), c.s(3.0), c.s(2.0), a2);
+                    dx += c.s(5.5);
+                }
             }
         }
     }
@@ -1087,8 +1220,8 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if !c.borderless && i + 1 < inp.users.len() {
             if separators {
                 buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, c.pal.muted.scale_a(70.0));
-            } else if let Some(sc) = row_grid_line(&c) {
-                buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, sc);
+            } else {
+                draw_row_grid(&c, &mut buf, px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0));
             }
         }
         draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, inp.talk_alphas.get(i).copied().unwrap_or(1.0), &you_label, &opts);
@@ -1121,8 +1254,8 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             if !c.borderless && wi + 1 < inp.whisperers.len() {
                 if separators {
                     buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, c.pal.muted.scale_a(70.0));
-                } else if let Some(sc) = row_grid_line(&c) {
-                    buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, sc);
+                } else {
+                    draw_row_grid(&c, &mut buf, px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0));
                 }
             }
             draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, 1.0, &you_label, &opts);
