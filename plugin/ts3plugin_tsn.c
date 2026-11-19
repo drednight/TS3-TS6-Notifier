@@ -36,6 +36,7 @@
 #include "ts3_functions.h"
 
 #define TSN_PORT 48912
+#define TSN_VERSION "1.2.0"
 #define TSN_SEND_BUF (256 * 1024)
 
 static struct TS3Functions ts3funcs;
@@ -110,7 +111,6 @@ static HANDLE tsn_send_thread = NULL;
 static char* q_items[TSN_QUEUE];
 static int q_head = 0, q_count = 0;
 
-const char* ts3plugin_version(void); /* forward decl for the hello line */
 
 static void tsn_enqueue(const char* line, int len) {
     if (!q_wake) return;
@@ -173,7 +173,7 @@ static DWORD WINAPI tsn_sender(LPVOID arg) {
             } else {
                 if (!was) {
                     char hello[64];
-                    int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", ts3plugin_version());
+                    int n = snprintf(hello, sizeof(hello), "{\"e\":\"hello\",\"v\":\"%s\"}\n", TSN_VERSION);
                     if (!tsn_send_all(tsn_sock, hello, n)) failed = 1;
                     else InterlockedExchange(&tsn_resync, 1);
                 }
@@ -313,7 +313,7 @@ static void send_snapshot_all(void) {
 #endif
 
 PLUGINS_EXPORTDLL const char* ts3plugin_name(void) { return "TS3-TS6 Notifier bridge"; }
-PLUGINS_EXPORTDLL const char* ts3plugin_version(void) { return "1.2.0"; }
+PLUGINS_EXPORTDLL const char* ts3plugin_version(void) { return TSN_VERSION; }
 /* TS3 client 3.6.x requires API 26 (error on load: "Api version is not
  * compatible: 23 (minimum: 26, current: 26)"). */
 PLUGINS_EXPORTDLL int ts3plugin_apiVersion(void) { return 26; }
