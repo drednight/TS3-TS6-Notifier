@@ -1817,7 +1817,7 @@ pub(crate) mod win32 {
             _ => (if ru { "Не подключено" } else { "Disconnected" }, false),
         };
         let source = if state.source == "ts6" { "TS6" } else if state.source == "ts3" { "TS3" } else { "Mock" };
-        (format!("TS3-TS6 Notifier — {} · {}", source, text), live)
+        (format!("{} · {}", source, text), live)
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -2018,7 +2018,6 @@ pub(crate) mod win32 {
             }
             AppendMenuW(menu, MF_POPUP, sub as usize, wide(if ru { "Источник данных" } else { "Data source" }).as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, 110, wide(if ru { "Открыть панель" } else { "Open panel" }).as_ptr());
             AppendMenuW(menu, MF_STRING, 111, wide(if ru { "Настройки" } else { "Settings" }).as_ptr());
             {
                 let vis = app.store.lock().unwrap().get().desktop.visible;
@@ -2030,7 +2029,6 @@ pub(crate) mod win32 {
                 AppendMenuW(menu, MF_STRING, 121, wide(label).as_ptr());
             }
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, 0, wide(&format!("TS3-TS6 Notifier v{}", app.version)).as_ptr());
             AppendMenuW(menu, MF_STRING, 120, wide(if ru { "Выход" } else { "Exit" }).as_ptr());
             let mut pt = POINT { x: 0, y: 0 };
             GetCursorPos(&mut pt);
@@ -2047,12 +2045,6 @@ pub(crate) mod win32 {
                 let patch = crate::json::obj(vec![("source", crate::json::Json::s(src))]);
                 app.store.lock().unwrap().update(&patch);
                 (app.restart_connector)();
-            } else if cmd == 110 {
-                let url: Vec<u16> = format!("http://127.0.0.1:{}/", port)
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                ShellExecuteW(null_mut(), wide("open").as_ptr(), url.as_ptr(), null(), null(), 1);
             } else if cmd == 111 {
                 crate::settings::spawn_once(app.clone(), port);
             } else if cmd == 121 {
@@ -2157,6 +2149,14 @@ pub(crate) mod win32 {
     }
 
     /// Copy `text` to the Windows clipboard.
+    /// Open a URL in the default browser («Открыть панель»).
+    pub fn open_url(url: &str) {
+        unsafe {
+            let u: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+            ShellExecuteW(null_mut(), wide("open").as_ptr(), u.as_ptr(), null(), null(), 1);
+        }
+    }
+
     pub fn set_clipboard_text(text: &str) {
         unsafe {
             if OpenClipboard(std::ptr::null_mut()) == 0 {

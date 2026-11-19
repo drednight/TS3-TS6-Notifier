@@ -82,6 +82,15 @@ pub enum Ctrl {
     Option(&'static str, u8),
     /// «Цвета элементов» palette swatch: (colour key, swatch index).
     Color(&'static str, u8),
+    /// Open the free colour picker for a colour slot ("accent" too).
+    OpenColor(&'static str),
+    /// Colour-picker modal controls.
+    PickSV,
+    PickHue,
+    PickDone,
+    PickCancel,
+    /// «Открыть панель» — open the web panel in the browser.
+    OpenPanel,
     /// Text input field: (field id). Click focuses it for typing.
     Field(&'static str),
     /// «Установить плагин» (TeamSpeak 3).
@@ -153,12 +162,25 @@ pub enum Pending {
     InstallUpdate,
     CopyObs,
     CopyDiag,
+    /// Open the web panel in the browser («Открыть панель»).
+    OpenPanel,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Region {
     pub rect: crate::layout::Rect,
     pub ctrl: Ctrl,
+}
+
+/// Free colour-picker modal («выбор цвета из палитры произвольного»).
+#[derive(Debug, Clone)]
+pub struct ColorPick {
+    pub key: &'static str,
+    pub h: f64,
+    pub s: f64,
+    pub v: f64,
+    /// Colour to restore on «Отмена».
+    pub orig: String,
 }
 
 pub struct SettingsModel {
@@ -195,6 +217,8 @@ pub struct SettingsModel {
     pub groups_open: bool,
     /// Actions that need `Arc<App>` — performed by run_loop.
     pub pending: Option<Pending>,
+    /// Open colour-picker modal (overlay «Вид оверлея» page).
+    pub color_pick: Option<ColorPick>,
 }
 
 impl SettingsModel {
@@ -234,6 +258,7 @@ impl SettingsModel {
             update_ready: false,
             page: 0,
             groups_open: false,
+            color_pick: None,
             pending: None,
         }
     }
@@ -337,7 +362,64 @@ impl SettingsModel {
         self.open_select = None;
     }
 
+    /// Apply a click/drag inside the colour-picker modal (sv square / hue bar).
+    fn apply_pick(&mut self, ctrl: Ctrl, x: f32, y: f32) {
+        let (_, sv, hue, _, _) = pick_geometry();
+        let (h, s, v, key) = match &self.color_pick {
+            Some(cp) => (cp.h, cp.s, cp.v, cp.key),
+            None => return,
+        };
+        let (nh, ns, nv) = if matches!(ctrl, Ctrl::PickHue) {
+            (((((x - hue.x) / hue.w).clamp(0.0, 1.0)) as f64) * 360.0, s, v)
+        } else {
+            (
+                h,
+                (((x - sv.x) / sv.w).clamp(0.0, 1.0)) as f64,
+                1.0 - ((((y - sv.y) / sv.h).clamp(0.0, 1.0)) as f64),
+            )
+        };
+        if let Some(cp) = self.color_pick.as_mut() {
+            cp.h = nh;
+            cp.s = ns;
+            cp.v = nv;
+        }
+        let hex = hsv_to_hex(nh, ns, nv);
+        set_color(&mut self.app, key, &hex);
+        self.touch();
+    }
+
     pub fn click(&mut self, ctrl: Ctrl, _x: f32, _y: f32) {
+        // colour-picker modal first — its controls win over everything
+        if let Ctrl::OpenColor(key) = ctrl {
+            let cur = get_color(&self.app, key);
+            let (h, s, v) = hex_to_hsv(&cur);
+            self.close_select();
+            self.color_pick = Some(ColorPick { key, h, s, v, orig: cur });
+            return;
+        }
+        match ctrl {
+            Ctrl::PickDone => {
+                self.color_pick = None;
+                self.touch();
+                return;
+            }
+            Ctrl::PickCancel => {
+                if let Some(cp) = self.color_pick.take() {
+                    set_color(&mut self.app, cp.key, &cp.orig);
+                    self.touch();
+                }
+                return;
+            }
+            Ctrl::PickSV | Ctrl::PickHue => {
+                self.apply_pick(ctrl, _x, _y);
+                return;
+            }
+            _ => {}
+        }
+        if self.color_pick.is_some() {
+            // modal is open — everything else is inert
+            return;
+        }
         if self.open_select.is_some() && !matches!(ctrl, Ctrl::Option(..) | Ctrl::Select(_)) {
             self.open_select = None;
         }
@@ -346,6 +428,8 @@ impl SettingsModel {
             self.select_all = false;
         }
         match ctrl {
+            Ctrl::OpenPanel => self.pending = Some(Pending::OpenPanel),
+            Ctrl::OpenColor(_) | Ctrl::PickSV | Ctrl::PickHue | Ctrl::PickDone | Ctrl::PickCancel => {}
             Ctrl::Close => self.close_requested = true,
             Ctrl::Field(id) => {
                 self.focus = Some(id);
@@ -492,10 +576,18 @@ impl SettingsModel {
     /// Mouse-down on a slider track starts a capture drag and applies the value.
     pub fn drag_begin(&mut self, x: f32, y: f32, regions: &[Region]) -> bool {
         for r in regions {
+            if matches!(r.ctrl, Ctrl::PickSV | Ctrl::PickHue) {
+                if r.rect.contains(x, y) {
+                    let key: &'static str = if matches!(r.ctrl, Ctrl::PickHue) { "pick_hue" } else { "pick_sv" };
+                    self.dragging = Some((key, r.rect));
+                    self.drag_to(x, y);
+                    return true;
+                }
+            }
             if let Ctrl::Slider(key) = r.ctrl {
                 if r.rect.contains(x, y) || (y >= r.rect.y - 10.0 && y <= r.rect.y + 16.0 && x >= r.rect.x && x <= r.rect.x + r.rect.w) {
                     self.dragging = Some((key, r.rect));
-                    self.drag_to(x);
+                    self.drag_to(x, y);
                     return true;
                 }
             }
@@ -507,9 +599,13 @@ impl SettingsModel {
         self.dragging = None;
     }
 
-    /// Called on drag move while a slider is captured.
-    pub fn drag_to(&mut self, x: f32) {
+    /// Called on drag move while a slider / picker square is captured.
+    pub fn drag_to(&mut self, x: f32, y: f32) {
         if let Some((key, rect)) = self.dragging {
+            if key == "pick_sv" || key == "pick_hue" {
+                self.apply_pick(if key == "pick_hue" { Ctrl::PickHue } else { Ctrl::PickSV }, x, y);
+                return;
+            }
             let t = ((x - rect.x) / rect.w).clamp(0.0, 1.0) as f64;
             let (min, max) = slider_range(key);
             let v = min + (max - min) * t;
@@ -524,8 +620,65 @@ impl SettingsModel {
     }
 }
 
+/// #rrggbb → (h 0..360, s 0..1, v 0..1).
+fn hex_to_hsv(hex: &str) -> (f64, f64, f64) {
+    let c = parse_color(hex);
+    let (r, g, b) = (c.0[0] as f64 / 255.0, c.0[1] as f64 / 255.0, c.0[2] as f64 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d < 1e-6 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / d) % 6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    let s = if max < 1e-6 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+/// (h 0..360, s 0..1, v 0..1) → "#rrggbb".
+fn hsv_to_hex(h: f64, s: f64, v: f64) -> String {
+    let h = ((h % 360.0) + 360.0) % 360.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let to8 = |t: f64| (((t + m) * 255.0).round().clamp(0.0, 255.0)) as u8;
+    format!("#{:02x}{:02x}{:02x}", to8(r), to8(g), to8(b))
+}
+
+/// Modal geometry shared by paint and click handling:
+/// (modal, SV square, hue bar, «Готово», «Отмена»).
+fn pick_geometry() -> (crate::layout::Rect, crate::layout::Rect, crate::layout::Rect, crate::layout::Rect, crate::layout::Rect) {
+    use crate::layout::Rect;
+    let mw = 380.0;
+    let mh = 252.0;
+    let mx = (WIN_W - mw) * 0.5;
+    let my = (WIN_H - mh) * 0.5;
+    (
+        Rect { x: mx, y: my, w: mw, h: mh },
+        Rect { x: mx + 20.0, y: my + 52.0, w: 250.0, h: 150.0 },
+        Rect { x: mx + 20.0, y: my + 216.0, w: 250.0, h: 16.0 },
+        Rect { x: mx + 286.0, y: my + 150.0, w: 74.0, h: 28.0 },
+        Rect { x: mx + 286.0, y: my + 186.0, w: 74.0, h: 28.0 },
+    )
+}
+
 fn get_color(app: &Appearance, key: &str) -> String {
     match key {
+        "accent" => app.accent.clone(),
         "event_color" => app.event_color.clone(),
         "msg_color" => app.msg_color.clone(),
         "talk_outline" => app.talk_outline.clone(),
@@ -535,6 +688,7 @@ fn get_color(app: &Appearance, key: &str) -> String {
 
 fn set_color(app: &mut Appearance, key: &str, val: &str) {
     match key {
+        "accent" => app.accent = val.to_string(),
         "nick_color" => app.nick_color = val.to_string(),
         "event_color" => app.event_color = val.to_string(),
         "msg_color" => app.msg_color = val.to_string(),
@@ -1490,26 +1644,27 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             }
         } else if m.page == 1 {
             // «Оформление» — только вид оверлея: стили, схемы, цвета, эффекты
-            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Тема оформления", "Overlay style"), 15.0, true, pal.text);
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Вид оверлея", "Overlay look"), 15.0, true, pal.text);
             y += 32.0;
             {
                 let gap = 10.0;
-                let n = StyleKind::ALL.len() as f32;
-                let cw = (pane_w - 8.0 - gap * (n - 1.0)) / n;
+                let per_row = 5usize;
+                let cw = (pane_w - 8.0 - gap * (per_row as f32 - 1.0)) / per_row as f32;
                 for (i, st) in StyleKind::ALL.iter().enumerate() {
-                    let bx = pane_x + 4.0 + i as f32 * (cw + gap);
+                    let bx = pane_x + 4.0 + (i % per_row) as f32 * (cw + gap);
+                    let by = y + (i / per_row) as f32 * 62.0;
                     let active = m.app.style == st.0;
                     let label = tr(&m.lang, st.1, st.2);
                     let acc = parse_color(StyleKind::ACCENTS[i]);
                     let second = StyleKind::parse(st.0).second(acc);
                     let light = crate::theme::mix(acc, Rgba::rgb(255, 255, 255), 0.45);
-                    draw_tile(&c, &mut buf, bx, y, cw, 52.0, &label, [acc, second, light], active);
+                    draw_tile(&c, &mut buf, bx, by, cw, 52.0, &label, [acc, second, light], active);
                     regions.push(Region {
-                        rect: crate::layout::Rect { x: bx, y, w: cw, h: 52.0 },
+                        rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 52.0 },
                         ctrl: Ctrl::Style(i as u8),
                     });
                 }
-                y += 66.0;
+                y += 2.0 * 62.0 + 4.0;
             }
             buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Цветовые схемы", "Colour schemes"), 15.0, true, pal.text);
             y += 32.0;
@@ -1544,6 +1699,19 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     ctrl: Ctrl::Swatch(i as u8),
                 });
             }
+            {
+                // произвольный цвет акцента — через палитру
+                let sx = pane_x + 4.0 + ACCENT_SWATCHES.len() as f32 * 42.0;
+                buf.round_rect(sx, y, 32.0, 32.0, 8.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(255, 255, 255), 0.08));
+                for i in 0..3 {
+                    buf.circle(sx + 9.0 + i as f32 * 7.0, y + 16.0, 4.2, parse_color(&hsv_to_hex(i as f64 * 60.0 + 12.0, 0.85, 0.95)));
+                }
+                buf.stroke_round_rect(sx, y, 32.0, 32.0, 8.0, pal.muted.scale_a(150.0), 1.1);
+                regions.push(Region {
+                    rect: crate::layout::Rect { x: sx, y, w: 32.0, h: 32.0 },
+                    ctrl: Ctrl::OpenColor("accent"),
+                });
+            }
             y += 40.0;
             {
                 let names_ru = ["Фиолетовый", "Синий", "Голубой", "Пурпурный", "Изумрудный", "Розовый", "Янтарный", "Серебряный", "Белый"];
@@ -1570,6 +1738,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                 draw_label(&c, &mut buf, pane_x + 4.0, y + 26.0, 200.0, &label, 13.0, pal.text, true);
                 buf.round_rect(pane_x + 210.0, y + 8.0, 26.0, 26.0, 7.0, parse_color(&cur_hex));
                 buf.stroke_round_rect(pane_x + 210.0, y + 8.0, 26.0, 26.0, 7.0, pal.muted.scale_a(150.0), 1.1);
+                regions.push(Region {
+                    rect: crate::layout::Rect { x: pane_x + 210.0, y: y + 8.0, w: 26.0, h: 26.0 },
+                    ctrl: Ctrl::OpenColor(key),
+                });
                 for (ci, csw) in COLOR_SWATCHES.iter().enumerate() {
                     let sx = pane_x + 250.0 + ci as f32 * 27.0;
                     let active = cur_hex.eq_ignore_ascii_case(csw);
@@ -2030,6 +2202,16 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             section(&mut buf, &c, y, &tr(&m.lang, "Инструменты", "Tools"));
             y += 34.0;
             {
+                // «пусть это будет как кнопка в странице Ещё» (вместо пункта трея)
+                let label = tr(&m.lang, "Открыть панель", "Open panel");
+                draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
+                regions.push(Region {
+                    rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
+                    ctrl: Ctrl::OpenPanel,
+                });
+                y += 42.0;
+            }
+            {
                 let label = tr(&m.lang, "Скопировать ссылку для OBS", "Copy OBS browser-source URL");
                 draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
                 regions.push(Region {
@@ -2138,9 +2320,61 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             });
         }
     }
-    // dropdown options win clicks over content underneath
-    let (mut front, back): (Vec<Region>, Vec<Region>) =
-        regions.into_iter().partition(|r| matches!(r.ctrl, Ctrl::Option(..)));
+    // ---- free colour-picker modal (topmost) ----
+    if let Some(cp) = &m.color_pick {
+        buf.fill_rect(0.0, 0.0, WIN_W, WIN_H, Rgba([0, 0, 0, 120]));
+        let (modal, sv, hue, ok, cancel) = pick_geometry();
+        buf.round_rect(modal.x, modal.y, modal.w, modal.h, 14.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.28).scale_a(252.0));
+        buf.stroke_round_rect(modal.x, modal.y, modal.w, modal.h, 14.0, pal.accent.scale_a(170.0), 1.3);
+        let title = tr(&m.lang, "Выбор цвета", "Colour picker");
+        buf.text(&c.fonts, modal.x + 20.0, modal.y + 30.0, &title, 15.0, true, pal.text);
+        // SV square: saturation (x) × value (y) at the current hue
+        let (cols, rows) = (25u32, 15u32);
+        for r in 0..rows {
+            let v = 1.0 - (r as f64 + 0.5) / rows as f64;
+            for col in 0..cols {
+                let s = (col as f64 + 0.5) / cols as f64;
+                let hex = hsv_to_hex(cp.h, s, v);
+                buf.fill_rect(
+                    sv.x + col as f32 * sv.w / cols as f32,
+                    sv.y + r as f32 * sv.h / rows as f32,
+                    sv.w / cols as f32 + 0.7,
+                    sv.h / rows as f32 + 0.7,
+                    parse_color(&hex),
+                );
+            }
+        }
+        let cur_hex = hsv_to_hex(cp.h, cp.s, cp.v);
+        let mx = sv.x + cp.s as f32 * sv.w;
+        let my = sv.y + (1.0 - cp.v as f32) * sv.h;
+        buf.stroke_round_rect(mx - 6.0, my - 6.0, 12.0, 12.0, 6.0, Rgba::rgb(255, 255, 255), 1.6);
+        buf.stroke_round_rect(mx - 8.0, my - 8.0, 16.0, 16.0, 8.0, Rgba::rgb(0, 0, 0), 1.2);
+        // hue bar
+        for i in 0..36 {
+            let hex = hsv_to_hex(i as f64 * 10.0, 1.0, 1.0);
+            buf.fill_rect(hue.x + i as f32 * hue.w / 36.0, hue.y, hue.w / 36.0 + 0.7, hue.h, parse_color(&hex));
+        }
+        let hx = hue.x + (cp.h / 360.0) as f32 * hue.w;
+        buf.fill_rect(hx - 1.5, hue.y - 2.0, 3.0, hue.h + 4.0, Rgba::rgb(255, 255, 255));
+        // right column: preview + hex + buttons
+        buf.round_rect(modal.x + 286.0, modal.y + 52.0, 74.0, 40.0, 8.0, parse_color(&cur_hex));
+        buf.stroke_round_rect(modal.x + 286.0, modal.y + 52.0, 74.0, 40.0, 8.0, pal.muted.scale_a(150.0), 1.1);
+        let hx_lbl = cur_hex.to_uppercase();
+        buf.text(&c.fonts, modal.x + 286.0, modal.y + 110.0, &hx_lbl, 11.5, true, pal.text);
+        draw_button(&c, &mut buf, ok.x, ok.y, ok.w, ok.h, &tr(&m.lang, "Готово", "OK"));
+        regions.push(Region { rect: ok, ctrl: Ctrl::PickDone });
+        draw_button(&c, &mut buf, cancel.x, cancel.y, cancel.w, cancel.h, &tr(&m.lang, "Отмена", "Cancel"));
+        regions.push(Region { rect: cancel, ctrl: Ctrl::PickCancel });
+        regions.push(Region { rect: sv, ctrl: Ctrl::PickSV });
+        regions.push(Region { rect: hue, ctrl: Ctrl::PickHue });
+    }
+    // dropdown options + picker win clicks over content underneath
+    let (mut front, back): (Vec<Region>, Vec<Region>) = regions.into_iter().partition(|r| {
+        matches!(
+            r.ctrl,
+            Ctrl::Option(..) | Ctrl::PickSV | Ctrl::PickHue | Ctrl::PickDone | Ctrl::PickCancel
+        )
+    });
     front.extend(back);
     let regions = front;
 
@@ -2550,7 +2784,7 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                         m.drag_begin(ex, ey, &regions);
                     }
                 }
-                Ev::DragMove(ex, _) => m.drag_to((ex - x as f32) / k),
+                Ev::DragMove(ex, ey) => m.drag_to((ex - x as f32) / k, (ey - y as f32) / k),
                 Ev::DragEnd => m.drag_end(),
                 Ev::Wheel(dy) => m.wheel(dy, content_h),
                 Ev::Text(t) => m.text_input(&t),
@@ -2597,6 +2831,14 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
                     #[cfg(not(any(windows, tsn_win32)))]
                     let _ = &url;
                     m.update_note = tr(&m.lang, "Ссылка скопирована ✓", "URL copied ✓");
+                }
+                Pending::OpenPanel => {
+                    let url = format!("http://127.0.0.1:{}/", crate::http::listen_port());
+                    #[cfg(any(windows, tsn_win32))]
+                    crate::overlay::win32::open_url(&url);
+                    #[cfg(not(any(windows, tsn_win32)))]
+                    let _ = &url;
+                    m.conn_note = tr(&m.lang, "Панель открыта ✓", "Panel opened ✓");
                 }
                 Pending::CopyDiag => {
                     let report = crate::http::diagnostics(&app);
@@ -2818,11 +3060,11 @@ mod tests {
             "scale",
             crate::layout::Rect { x: 100.0, y: 0.0, w: 200.0, h: 6.0 },
         ));
-        m.drag_to(160.0); // t=0.3 → 0.75 + 0.75*0.3
+        m.drag_to(160.0, 0.0); // t=0.3 → 0.75 + 0.75*0.3
         assert!((m.app.scale - 0.975).abs() < 1e-5, "{}", m.app.scale);
-        m.drag_to(9999.0);
+        m.drag_to(9999.0, 0.0);
         assert_eq!(m.app.scale, 1.5, "clamped to max");
-        m.drag_to(-50.0);
+        m.drag_to(-50.0, 0.0);
         assert_eq!(m.app.scale, 0.75, "clamped to min");
     }
 
@@ -2968,6 +3210,19 @@ mod qa {
             m.page = 1;
             let (bb, _, _) = render(&m, &fonts, &icons, 1.0);
             write_png(&format!("{dir}/settings-p1-borderless.png"), &bb).unwrap();
+        }
+        {
+            // модалка произвольного цвета (палитра)
+            m.app.borderless = false;
+            m.app.nick_color = "#e8ecff".into();
+            m.app.event_color = "#e8ecff".into();
+            m.app.msg_color = "#b6b6bd".into();
+            m.app.talk_outline = "#57e389".into();
+            m.page = 1;
+            m.click(Ctrl::OpenColor("nick_color"), 0.0, 0.0);
+            let (bpk, _, _) = render(&m, &fonts, &icons, 1.0);
+            write_png(&format!("{dir}/settings-p1-picker.png"), &bpk).unwrap();
+            m.click(Ctrl::PickCancel, 0.0, 0.0);
         }
         m.page = 0;
         // middle — corner grid + roster sections

@@ -4,4 +4,4 @@ version = 4
 
 [[package]]
 name = "tsn-native"
-version = "2.0.11"
+version = "2.0.12"

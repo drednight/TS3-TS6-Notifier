@@ -51,18 +51,31 @@ pub enum StyleKind {
     Hud,
     Soft,
     Crt,
+    Minimal,
+    Cyber,
+    Ice,
+    Lava,
+    Retro,
 }
 
 impl StyleKind {
-    pub const ALL: [(&str, &str, &str); 5] = [
+    pub const ALL: [(&str, &str, &str); 10] = [
         ("glass", "Стекло", "Glass"),
         ("neon", "Неон", "Neon"),
         ("hud", "Тактический", "Tactical"),
         ("soft", "Мягкий", "Soft"),
         ("crt", "Кинескоп", "CRT"),
+        ("minimal", "Минимал", "Minimal"),
+        ("cyber", "Кибер", "Cyber"),
+        ("ice", "Лёд", "Ice"),
+        ("lava", "Лава", "Lava"),
+        ("retro", "Ретро", "Retro"),
     ];
     /// Signature accent per style (applied when the style tile is clicked).
-    pub const ACCENTS: [&str; 5] = ["#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#4ade80"];
+    pub const ACCENTS: [&str; 10] = [
+        "#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#4ade80",
+        "#e5e7eb", "#ff2fd6", "#38bdf8", "#ff5d3b", "#ffd166",
+    ];
 
     pub fn parse(s: &str) -> StyleKind {
         match s {
@@ -70,6 +83,11 @@ impl StyleKind {
             "hud" => StyleKind::Hud,
             "soft" => StyleKind::Soft,
             "crt" => StyleKind::Crt,
+            "minimal" => StyleKind::Minimal,
+            "cyber" => StyleKind::Cyber,
+            "ice" => StyleKind::Ice,
+            "lava" => StyleKind::Lava,
+            "retro" => StyleKind::Retro,
             _ => StyleKind::Glass,
         }
     }
@@ -82,7 +100,10 @@ impl StyleKind {
     pub fn second(&self, accent: Rgba) -> Rgba {
         match self {
             StyleKind::Neon => Rgba::rgb(255, 47, 214),
-            StyleKind::Crt => Rgba::rgb(255, 176, 60),
+            StyleKind::Crt | StyleKind::Retro => Rgba::rgb(255, 176, 60),
+            StyleKind::Cyber => Rgba::rgb(182, 255, 46),
+            StyleKind::Ice => Rgba::rgb(125, 249, 255),
+            StyleKind::Lava => Rgba::rgb(255, 140, 66),
             _ => accent,
         }
     }

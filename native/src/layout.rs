@@ -233,7 +233,10 @@ impl<'a> Ctx<'a> {
             StyleKind::Glass => base,
             StyleKind::Neon | StyleKind::Hud => (base * 0.3).clamp(self.s(1.5), self.s(6.0)),
             StyleKind::Soft => base * 1.5,
-            StyleKind::Crt => 0.0,
+            StyleKind::Crt | StyleKind::Retro => 0.0,
+            StyleKind::Minimal | StyleKind::Cyber => (base * 0.2).clamp(self.s(1.5), self.s(6.0)),
+            StyleKind::Ice => base * 1.3,
+            StyleKind::Lava => base * 0.8,
         }
     }
     /// Style-aware panel/row background tint.
@@ -243,7 +246,11 @@ impl<'a> Ctx<'a> {
             StyleKind::Neon => mix(base, Rgba::rgb(2, 3, 8), 0.42),
             StyleKind::Hud => mix(base, Rgba::rgb(6, 8, 10), 0.24),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.10),
-            StyleKind::Crt => mix(base, Rgba::rgb(4, 6, 4), 0.35),
+            StyleKind::Crt | StyleKind::Retro => mix(base, Rgba::rgb(4, 6, 4), 0.35),
+            StyleKind::Minimal => mix(base, Rgba::rgb(0, 0, 0), 0.10),
+            StyleKind::Cyber => mix(base, Rgba::rgb(12, 0, 22), 0.45),
+            StyleKind::Ice => mix(base, Rgba::rgb(10, 22, 38), 0.28),
+            StyleKind::Lava => mix(base, Rgba::rgb(22, 7, 3), 0.38),
         }
     }
     /// Style-aware border color.
@@ -253,7 +260,11 @@ impl<'a> Ctx<'a> {
             StyleKind::Neon => self.pal.accent.scale_a(150.0),
             StyleKind::Hud => mix(base, self.pal.accent, 0.35),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.22),
-            StyleKind::Crt => self.pal.accent.scale_a(110.0),
+            StyleKind::Crt | StyleKind::Retro => self.pal.accent.scale_a(110.0),
+            StyleKind::Minimal => base.scale_a(160.0),
+            StyleKind::Cyber => self.pal.accent.scale_a(140.0),
+            StyleKind::Ice => mix(base, Rgba::rgb(255, 255, 255), 0.35),
+            StyleKind::Lava => mix(base, self.pal.accent, 0.5),
         }
     }
     /// Whisper/talk secondary accent (neon magenta, CRT amber, else user accent).
@@ -489,25 +500,25 @@ fn draw_user_row(
         let bg = if c.borderless { Rgba([0, 0, 0, 0]) } else { tpal.talking_bg };
         let ac = tpal.accent;
         match c.sk {
-            StyleKind::Neon => {
+            StyleKind::Neon | StyleKind::Cyber => {
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), ac);
                 buf.fill_rect(x, y, c.s(2.0), h, ac.scale_a(120.0 * talk_alpha as f64));
             }
-            StyleKind::Hud => {
+            StyleKind::Hud | StyleKind::Lava => {
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.fill_rect(x, y, c.s(3.0), h, ac);
                 buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(90.0 * talk_alpha as f64), 1.0);
             }
-            StyleKind::Soft => {
+            StyleKind::Soft | StyleKind::Ice => {
                 buf.round_rect(x, y, w, h, h * 0.42, bg);
                 buf.stroke_round_rect(x, y, w, h, h * 0.42, tpal.talk_outline.scale_a(150.0 * talk_alpha as f64), c.s(1.5));
             }
-            StyleKind::Crt => {
+            StyleKind::Crt | StyleKind::Retro => {
                 buf.round_rect(x, y, w, h, radius, ac.scale_a(30.0 * talk_alpha as f64));
                 buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(170.0 * talk_alpha as f64), 1.0);
             }
-            StyleKind::Glass => {
+            StyleKind::Glass | StyleKind::Minimal => {
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.0));
             }
@@ -575,10 +586,12 @@ fn draw_user_row(
     // text column
     let tx = if opts.show_avatars { av_x + av + c.s(9.0) } else { x + c.s(10.0) };
     let nick_size = c.em(1.0);
+    // «Мой ник не меняет цвет» — the nick colour drives every row; mute/away
+    // only dims it towards muted instead of replacing the colour.
     let nick_color = if whisper {
         secc
     } else if u.input_muted || u.away {
-        pal.muted
+        mix(pal.nick, pal.muted, 0.62)
     } else {
         pal.nick
     };
@@ -755,7 +768,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if a.show_header {
         if !c.borderless {
         match c.sk {
-            StyleKind::Glass | StyleKind::Soft => {
+            StyleKind::Glass | StyleKind::Soft | StyleKind::Ice => {
                 // accent wash (linear-gradient 115deg ≈ horizontal fade)
                 for i in 0..14 {
                     let t = i as f32 / 14.0;
@@ -773,16 +786,16 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 }
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
-            StyleKind::Neon => {
+            StyleKind::Neon | StyleKind::Cyber | StyleKind::Lava => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(2, 3, 8).scale_a(90.0));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(150.0));
             }
-            StyleKind::Hud => {
+            StyleKind::Hud | StyleKind::Minimal => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(0, 0, 0).scale_a(30.0));
                 buf.fill_rect(px, cy + header_h - 2.0, panel_w, 1.0, c.border(inp.pal.panel_border));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(90.0));
             }
-            StyleKind::Crt => {
+            StyleKind::Crt | StyleKind::Retro => {
                 let mut dx = px;
                 while dx < px + panel_w - c.s(4.0) {
                     buf.fill_rect(dx, cy + header_h - 1.0, c.s(6.0), 1.0, inp.pal.accent.scale_a(120.0));
@@ -953,7 +966,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     // ---- style texture overlays (paint-only) ----
     if !c.borderless {
     match c.sk {
-        StyleKind::Crt => {
+        StyleKind::Crt | StyleKind::Retro => {
             // phosphor scanlines
             let mut yy = py + 1.0;
             while yy < py + panel_h - 1.0 {
@@ -986,11 +999,11 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 buf.fill_rect(cx0.min(cx0 + sx * th), cy0.min(cy0 + sy * ln), th, ln, col);
             }
         }
-        StyleKind::Neon => {
+        StyleKind::Neon | StyleKind::Cyber => {
             // inner glow frame
             buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
         }
-        StyleKind::Glass | StyleKind::Soft => {}
+        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Ice | StyleKind::Lava => {}
     }
     }
 
