@@ -1,0 +1,289 @@
+//! TS3-TS6 Notifier — native core: TeamSpeak connectors, state model and the
+//! HTTP/WS server for the web overlay. Drop-in replacement for the Node
+//! server (same config.json, same wire protocol).
+
+// GUI app on Windows: no console window.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+mod assets;
+mod chatlog;
+mod config;
+mod diag;
+mod http;
+mod icons;
+mod font;
+mod json;
+mod model;
+mod layout;
+mod mock;
+mod overlay;
+mod plugin;
+mod render;
+mod settings;
+mod theme;
+mod ts3;
+mod ts6;
+mod wire;
+mod wsframe;
+
+use config::ConfigStore;
+use http::App;
+use json::Json;
+use model::{now_ms, OverlayState};
+use plugin::{Emit, Ts3WithPluginConnector};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::Duration;
+
+enum Handle {
+    Ts3Plugin(Ts3WithPluginConnector),
+    Mock(mock::MockConnector),
+    Ts6(Arc<AtomicBool>),
+    Stub,
+}
+
+impl Handle {
+    fn stop(&self) {
+        match self {
+            Handle::Ts3Plugin(c) => c.stop(),
+            Handle::Mock(c) => c.stop(),
+            Handle::Ts6(stop) => stop.store(true, std::sync::atomic::Ordering::SeqCst),
+            Handle::Stub => {}
+        }
+    }
+}
+
+/// Coalesce state bursts into at most ~10 broadcasts/second (same as the TS
+/// connectors' emitState throttle).
+fn throttled_sink(app: Arc<App>) -> Emit {
+    let (tx, rx) = channel::<OverlayState>();
+    thread::spawn(move || {
+        let mut pending: Option<OverlayState> = None;
+        let mut last_sent = 0u64;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(st) => pending = Some(st),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            while let Ok(newer) = rx.try_recv() {
+                pending = Some(newer);
+            }
+            let Some(st) = pending.take() else { continue };
+            let elapsed = now_ms() - last_sent;
+            if elapsed < 100 {
+                thread::sleep(Duration::from_millis(100 - elapsed));
+                while let Ok(newer) = rx.try_recv() {
+                    pending = Some(newer);
+                }
+            }
+            let st = pending.take().unwrap_or(st);
+            last_sent = now_ms();
+            app.push_state(&st);
+        }
+    });
+    Arc::new(move |st| {
+        let _ = tx.send(st);
+    })
+}
+
+fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
+    let cfg = store.lock().unwrap().get().clone();
+    let emit = throttled_sink(app.clone());
+    match cfg.source.as_str() {
+        "ts3" => {
+            let conn = Ts3WithPluginConnector::start(
+                &cfg.ts3.host,
+                cfg.ts3.port,
+                &cfg.ts3.api_key,
+                48912,  // plugin bridge port
+                45000,  // plugin idle timeout
+                4000,   // lazy ClientQuery fallback delay
+                emit,
+            );
+            app.plugin_active.store(conn.bridge_active(), std::sync::atomic::Ordering::SeqCst);
+            println!("[server] data source: ts3");
+            Handle::Ts3Plugin(conn)
+        }
+        "ts6" => {
+            let save_key: ts6::SaveKeyFn = {
+                let store = store.clone();
+                Arc::new(move |key: String| {
+                    let patch = crate::json::obj(vec![
+                        ("ts6", crate::json::obj(vec![("apiKey", Json::s(key))])),
+                    ]);
+                    // Persist only — a restart is not triggered here (same as TS).
+                    let _ = store.lock().unwrap().update(&patch);
+                })
+            };
+            let stop = Arc::new(AtomicBool::new(false));
+            {
+                let stop = stop.clone();
+                let host = cfg.ts6.host.clone();
+                let api_key = cfg.ts6.api_key.clone();
+                thread::spawn(move || {
+                    ts6::run(host, cfg.ts6.port, api_key, save_key, stop, move |st| emit(st));
+                });
+            }
+            println!("[server] data source: ts6");
+            Handle::Ts6(stop)
+        }
+        _ => {
+            let conn = mock::MockConnector::start(emit);
+            println!("[server] data source: mock");
+            Handle::Mock(conn)
+        }
+    }
+}
+
+/// Root folder holding `public/` + `data/`. TSN_ROOT wins; otherwise prefer
+/// the exe's own folder (installed to Program Files) and fall back to CWD
+/// (development runs).
+fn detect_root() -> PathBuf {
+    if let Ok(v) = std::env::var("TSN_ROOT") {
+        return PathBuf::from(v);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("public").is_dir() {
+                return dir.to_path_buf();
+            }
+        }
+    }
+    PathBuf::from(".")
+}
+
+fn main() {
+    let port_env: u16 = std::env::var("PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(3000);
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let root = detect_root();
+    let data_dir = root.join("data");
+    let public_dir = root.join("public");
+
+    let store = Arc::new(Mutex::new(ConfigStore::load(&data_dir)));
+
+    // Run-as-administrator (desktop.elevate, default ON): relaunch elevated.
+    // A declined UAC prompt keeps running un-elevated.
+    #[cfg(any(windows, tsn_win32))]
+    {
+        let relaunched = std::env::args().any(|a| a == "--elevated-relaunch");
+        if !relaunched && !overlay::win32::acquire_single_instance() {
+            // a copy is already running — exit before any UAC prompt
+            std::process::exit(0);
+        }
+        let cfg = store.lock().unwrap().get().clone();
+        overlay::win32::maybe_elevate(&cfg);
+        if relaunched && !overlay::win32::acquire_single_instance() {
+            std::process::exit(0);
+        }
+    }
+
+    let handle_slot: Arc<Mutex<Handle>> = Arc::new(Mutex::new(Handle::Stub));
+
+    let plugin_dll = root.join("dist").join("ts3plugin_tsn_win64.dll");
+    let plugin_dll = if plugin_dll.exists() {
+        plugin_dll.to_string_lossy().into_owned()
+    } else {
+        String::new()
+    };
+
+    let initial_state = {
+        let source = store.lock().unwrap().get().source.clone();
+        // 'static strs for the model — map once here
+        let source: &'static str = match source.as_str() {
+            "ts3" => "ts3",
+            "ts6" => "ts6",
+            _ => "mock",
+        };
+        OverlayState::empty(source, "connecting", "")
+    };
+
+    let app: Arc<App> = Arc::new_cyclic(|weak| App {
+        store: store.clone(),
+        latest: RwLock::new(initial_state),
+        clients: Mutex::new(Vec::new()),
+        next_client_id: Mutex::new(0),
+        move_mode: AtomicBool::new(false),
+        panel_size: Mutex::new(None),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        public_dir: public_dir.clone(),
+        plugin_active: Arc::new(AtomicBool::new(false)),
+        plugin_dll: plugin_dll.clone(),
+        restart_connector: Arc::new({
+            let weak = weak.clone();
+            let slot = handle_slot.clone();
+            let store = store.clone();
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    // a connector that fails to start must never poison the
+                    // slot lock or take the app down with it
+                    let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
+                    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.stop()));
+                    if stopped.is_err() {
+                        eprintln!("[server] connector stop panicked");
+                    }
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_connector(&store, &app))) {
+                        Ok(h) => *s = h,
+                        Err(_) => {
+                            eprintln!("[server] connector start panicked");
+                            *s = Handle::Stub;
+                        }
+                    }
+                    // clear the previous source's panel right away («connecting»)
+                    let src = store.lock().unwrap().get().source.clone();
+                    let src: &'static str = match src.as_str() {
+                        "ts3" => "ts3",
+                        "ts6" => "ts6",
+                        _ => "mock",
+                    };
+                    app.push_state(&crate::model::OverlayState::empty(src, "connecting", ""));
+                }
+            }
+        }),
+    });
+
+    {
+        let mut slot = handle_slot.lock().unwrap();
+        *slot = start_connector(&store, &app);
+    }
+
+    let port = match http::serve(app.clone(), &host, port_env) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("[server] failed to start: {err}");
+            std::process::exit(1);
+        }
+    };
+    println!("[server] TS3-TS6 Notifier running at http://{host}:{port}");
+    // Native overlay window (win32 layered window on Windows; headless loop
+    // elsewhere). TSN_OVERLAY=0 disables it (tests, server-only deployments).
+    if std::env::var("TSN_OVERLAY").map(|v| v != "0").unwrap_or(true) {
+        let _overlay = overlay::spawn(app.clone(), port);
+        println!("[overlay] native overlay started");
+    }
+    // «Запуск с системой» — self-heal the HKCU Run entry
+    #[cfg(any(windows, tsn_win32))]
+    if app.store.lock().unwrap().get().desktop.autostart {
+        overlay::win32::set_autostart(true);
+    }
+    // Автопроверка обновлений: через минуту после старта, затем каждые 24 часа
+    {
+        let app = app.clone();
+        std::thread::Builder::new()
+            .name("update-timer".into())
+            .spawn(move || {
+                thread::sleep(Duration::from_secs(90));
+                loop {
+                    settings::start_update_check(app.clone());
+                    thread::sleep(Duration::from_secs(24 * 60 * 60));
+                }
+            })
+            .ok();
+    }
+    loop {
+        thread::sleep(Duration::from_secs(3600));
+    }
+}

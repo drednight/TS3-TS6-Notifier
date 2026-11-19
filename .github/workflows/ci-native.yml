@@ -1,0 +1,108 @@
+# Build + test the native Rust core on every push. CI validation only —
+# releases are built separately from tags (no releases until approved).
+name: ci-native
+permissions:
+  contents: write
+on:
+  push:
+    paths: ['native/**', 'public/**', '.github/workflows/ci-native.yml', '.github/workflows/native-toolchain.yml']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked
+        working-directory: native
+      - run: cargo test --locked
+        working-directory: native
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Building AND testing on windows links the real win32 import libs —
+      # full compile validation of the overlay/settings/tray backends.
+      # Errors are mirrored into ::error:: annotations so they survive log outages.
+      - name: cargo build --release
+        shell: bash
+        working-directory: native
+        run: |
+          set -o pipefail
+          cargo build --release --locked 2>&1 | tee build.log || {
+            tail -40 build.log | sed 's/^/::error::/'
+            exit 1
+          }
+      - name: cargo test --release
+        shell: bash
+        working-directory: native
+        run: |
+          set -o pipefail
+          cargo test --release --locked 2>&1 | tee test.log || {
+            tail -40 test.log | sed 's/^/::error::/'
+            exit 1
+          }
+      - name: package
+        shell: bash
+        run: |
+          set -o pipefail
+          pwsh native/tools/package-win.ps1 2>&1 | tee pkg.log || {
+            tail -20 pkg.log | sed 's/^/::error::/'
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsn-native-win64
+          path: dist-win/tsn-native-win64.zip
+      - name: Inno Setup installer (optional)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $ver = (Select-String -Path native/Cargo.toml -Pattern '^version = "(.+)"$').Matches.Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver native/installer/tsn-native.iss
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: tsn-native-setup
+          path: dist-win/TS3-TS6-Notifier-Setup.exe
+      # Transport: publish the build into a git ref so it can be fetched with
+      # plain git (Actions artifact download is not reachable from the dev sandbox).
+      - name: publish build to refs/notes/tsn-win-build
+        shell: bash
+        run: |
+          set -o pipefail
+          git config user.name ci-native
+          git config user.email ci-native@users.noreply.github.com
+          add() {
+            [ -f "$1" ] || return 0
+            sha=$(git hash-object -w "$1")
+            printf '100644 blob %s\t%s\n' "$sha" "$2"
+          }
+          {
+            add dist-win/tsn-native-win64.zip tsn-native-win64.zip
+            add dist-win/TS3-TS6-Notifier-Setup.exe TS3-TS6-Notifier-Setup.exe
+            add native/target/release/TS3-TS6-Notifier-Overlay.exe TS3-TS6-Notifier-Overlay.exe
+          } > entries.txt
+          [ -s entries.txt ] || { echo "nothing to publish"; exit 1; }
+          tree=$(git mktree < entries.txt)
+          commit=$(git commit-tree "$tree" -m "ci build ${GITHUB_SHA}")
+          git push origin "+$commit:refs/notes/tsn-win-build"
+          echo "transport ok: $commit"
+      # Attach the build to a GitHub Release when one already exists for this
+      # version — releases are still created deliberately, this never publishes
+      # on its own (uploads.github.com is reachable from runners, not the dev
+      # sandbox).
+      - name: attach build to GitHub release (if v<version> exists)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Select-String -Path native/Cargo.toml -Pattern '^version = "(.+)"$').Matches.Groups[1].Value
+          $tag = "v$ver"
+          $exists = gh release view $tag --json tagName -q .tagName 2>$null
+          if (-not $exists) { echo "no release $tag — nothing to attach"; exit 0 }
+          gh release upload $tag dist-win/TS3-TS6-Notifier-Setup.exe dist-win/tsn-native-win64.zip --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          echo "assets attached to $tag"
