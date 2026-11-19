@@ -23,7 +23,7 @@ fn tr(lang: &str, ru: &str, en: &str) -> String {
 }
 
 /// settings.js PRESETS — theme + color set + blur/opacity/glow.
-pub const PRESETS: [(&str, &str, &str, &str, &str, &str, f64, f64, f64); 8] = [
+pub const PRESETS: [(&str, &str, &str, &str, &str, &str, f64, f64, f64); 12] = [
     ("glass", "Стекло", "Glass", "#7c6cff", "#e8ecff", "#b6b6bd", 18.0, 0.72, 0.7),
     ("midnight", "Полночь", "Midnight", "#4f7dff", "#dfe6ff", "#98a2c0", 14.0, 0.85, 0.4),
     ("frost", "Иней", "Frost", "#38bdf8", "#0b2740", "#2b5a7d", 10.0, 0.9, 0.3),
@@ -32,6 +32,15 @@ pub const PRESETS: [(&str, &str, &str, &str, &str, &str, f64, f64, f64); 8] = [
     ("carmine", "Кармин", "Carmine", "#f43f5e", "#ffe4ec", "#e79ab0", 10.0, 0.85, 0.5),
     ("amber", "Янтарь", "Amber", "#f59e0b", "#fff1d0", "#dcbb80", 8.0, 0.88, 0.4),
     ("mono", "Моно", "Mono", "#e5e5e5", "#f4f4f4", "#b3b3b3", 6.0, 0.92, 0.15),
+    ("midnight", "Лаванда", "Lavender", "#a78bfa", "#f3e8ff", "#d8b4fe", 16.0, 0.78, 0.65),
+    ("frost", "Океан", "Ocean", "#0ea5e9", "#e0f2fe", "#7dd3fc", 12.0, 0.82, 0.55),
+    ("glass", "Сакура", "Sakura", "#fb7185", "#ffe4e6", "#fda4af", 18.0, 0.72, 0.7),
+    ("emerald", "Мята", "Mint", "#34d399", "#d1fae5", "#6ee7b7", 14.0, 0.78, 0.5),
+];
+
+/// Palette offered for per-element colours («Цвета элементов»).
+pub const COLOR_SWATCHES: [&str; 9] = [
+    "#ffffff", "#e8ecff", "#b6b6bd", "#7c6cff", "#22d3ee", "#4ade80", "#ffd166", "#ff2fd6", "#ff6b6b",
 ];
 
 /// talkOutline per preset (8th value above is glow; outlines are separate).
@@ -71,6 +80,8 @@ pub enum Ctrl {
     Select(&'static str),
     /// An open dropdown option: (key, option index).
     Option(&'static str, u8),
+    /// «Цвета элементов» palette swatch: (colour key, swatch index).
+    Color(&'static str, u8),
     /// Text input field: (field id). Click focuses it for typing.
     Field(&'static str),
     /// «Установить плагин» (TeamSpeak 3).
@@ -178,7 +189,7 @@ pub struct SettingsModel {
     pub update_note: String,
     /// A downloaded update is ready to install («Перезапустить сейчас»).
     pub update_ready: bool,
-    /// Left-nav page: 0 Вид, 1 Элементы, 2 Связь, 3 Обновления, 4 Ещё.
+    /// Left-nav page: 0 Вид, 1 Оформление, 2 Элементы, 3 Связь, 4 Обновления, 5 Ещё.
     pub page: u8,
     /// «Группы сервера» expanded (hidden by default).
     pub groups_open: bool,
@@ -407,6 +418,7 @@ impl SettingsModel {
                     self.app.theme = p.0.to_string();
                     self.app.accent = p.3.to_string();
                     self.app.nick_color = p.4.to_string();
+                    self.app.event_color = p.4.to_string();
                     self.app.msg_color = p.5.to_string();
                     self.app.talk_outline = preset_outline(p.0).to_string();
                     self.app.blur = p.6;
@@ -418,6 +430,12 @@ impl SettingsModel {
             Ctrl::Swatch(i) => {
                 if let Some(c) = ACCENT_SWATCHES.get(i as usize) {
                     self.app.accent = c.to_string();
+                    self.touch();
+                }
+            }
+            Ctrl::Color(key, i) => {
+                if let Some(col) = COLOR_SWATCHES.get(i as usize) {
+                    set_color(&mut self.app, key, col);
                     self.touch();
                 }
             }
@@ -506,6 +524,25 @@ impl SettingsModel {
     }
 }
 
+fn get_color(app: &Appearance, key: &str) -> String {
+    match key {
+        "event_color" => app.event_color.clone(),
+        "msg_color" => app.msg_color.clone(),
+        "talk_outline" => app.talk_outline.clone(),
+        _ => app.nick_color.clone(),
+    }
+}
+
+fn set_color(app: &mut Appearance, key: &str, val: &str) {
+    match key {
+        "nick_color" => app.nick_color = val.to_string(),
+        "event_color" => app.event_color = val.to_string(),
+        "msg_color" => app.msg_color = val.to_string(),
+        "talk_outline" => app.talk_outline = val.to_string(),
+        _ => {}
+    }
+}
+
 fn toggle_mut<'a>(app: &'a mut Appearance, key: &str) -> &'a mut bool {
     match key {
         "show_header" => &mut app.show_header,
@@ -530,6 +567,7 @@ fn toggle_mut<'a>(app: &'a mut Appearance, key: &str) -> &'a mut bool {
         "show_ev_chat" => &mut app.show_ev_chat,
         "chat_private" => &mut app.chat_private,
         "show_unread_badge" => &mut app.show_unread_badge,
+        "borderless" => &mut app.borderless,
         _ => &mut app.show_header,
     }
 }
@@ -665,6 +703,7 @@ fn get_toggle(app: &Appearance, key: &str) -> bool {
         "show_ev_poke" => app.show_ev_poke,
         "show_ev_chat" => app.show_ev_chat,
         "chat_private" => app.chat_private,
+        "borderless" => app.borderless,
         _ => app.show_unread_badge,
     }
 }
@@ -1263,10 +1302,11 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     {
         let pages = [
             (0u8, tr(&m.lang, "Вид", "Appearance")),
-            (1, tr(&m.lang, "Элементы", "Elements")),
-            (2, tr(&m.lang, "Связь", "Connection")),
-            (3, tr(&m.lang, "Обновления", "Updates")),
-            (4, tr(&m.lang, "Ещё", "More")),
+            (1, tr(&m.lang, "Оформление", "Design")),
+            (2, tr(&m.lang, "Элементы", "Elements")),
+            (3, tr(&m.lang, "Связь", "Connection")),
+            (4, tr(&m.lang, "Обновления", "Updates")),
+            (5, tr(&m.lang, "Ещё", "More")),
         ];
         let (bx, bw, bh, gap) = (14.0f32, 164.0f32, 54.0f32, 14.0f32);
         for (n, label) in pages {
@@ -1304,89 +1344,16 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     {
         let (ru, en) = match m.page {
             0 => ("Настройки Вида", "View Settings"),
-            1 => ("Настройки Элементов", "Elements Settings"),
-            2 => ("Настройки Связи", "Connection Settings"),
-            3 => ("Обновления", "Updates"),
+            1 => ("Оформление", "Design"),
+            2 => ("Настройки Элементов", "Elements Settings"),
+            3 => ("Настройки Связи", "Connection Settings"),
+            4 => ("Обновления", "Updates"),
             _ => ("Ещё", "More"),
         };
         buf.text(&c.fonts, base_x + 2.0, y + 30.0, &tr(&m.lang, ru, en), 22.0, true, pal.text);
         y += 52.0;
     }
-    if m.page == 0 {
-        // «Тема оверлея»: style chips (mockup chip row)
-        buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Тема оверлея", "Overlay theme"), 15.0, true, pal.text);
-        y += 32.0;
-        {
-            let gap = 10.0;
-            let n = StyleKind::ALL.len() as f32;
-            let cw = (base_w - gap * (n - 1.0)) / n;
-            for (i, st) in StyleKind::ALL.iter().enumerate() {
-                let bx = base_x + i as f32 * (cw + gap);
-                let active = m.app.style == st.0;
-                let label = tr(&m.lang, st.1, st.2);
-                // каждый чип показывает палитру своего стиля («разными и красивыми»)
-                let acc = parse_color(StyleKind::ACCENTS[i]);
-                let second = StyleKind::parse(st.0).second(acc);
-                let light = crate::theme::mix(acc, Rgba::rgb(255, 255, 255), 0.45);
-                draw_tile(&c, &mut buf, bx, y, cw, 52.0, &label, [acc, second, light], active);
-                regions.push(Region {
-                    rect: crate::layout::Rect { x: bx, y, w: cw, h: 52.0 },
-                    ctrl: Ctrl::Style(i as u8),
-                });
-            }
-            y += 66.0;
-        }
-        // «Пресеты»: chips 2 rows of 4 (mockup format)
-        buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Пресеты", "Presets"), 15.0, true, pal.text);
-        y += 32.0;
-        {
-            let gap = 10.0;
-            let cw = (base_w - gap * 3.0) / 4.0;
-            for (i, p) in PRESETS.iter().enumerate() {
-                let bx = base_x + (i % 4) as f32 * (cw + gap);
-                let by = y + (i / 4) as f32 * 62.0;
-                let active = m.app.theme == p.0;
-                let label = tr(&m.lang, p.1, p.2);
-                // превью палитры пресета: акцент / ник / сообщения
-                draw_tile(&c, &mut buf, bx, by, cw, 52.0, &label, [parse_color(p.3), parse_color(p.4), parse_color(p.5)], active);
-                regions.push(Region {
-                    rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 52.0 },
-                    ctrl: Ctrl::Preset(i as u8),
-                });
-            }
-            y += 2.0 * 62.0 + 4.0;
-        }
-        // «Цвета»: swatch rows (mockup rounded squares + glow)
-        buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Цвета", "Colors"), 15.0, true, pal.text);
-        y += 32.0;
-        for (i, sw) in ACCENT_SWATCHES.iter().enumerate() {
-            let sx = base_x + 2.0 + i as f32 * 42.0;
-            let active = m.app.accent.eq_ignore_ascii_case(sw);
-            buf.round_rect(sx, y, 32.0, 32.0, 8.0, parse_color(sw));
-            if active {
-                buf.stroke_round_rect(sx - 2.0, y - 2.0, 36.0, 36.0, 10.0, pal.text.scale_a(230.0), 2.0);
-                buf.stroke_round_rect(sx - 4.5, y - 4.5, 41.0, 41.0, 12.5, pal.accent.scale_a(60.0), 1.2);
-            }
-            regions.push(Region {
-                rect: crate::layout::Rect { x: sx, y, w: 32.0, h: 32.0 },
-                ctrl: Ctrl::Swatch(i as u8),
-            });
-        }
-        y += 40.0;
-        {
-            let names_ru = ["Фиолетовый", "Синий", "Голубой", "Пурпурный", "Изумрудный", "Розовый", "Янтарный", "Серебряный", "Белый"];
-            let names_en = ["Violet", "Blue", "Sky", "Magenta", "Emerald", "Rose", "Amber", "Silver", "White"];
-            let idx = ACCENT_SWATCHES
-                .iter()
-                .position(|s2| m.app.accent.eq_ignore_ascii_case(s2))
-                .unwrap_or(0);
-            let cname = tr(&m.lang, names_ru[idx], names_en[idx]);
-            let cap = format!("{}: {} ({})", tr(&m.lang, "Цвет", "Color"), cname, m.app.accent);
-            buf.text(&c.fonts, base_x + 2.0, y + 12.0, &cap, 11.5, false, pal.muted);
-            y += 28.0;
-        }
-    }
-    if m.page == 2 {
+    if m.page == 3 {
         // «Связь»: «Источник данных» — строка во всю ширину, чтобы колонки
         // TeamSpeak 3 и TeamSpeak 6 стояли на одной высоте
         buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Связь", "Connection"), 15.0, true, pal.text);
@@ -1407,7 +1374,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     }
     // two-column body (mockup format); wide pages span the full row
     let cols_y = y;
-    let wide = m.page == 1 || m.page >= 3;
+    let wide = m.page != 0 && m.page != 3;
     let col_w = (base_w - 24.0) * 0.5;
     let mut bottom = y;
     for col in 0..2u8 {
@@ -1430,10 +1397,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     ("font_size", "Шрифт", "Font size"),
                     ("panel_width", "Ширина панели", "Panel width"),
                     ("panel_max_height", "Максимальная высота", "Max height"),
-                    ("opacity", "Прозрачность", "Opacity"),
-                    ("glow", "Свечение", "Glow"),
-                    ("blur", "Размытие", "Blur"),
-                    ("radius", "Скругление", "Corner radius"),
                 ] {
                     let label = tr(&m.lang, ru, en);
                     let value = get_slider(&m.app, key);
@@ -1526,6 +1489,143 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                 }
             }
         } else if m.page == 1 {
+            // «Оформление» — только вид оверлея: стили, схемы, цвета, эффекты
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Тема оформления", "Overlay style"), 15.0, true, pal.text);
+            y += 32.0;
+            {
+                let gap = 10.0;
+                let n = StyleKind::ALL.len() as f32;
+                let cw = (pane_w - 8.0 - gap * (n - 1.0)) / n;
+                for (i, st) in StyleKind::ALL.iter().enumerate() {
+                    let bx = pane_x + 4.0 + i as f32 * (cw + gap);
+                    let active = m.app.style == st.0;
+                    let label = tr(&m.lang, st.1, st.2);
+                    let acc = parse_color(StyleKind::ACCENTS[i]);
+                    let second = StyleKind::parse(st.0).second(acc);
+                    let light = crate::theme::mix(acc, Rgba::rgb(255, 255, 255), 0.45);
+                    draw_tile(&c, &mut buf, bx, y, cw, 52.0, &label, [acc, second, light], active);
+                    regions.push(Region {
+                        rect: crate::layout::Rect { x: bx, y, w: cw, h: 52.0 },
+                        ctrl: Ctrl::Style(i as u8),
+                    });
+                }
+                y += 66.0;
+            }
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Цветовые схемы", "Colour schemes"), 15.0, true, pal.text);
+            y += 32.0;
+            {
+                let gap = 10.0;
+                let cw = (pane_w - 8.0 - gap * 3.0) / 4.0;
+                for (i, p) in PRESETS.iter().enumerate() {
+                    let bx = pane_x + 4.0 + (i % 4) as f32 * (cw + gap);
+                    let by = y + (i / 4) as f32 * 62.0;
+                    let active = m.app.theme == p.0 && m.app.accent.eq_ignore_ascii_case(p.3);
+                    let label = tr(&m.lang, p.1, p.2);
+                    draw_tile(&c, &mut buf, bx, by, cw, 52.0, &label, [parse_color(p.3), parse_color(p.4), parse_color(p.5)], active);
+                    regions.push(Region {
+                        rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 52.0 },
+                        ctrl: Ctrl::Preset(i as u8),
+                    });
+                }
+                y += 3.0 * 62.0 + 4.0;
+            }
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Цвет акцента", "Accent colour"), 15.0, true, pal.text);
+            y += 32.0;
+            for (i, sw) in ACCENT_SWATCHES.iter().enumerate() {
+                let sx = pane_x + 4.0 + i as f32 * 42.0;
+                let active = m.app.accent.eq_ignore_ascii_case(sw);
+                buf.round_rect(sx, y, 32.0, 32.0, 8.0, parse_color(sw));
+                if active {
+                    buf.stroke_round_rect(sx - 2.0, y - 2.0, 36.0, 36.0, 10.0, pal.text.scale_a(230.0), 2.0);
+                    buf.stroke_round_rect(sx - 4.5, y - 4.5, 41.0, 41.0, 12.5, pal.accent.scale_a(60.0), 1.2);
+                }
+                regions.push(Region {
+                    rect: crate::layout::Rect { x: sx, y, w: 32.0, h: 32.0 },
+                    ctrl: Ctrl::Swatch(i as u8),
+                });
+            }
+            y += 40.0;
+            {
+                let names_ru = ["Фиолетовый", "Синий", "Голубой", "Пурпурный", "Изумрудный", "Розовый", "Янтарный", "Серебряный", "Белый"];
+                let names_en = ["Violet", "Blue", "Sky", "Magenta", "Emerald", "Rose", "Amber", "Silver", "White"];
+                let idx = ACCENT_SWATCHES
+                    .iter()
+                    .position(|s2| m.app.accent.eq_ignore_ascii_case(s2))
+                    .unwrap_or(0);
+                let cname = tr(&m.lang, names_ru[idx], names_en[idx]);
+                let cap = format!("{}: {} ({})", tr(&m.lang, "Цвет", "Color"), cname, m.app.accent);
+                buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &cap, 11.5, false, pal.muted);
+                y += 28.0;
+            }
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Цвета элементов", "Element colours"), 15.0, true, pal.text);
+            y += 32.0;
+            for (key, ru, en) in [
+                ("nick_color", "Ник", "Nickname"),
+                ("event_color", "Ник в уведомлениях", "Notification nick"),
+                ("msg_color", "Сообщения в чате", "Chat messages"),
+                ("talk_outline", "Выделение говорящего", "Talking highlight"),
+            ] {
+                let label = tr(&m.lang, ru, en);
+                let cur_hex = get_color(&m.app, key);
+                draw_label(&c, &mut buf, pane_x + 4.0, y + 26.0, 200.0, &label, 13.0, pal.text, true);
+                buf.round_rect(pane_x + 210.0, y + 8.0, 26.0, 26.0, 7.0, parse_color(&cur_hex));
+                buf.stroke_round_rect(pane_x + 210.0, y + 8.0, 26.0, 26.0, 7.0, pal.muted.scale_a(150.0), 1.1);
+                for (ci, csw) in COLOR_SWATCHES.iter().enumerate() {
+                    let sx = pane_x + 250.0 + ci as f32 * 27.0;
+                    let active = cur_hex.eq_ignore_ascii_case(csw);
+                    buf.round_rect(sx, y + 10.0, 22.0, 22.0, 6.0, parse_color(csw));
+                    if active {
+                        buf.stroke_round_rect(sx - 2.0, y + 8.0, 26.0, 26.0, 8.0, pal.text.scale_a(230.0), 2.0);
+                    }
+                    regions.push(Region {
+                        rect: crate::layout::Rect { x: sx, y: y + 8.0, w: 26.0, h: 26.0 },
+                        ctrl: Ctrl::Color(key, ci as u8),
+                    });
+                }
+                y += 42.0;
+            }
+            y += 8.0;
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Подложка и границы", "Backdrop and borders"), 15.0, true, pal.text);
+            y += 32.0;
+            {
+                let label = tr(&m.lang, "Убрать границы и затемнение", "Remove borders and tinting");
+                draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, m.app.borderless);
+                regions.push(Region {
+                    rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
+                    ctrl: Ctrl::Toggle("borderless"),
+                });
+                y += 42.0;
+                let cap = tr(
+                    &m.lang,
+                    "Панель без фона и рамок — на экране остаются только текст и значки",
+                    "No panel background or frames — only text and icons stay on screen",
+                );
+                for ln in wrap_text(&c.fonts, &cap, 11.5, pane_w - 8.0) {
+                    buf.text(&c.fonts, pane_x + 4.0, y + 12.0, &ln, 11.5, false, pal.muted);
+                    y += 15.0;
+                }
+                y += 10.0;
+            }
+            buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Эффекты", "Effects"), 15.0, true, pal.text);
+            y += 32.0;
+            for (key, ru, en) in [
+                ("opacity", "Прозрачность", "Opacity"),
+                ("glow", "Свечение", "Glow"),
+                ("blur", "Размытие", "Blur"),
+                ("radius", "Скругление", "Corner radius"),
+            ] {
+                let label = tr(&m.lang, ru, en);
+                let value = get_slider(&m.app, key);
+                let vstr = if key == "opacity" || key == "glow" {
+                    format!("{value:.2}")
+                } else {
+                    format!("{value:.0}")
+                };
+                let track = draw_slider(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &vstr, value, slider_range(key));
+                regions.push(Region { rect: track, ctrl: Ctrl::Slider(key) });
+                y += 52.0;
+            }
+        } else if m.page == 2 {
             // «Элементы» — «Карточки секций» (elements-vid3-1): шесть тёмных
             // стеклянных карточек 2×3, каждая со своим заголовком
             let gap = 18.0;
@@ -1741,7 +1841,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     ("show_ev_join", "ev_scope_join", "Входы", "Joins"),
                     ("show_ev_leave", "ev_scope_leave", "Выходы", "Leaves"),
                     ("show_ev_move", "ev_scope_move", "Переходы", "Moves"),
-                    ("show_ev_poke", "ev_scope_group", "Поке", "Pokes"),
+                    ("show_ev_poke", "ev_scope_group", "Толкнуть", "Pokes"),
                     ("show_ev_chat", "ev_scope_chat", "Чат", "Chat"),
                 ] {
                     // «красиво»: switch + название в одну линию, область справа
@@ -1766,7 +1866,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                 }
             }
             y = y2 + row2 + 6.0;
-        } else if m.page == 2 {
+        } else if m.page == 3 {
             if col == 0 {
                 {
                     buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 3", 12.5, true, pal.text);
@@ -1862,7 +1962,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     }
                 }
             }
-        } else if m.page == 3 {
+        } else if m.page == 4 {
             section(&mut buf, &c, y, &tr(&m.lang, "Обновления", "Updates"));
             y += 34.0;
             {
@@ -2568,7 +2668,7 @@ mod tests {
     #[test]
     fn group_rows_use_explicit_class_selects() {
         let mut m = model();
-        m.page = 2;
+        m.page = 3;
         m.groups_open = true;
         // pick «Лучник» for the first group via the select popup
         m.click(Ctrl::Select(GROUP_KEYS[0]), 0.0, 0.0);
@@ -2758,13 +2858,13 @@ mod tests {
         assert_eq!((buf.w, buf.h), (WIN_W as i32, WIN_H as i32));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::Close));
         assert!(regions.iter().any(|r| r.ctrl == Ctrl::MoveOverlay));
-        // left nav: five pages
-        for n in 0..5u8 {
+        // left nav: six pages
+        for n in 0..6u8 {
             assert!(regions.iter().any(|r| r.ctrl == Ctrl::Nav(n)), "nav {n}");
         }
         // controls are spread across the pages — sum them up
         let (mut presets, mut sliders, mut selects, mut corners) = (0, 0, 0, 0);
-        for page in 0..5u8 {
+        for page in 0..6u8 {
             m.page = page;
             let (_, regs, _) = render(&m, &fonts, &icons, 1.0);
             presets += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Preset(_))).count();
@@ -2772,7 +2872,7 @@ mod tests {
             selects += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Select(_))).count();
             corners += regs.iter().filter(|r| matches!(r.ctrl, Ctrl::Corner(_))).count();
         }
-        assert_eq!(presets, 8);
+        assert_eq!(presets, 12);
         assert_eq!(sliders, 15);
         assert_eq!(selects, 9);
         assert_eq!(corners, 9);
@@ -2835,20 +2935,20 @@ mod qa {
         std::fs::create_dir_all(dir).unwrap();
         write_png(&format!("{dir}/settings.png"), &buf).unwrap();
         // every page top (design review)
-        for page in 0..5u8 {
+        for page in 0..6u8 {
             m.page = page;
             m.scroll = 0.0;
             let (bp, _, chp) = render(&m, &fonts, &icons, 1.0);
             write_png(&format!("{dir}/settings-p{page}.png"), &bp).unwrap();
-            if page == 1 {
+            if page == 1 || page == 2 {
                 m.scroll = (chp - PANE_H).max(0.0);
                 let (bs, _, _) = render(&m, &fonts, &icons, 1.0);
-                write_png(&format!("{dir}/settings-p1-bottom.png"), &bs).unwrap();
+                write_png(&format!("{dir}/settings-p{page}-bottom.png"), &bs).unwrap();
             }
         }
         {
             // живой предпросмотр: выключенные элементы должны исчезать
-            m.page = 1;
+            m.page = 2;
             m.scroll = 0.0;
             m.app.show_avatars = false;
             m.app.show_chat = false;
@@ -2857,6 +2957,17 @@ mod qa {
             m.app.hide_query = false;
             let (bq, _, _) = render(&m, &fonts, &icons, 1.0);
             write_png(&format!("{dir}/settings-p1-alt.png"), &bq).unwrap();
+        }
+        {
+            // «убрать границы и затемнение» + свои цвета — в живом предпросмотре
+            m.app.borderless = true;
+            m.app.nick_color = "#ffd166".into();
+            m.app.event_color = "#ff6b6b".into();
+            m.app.msg_color = "#22d3ee".into();
+            m.app.talk_outline = "#22d3ee".into();
+            m.page = 1;
+            let (bb, _, _) = render(&m, &fonts, &icons, 1.0);
+            write_png(&format!("{dir}/settings-p1-borderless.png"), &bb).unwrap();
         }
         m.page = 0;
         // middle — corner grid + roster sections

@@ -198,7 +198,11 @@ impl Ts6Session {
         // diagnostics: talk/updated sampled 1-in-10
         let noisy = ty.to_lowercase().contains("talk") || ty.to_lowercase().contains("updated");
         let raw = payload.to_string();
-        let short = &raw[..raw.len().min(200)];
+        let mut cut = raw.len().min(200);
+        while cut > 0 && !raw.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let short = &raw[..cut];
         if noisy {
             self.noisy_diag_skipped += 1;
             if self.noisy_diag_skipped % 10 == 1 {
@@ -727,7 +731,13 @@ impl Ts6Session {
                 let mut u = UserState::new(id.to_string(), "");
                 u.channel_id = raw.get("channelId").map(|v| v.loose_i64()).unwrap_or(0);
                 u.is_self = id == self.own_client_id;
-                self.clients.insert(id, apply_properties(&u, props));
+                let merged = apply_properties(&u, props);
+                // whisper already in progress at snapshot time -> the roster
+                // section only lists book entries («Шёпот» must show up)
+                if merged.whispering {
+                    crate::model::WhisperBook::note(&self.whispers, &id.to_string(), true);
+                }
+                self.clients.insert(id, merged);
             }
         }
 

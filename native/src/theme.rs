@@ -140,6 +140,7 @@ pub struct Palette {
     pub row_hover: Rgba,
     pub talking_bg: Rgba,
     pub talk_outline: Rgba,
+    pub event_nick: Rgba,
     pub nick: Rgba,
     pub msg: Rgba,
     pub danger: Rgba,
@@ -169,6 +170,7 @@ impl Palette {
             row_hover: f(self.row_hover),
             talking_bg: f(self.talking_bg),
             talk_outline: f(self.talk_outline),
+            event_nick: f(self.event_nick),
             nick: f(self.nick),
             msg: f(self.msg),
             danger: f(self.danger),
@@ -309,6 +311,7 @@ impl Palette {
                 accent.scale_a(talk_a * 255.0 as f64)
             },
             talk_outline: parse_color(&a.talk_outline),
+            event_nick: parse_color(&a.event_color),
             nick: parse_color(&a.nick_color),
             msg: parse_color(&a.msg_color),
             danger: Rgba::rgb(248, 113, 113),

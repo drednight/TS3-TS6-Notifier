@@ -51,7 +51,23 @@ impl PluginBridge {
             last_seen: Mutex::new(0),
             was_active: AtomicBool::new(false),
         });
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        // «Переподключить»/source switch stops the old bridge just before the
+        // new one starts — retry briefly while the old socket is released.
+        let listener = (|| -> std::io::Result<TcpListener> {
+            let mut last = None;
+            for _ in 0..30 {
+                match TcpListener::bind(("127.0.0.1", port)) {
+                    Ok(l) => return Ok(l),
+                    Err(e) => {
+                        last = Some(e);
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+            Err(last.unwrap_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::AddrInUse, "plugin bridge bind")
+            }))
+        })()?;
         let bound_port = listener.local_addr()?.port();
         diag("plugin", &format!("bridge listening on 127.0.0.1:{bound_port}"));
         let stop = Arc::new(AtomicBool::new(false));
@@ -63,20 +79,37 @@ impl PluginBridge {
             let line_tx = line_tx.clone();
             let active_tx = active_tx.clone();
             thread::spawn(move || {
-                for conn in listener.incoming() {
+                // non-blocking accept so `stop` releases the port promptly —
+                // a blocking `incoming()` loop kept 48912 bound forever and the
+                // next connector start panicked with AddrInUse.
+                let _ = listener.set_nonblocking(true);
+                loop {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    let Ok(socket) = conn else { continue };
-                    let _ = socket.set_nodelay(true);
-                    let shared = shared.clone();
-                    let line_tx = line_tx.clone();
-                    let active_tx = active_tx.clone();
-                    let stop = stop.clone();
-                    thread::spawn(move || {
-                        handle_plugin_conn(socket, shared, line_tx, active_tx, stop);
-                    });
+                    match listener.accept() {
+                        Ok((socket, _)) => {
+                            let _ = socket.set_nodelay(true);
+                            let shared = shared.clone();
+                            let line_tx = line_tx.clone();
+                            let active_tx = active_tx.clone();
+                            let stop = stop.clone();
+                            thread::spawn(move || {
+                                handle_plugin_conn(socket, shared, line_tx, active_tx, stop);
+                            });
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        Err(_) => {
+                            if stop.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                    }
                 }
+                // listener drops here — the port is released immediately
             });
         }
         // idle watcher

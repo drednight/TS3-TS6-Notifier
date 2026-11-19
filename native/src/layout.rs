@@ -217,6 +217,7 @@ struct Ctx<'a> {
     now: f64,
     anim: bool,
     sk: StyleKind,
+    borderless: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -485,7 +486,7 @@ fn draw_user_row(
     if !whisper && (u.talking || talk_alpha < 0.999) {
         // v1.4.9 «Обводка говорящего» — highlight of the whole row strip (every
         // style), lingering + fading out over `talking_fade` after speech stops
-        let bg = tpal.talking_bg;
+        let bg = if c.borderless { Rgba([0, 0, 0, 0]) } else { tpal.talking_bg };
         let ac = tpal.accent;
         match c.sk {
             StyleKind::Neon => {
@@ -634,6 +635,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         now: inp.now_ms as f64,
         anim: a.animations,
         sk: StyleKind::parse(&a.style),
+        borderless: a.borderless,
     };
     let pad = SHADOW_PAD * k;
     let panel_w = ((a.panel_width as f32) * k).clamp(200.0 * k, 600.0 * k);
@@ -709,9 +711,11 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     // «Размытие» (appearance.blur) drives the shadow softness — the slider
     // must have a visible effect in the native renderer too.
     let blur_px = ((inp.appearance.blur as f32) * c.k).clamp(3.0, 44.0);
-    buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
-    buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
-    buf.stroke_round_rect(px, py, panel_w, panel_h, pr, c.border(inp.pal.panel_border), 1.0);
+    if !c.borderless {
+        buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
+        buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
+        buf.stroke_round_rect(px, py, panel_w, panel_h, pr, c.border(inp.pal.panel_border), 1.0);
+    }
 
     let mut cy = py;
     // ---- move handle (z-index 50 in css — drawn over header) ----
@@ -749,6 +753,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
 
     // ---- header ----
     if a.show_header {
+        if !c.borderless {
         match c.sk {
             StyleKind::Glass | StyleKind::Soft => {
                 // accent wash (linear-gradient 115deg ≈ horizontal fade)
@@ -784,6 +789,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                     dx += c.s(12.0);
                 }
             }
+        }
         }
         // conn dot
         let dot_x = px + c.s(16.5);
@@ -852,9 +858,9 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         let faded;
         let rc = if u.fade < 0.999 {
             faded = inp.pal.fade(u.fade);
-            Ctx { pal: &faded, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk }
+            Ctx { pal: &faded, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk, borderless: c.borderless }
         } else {
-            Ctx { pal: c.pal, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk }
+            Ctx { pal: c.pal, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk, borderless: c.borderless }
         };
         draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, inp.talk_alphas.get(i).copied().unwrap_or(1.0), &you_label, &opts);
         cy += row_h + row_gap;
@@ -902,14 +908,15 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let size = c.em(0.92);
             let line_h = c.s(16.0);
             let al = item.alpha.clamp(0.0, 1.0) as f64;
-            if item.kind == 1 {
+            if item.kind == 1 && !c.borderless {
                 let fr = c.rad(c.s(10.0));
                 buf.round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.accent.scale_a(26.0 * al));
                 buf.stroke_round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.accent.scale_a(115.0 * al), 1.0);
             }
             let rp = inp.pal.fade(item.alpha.clamp(0.0, 1.0));
             let baseline = y0 + feed_row_h * 0.5 + size * 0.35;
-            inp.fonts.draw(&mut buf, x0 + c.s(8.0), baseline, &g.nick, size, true, rp.nick);
+            let ncol = if item.kind == 0 { rp.event_nick } else { rp.nick };
+            inp.fonts.draw(&mut buf, x0 + c.s(8.0), baseline, &g.nick, size, true, ncol);
             for (li, ln) in g.lines.iter().enumerate() {
                 let bl = baseline + li as f32 * line_h;
                 let lx = if li == 0 { x0 + g.tx } else { x0 + c.s(8.0) };
@@ -944,6 +951,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     }
 
     // ---- style texture overlays (paint-only) ----
+    if !c.borderless {
     match c.sk {
         StyleKind::Crt => {
             // phosphor scanlines
@@ -983,6 +991,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
         }
         StyleKind::Glass | StyleKind::Soft => {}
+    }
     }
 
     // keep the first talking row visible (auto-follow for capped panels)
