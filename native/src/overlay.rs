@@ -38,10 +38,19 @@ pub fn clamp_coords(work: (f64, f64, f64, f64), pw: f64, ph: f64, x: f64, y: f64
 /// Corner preset («Положение» grid): snap coordinates for that corner using
 /// the live panel size — the settings window cannot know it.
 pub fn corner_coords(work: (f64, f64, f64, f64), corner: &str, pw: f64, ph: f64) -> (f64, f64) {
-    let (_wx, _wy, ww, wh) = work;
-    let x = if corner == "tl" || corner == "bl" { 0.0 } else { (ww - pw).max(0.0) };
-    let y = if corner == "tl" || corner == "tr" { 0.0 } else { (wh - ph).max(0.0) };
-    (x, y)
+    // 9 anchors: "tl".."br" (row-major: t/m/b rows, l/c/r columns)
+    let (ww, wh) = (work.2.max(pw), work.3.max(ph));
+    let x = match corner.as_bytes().get(1).copied().unwrap_or(b'l') {
+        b'l' => 0.0,
+        b'r' => ww - pw,
+        _ => (ww - pw) * 0.5,
+    };
+    let y = match corner.as_bytes().first().copied().unwrap_or(b't') {
+        b't' => 0.0,
+        b'b' => wh - ph,
+        _ => (wh - ph) * 0.5,
+    };
+    (x.max(0.0), y.max(0.0))
 }
 
 /* ---------------- feed / whisper helpers (pure, tested) ---------------- */
