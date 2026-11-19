@@ -102,7 +102,55 @@ fn main() {
         .strip_prefix("\\\\?\\")
         .unwrap_or(&ico_disp)
         .replace('\\', "\\\\");
-    std::fs::write(&rc_path, format!("1 ICON \"{ico_disp}\"\n")).expect("write app.rc");
+    // VERSIONINFO — Task Manager shows FileDescription as the app name
+    // («TS3-TS6 Notifier Overlay», not the exe slug).
+    let ver = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
+    let mut nums: Vec<u32> = ver
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .map(|pt| pt.parse::<u32>().unwrap_or(0))
+        .collect();
+    while nums.len() < 4 {
+        nums.push(0);
+    }
+    let csv = nums
+        .iter()
+        .take(4)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let rc_text = format!(
+        "1 ICON \"{ico_disp}\"\n\
+1 VERSIONINFO\n\
+FILEVERSION {csv}\n\
+PRODUCTVERSION {csv}\n\
+FILEFLAGSMASK 0x3fL\n\
+FILEFLAGS 0x0L\n\
+FILEOS 0x40004L\n\
+FILETYPE 0x1L\n\
+FILESUBTYPE 0x0L\n\
+BEGIN\n\
+    BLOCK \"StringFileInfo\"\n\
+    BEGIN\n\
+        BLOCK \"040904b0\"\n\
+        BEGIN\n\
+            VALUE \"CompanyName\", \"TS3-TS6 Notifier\"\n\
+            VALUE \"FileDescription\", \"TS3-TS6 Notifier Overlay\"\n\
+            VALUE \"FileVersion\", \"{ver}\"\n\
+            VALUE \"InternalName\", \"TS3-TS6 Notifier Overlay\"\n\
+            VALUE \"OriginalFilename\", \"TS3-TS6-Notifier-Overlay.exe\"\n\
+            VALUE \"ProductName\", \"TS3-TS6 Notifier\"\n\
+            VALUE \"ProductVersion\", \"{ver}\"\n\
+        END\n\
+    END\n\
+    BLOCK \"VarFileInfo\"\n\
+    BEGIN\n\
+        VALUE \"Translation\", 0x409, 1200\n\
+    END\n\
+END\n"
+    );
+    std::fs::write(&rc_path, rc_text).expect("write app.rc");
 
     let name = rc.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
     let ok = if name.contains("windres") {
@@ -134,6 +182,9 @@ fn main() {
         ico_abs.display()
     );
     // `rustc-link-arg-bin` is supported on every cargo we care about; the
-    // package's only bin target is `tsn-native`
-    println!("cargo:rustc-link-arg-bin=tsn-native={}", res_path.display());
+    // package's only bin target is `TS3-TS6-Notifier-Overlay`
+    println!(
+        "cargo:rustc-link-arg-bin=TS3-TS6-Notifier-Overlay={}",
+        res_path.display()
+    );
 }

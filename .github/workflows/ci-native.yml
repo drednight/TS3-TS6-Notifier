@@ -83,7 +83,7 @@ jobs:
           {
             add dist-win/tsn-native-win64.zip tsn-native-win64.zip
             add dist-win/TS3-TS6-Notifier-Setup.exe TS3-TS6-Notifier-Setup.exe
-            add native/target/release/tsn-native.exe tsn-native.exe
+            add native/target/release/TS3-TS6-Notifier-Overlay.exe TS3-TS6-Notifier-Overlay.exe
           } > entries.txt
           [ -s entries.txt ] || { echo "nothing to publish"; exit 1; }
           tree=$(git mktree < entries.txt)

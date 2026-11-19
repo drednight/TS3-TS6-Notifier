@@ -1,6 +1,6 @@
 # Stage a distributable folder + zip for Windows.
 #   pwsh native/tools/package-win.ps1 [-OutDir dist-win]
-# Expects native/target/release/tsn-native.exe (cargo build --release).
+# Expects native/target/release/TS3-TS6-Notifier-Overlay.exe (cargo build --release).
 # The plugin DLL is included when dist/ts3plugin_tsn_win64.dll exists (prebuilt).
 
 param([string]$OutDir = "dist-win")
@@ -10,9 +10,9 @@ $native = Split-Path -Parent $PSScriptRoot        # native/
 $repo   = Split-Path -Parent $native              # repo root
 $stage  = Join-Path $OutDir "tsn-native"
 
-$exe = Join-Path $native "target/release/tsn-native.exe"
+$exe = Join-Path $native "target/release/TS3-TS6-Notifier-Overlay.exe"
 if (-not (Test-Path $exe)) {
-    Write-Error "tsn-native.exe not found — run: cargo build --release --manifest-path native/Cargo.toml"
+    Write-Error "TS3-TS6-Notifier-Overlay.exe not found — run: cargo build --release --manifest-path native/Cargo.toml"
 }
 
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue

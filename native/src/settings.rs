@@ -89,11 +89,14 @@ pub enum Ctrl {
     CopyObs,
     /// Copy the diagnostics report to the clipboard.
     CopyDiag,
-    /// Cycle the class for a server-group row: (row index).
-    GroupMap(u8),
 }
 
-/// Server-group rows edited by «Группы сервера» — id → class key ("" = none).
+/// Static select keys for the «Группы сервера» rows (explicit class pickers).
+pub const GROUP_KEYS: [&str; 17] = [
+    "grp0", "grp1", "grp2", "grp3", "grp4", "grp5", "grp6", "grp7", "grp8", "grp9", "grp10",
+    "grp11", "grp12", "grp13", "grp14", "grp15", "grp16",
+];
+
 pub const GROUP_ROWS: [&str; 17] = [
     "442", "444", "445", "446", "447", "448", "449", "450", "451", "452", "453", "454", "455", "456",
     "502", "503", "506",
@@ -351,18 +354,20 @@ impl SettingsModel {
             Ctrl::ToggleGroups => self.groups_open = !self.groups_open,
             Ctrl::CopyObs => self.pending = Some(Pending::CopyObs),
             Ctrl::CopyDiag => self.pending = Some(Pending::CopyDiag),
-            Ctrl::GroupMap(i) => {
-                if let Some(row) = self.groups.get_mut(i as usize) {
-                    let cur = CLASS_CYCLE.iter().position(|c| *c == row.1.as_str()).unwrap_or(0);
-                    let next = CLASS_CYCLE[(cur + 1) % CLASS_CYCLE.len()];
-                    row.1 = next.to_string();
-                    self.touch();
-                }
-            }
             Ctrl::Select(key) => {
                 self.open_select = if self.open_select == Some(key) { None } else { Some(key) };
             }
             Ctrl::Option(key, i) => {
+                if let Some(rest) = key.strip_prefix("grp") {
+                    if let Ok(r) = rest.parse::<usize>() {
+                        if let Some(row) = self.groups.get_mut(r) {
+                            row.1 = CLASS_CYCLE.get(i as usize).copied().unwrap_or("").to_string();
+                        }
+                    }
+                    self.open_select = None;
+                    self.touch();
+                    return;
+                }
                 let v = match key {
                     "source" => ["mock", "ts3", "ts6"].get(i as usize).copied().unwrap_or("mock"),
                     "language" => ["auto", "ru", "en"].get(i as usize).copied().unwrap_or("auto"),
@@ -555,7 +560,24 @@ fn cycle_advance(app: &mut Appearance, key: &str) {
     }
 }
 
+/// Margin sliders travel the whole screen («координаты по всему экрану»):
+/// the run loop feeds the real work-area size here; tests fall back to 4K.
+/// Placement clamps (clamp_margins) keep the overlay inside the screen.
+static SCREEN_DIMS: std::sync::Mutex<(f64, f64)> = std::sync::Mutex::new((3840.0, 2160.0));
+
+pub fn set_screen_dims(w: f64, h: f64) {
+    if w >= 320.0 && h >= 240.0 {
+        *SCREEN_DIMS.lock().unwrap() = (w, h);
+    }
+}
+
 fn slider_range(key: &str) -> (f64, f64) {
+    if key == "margin_x" {
+        return (0.0, SCREEN_DIMS.lock().unwrap().0);
+    }
+    if key == "margin_y" {
+        return (0.0, SCREEN_DIMS.lock().unwrap().1);
+    }
     match key {
         "scale" => (0.75, 1.5),
         "font_size" => (11.0, 18.0),
@@ -570,7 +592,7 @@ fn slider_range(key: &str) -> (f64, f64) {
         "chat_delay" => (2.0, 60.0),
         "events_delay" => (5.0, 60.0),
         "events_count" => (1.0, 10.0),
-        _ => (0.0, 200.0), // margin_x / margin_y
+        _ => (0.0, 200.0),
     }
 }
 
@@ -868,6 +890,15 @@ fn draw_slider(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, val
 }
 
 fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
+    if let Some(rest) = key.strip_prefix("grp") {
+        if rest.chars().all(|c| c.is_ascii_digit()) {
+            let mut v = vec![(tr(lang, "— не сопоставлено", "— unmapped"), 0u8)];
+            for (i, c) in CLASS_CYCLE.iter().enumerate().skip(1) {
+                v.push((class_ru(c).to_string(), i as u8));
+            }
+            return v;
+        }
+    }
     if key == "source" {
         return vec![
             (tr(lang, "Демо-данные", "Mock data"), 0),
@@ -900,6 +931,17 @@ fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
 }
 
 fn select_index(key: &str, m: &SettingsModel) -> u8 {
+    if let Some(rest) = key.strip_prefix("grp") {
+        if let Ok(i) = rest.parse::<usize>() {
+            if let Some((_, cls)) = m.groups.get(i) {
+                return CLASS_CYCLE
+                    .iter()
+                    .position(|c| *c == cls.as_str())
+                    .unwrap_or(0) as u8;
+            }
+        }
+        return 0;
+    }
     if key == "source" {
         return match m.source.as_str() {
             "ts3" => 1,
@@ -1048,7 +1090,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
     buf.fill_rect(0.0, 44.0, WIN_W, 1.0, pal.panel_border);
 
     // ---- left pane (scrollable) ----
-    let pane_x = 158.0;
+    let pane_x = 182.0;
     let pane_w = 452.0;
     let pane_y = 58.0;
     let pane_h = PANE_H;
@@ -1059,7 +1101,7 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         buf.fill_rect(pane_x + 4.0, y + 24.0, pane_w - 8.0, 1.0, c.pal.panel_border);
     };
 
-    // ---- left nav: pages ----
+    // ---- left nav: pages (big highlightable buttons) ----
     {
         let pages = [
             (0u8, tr(&m.lang, "Вид", "Appearance")),
@@ -1068,31 +1110,49 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             (3, tr(&m.lang, "Обновления", "Updates")),
             (4, tr(&m.lang, "Ещё", "More")),
         ];
+        let (bx, bw, bh) = (14.0f32, 152.0f32, 46.0f32);
         let mut ny = pane_y;
         for (n, label) in pages {
             let active = m.page == n;
             if active {
-                buf.round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.accent.scale_a(46.0));
-                buf.stroke_round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.accent, 1.4);
-                buf.stroke_round_rect(15.0, ny - 1.0, 128.0, 36.0, 10.0, pal.accent.scale_a(56.0), 1.0);
+                buf.round_rect(bx, ny, bw, bh, 13.0, pal.accent.scale_a(235.0));
+                buf.stroke_round_rect(
+                    bx - 1.0,
+                    ny - 1.0,
+                    bw + 2.0,
+                    bh + 2.0,
+                    14.0,
+                    pal.accent.scale_a(80.0),
+                    1.3,
+                );
+                let tw = c.fonts.measure(&label, 13.5, true);
+                buf.text(
+                    &c.fonts,
+                    bx + (bw - tw) * 0.5,
+                    ny + 28.5,
+                    &label,
+                    13.5,
+                    true,
+                    Rgba::rgb(255, 255, 255),
+                );
             } else {
-                buf.round_rect(16.0, ny, 126.0, 34.0, 9.0, crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15));
-                buf.stroke_round_rect(16.0, ny, 126.0, 34.0, 9.0, pal.muted.scale_a(150.0), 1.1);
+                buf.round_rect(
+                    bx,
+                    ny,
+                    bw,
+                    bh,
+                    13.0,
+                    crate::theme::mix(pal.panel_bg, Rgba::rgb(0, 0, 0), 0.15),
+                );
+                buf.stroke_round_rect(bx, ny, bw, bh, 13.0, pal.muted.scale_a(150.0), 1.1);
+                let tw = c.fonts.measure(&label, 13.0, false);
+                buf.text(&c.fonts, bx + (bw - tw) * 0.5, ny + 28.0, &label, 13.0, false, pal.muted);
             }
-            buf.text(
-                &c.fonts,
-                32.0,
-                ny + 22.0,
-                &label,
-                12.5,
-                active,
-                if active { pal.text } else { pal.muted },
-            );
             regions.push(Region {
-                rect: crate::layout::Rect { x: 16.0, y: ny, w: 126.0, h: 34.0 },
+                rect: crate::layout::Rect { x: bx, y: ny, w: bw, h: bh },
                 ctrl: Ctrl::Nav(n),
             });
-            ny += 42.0;
+            ny += bh + 10.0;
         }
     }
 
@@ -1539,14 +1599,25 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
         y += 24.0;
     }
     if m.groups_open {
-    for (i, (gid, cls)) in m.groups.iter().enumerate() {
-        let label = format!("#{} — {}", gid, class_ru(cls));
-        draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 30.0, &label);
-        regions.push(Region {
-            rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 30.0 },
-            ctrl: Ctrl::GroupMap(i as u8),
-        });
-        y += 36.0;
+    for (i, (gid, _cls)) in m.groups.iter().enumerate() {
+        // «должно быть явно» — каждая группа это выпадающий выбор класса:
+        // слева номер группы, справа явный список классов
+        let key = GROUP_KEYS[i];
+        let cur = select_index(key, m);
+        let opts = select_options(key, &m.lang);
+        let value = opts
+            .iter()
+            .find(|(_, idx)| *idx == cur)
+            .map(|(l, _)| l.clone())
+            .unwrap_or_default();
+        let open = m.open_select == Some(key);
+        let label = format!("#{}", gid);
+        let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
+        if open {
+            open_sel_at = Some((boxrect.x, boxrect.y));
+        }
+        regions.push(Region { rect: boxrect, ctrl: Ctrl::Select(key) });
+        y += 38.0;
     }
     }
 
@@ -2067,6 +2138,9 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
     let kw = (WIN_W as f32) * k;
     let kh = (WIN_H as f32) * k;
     let work = host.work_area();
+    // «Отступ X/Y задают координаты по всему экрану» — sliders span the
+    // whole work area (this thread reports PHYSICAL px; margins are logical)
+    set_screen_dims(work.2 / k as f64, work.3 / k as f64);
     let cx = work.0 + (work.2 - kw as f64) * 0.5;
     let cy = work.1 + (work.3 - kh as f64) * 0.5;
     let mut pos: Option<(f64, f64)> = None;
@@ -2239,6 +2313,39 @@ mod tests {
     }
 
     #[test]
+    fn group_rows_use_explicit_class_selects() {
+        let mut m = model();
+        m.page = 2;
+        m.groups_open = true;
+        // pick «Лучник» for the first group via the select popup
+        m.click(Ctrl::Select(GROUP_KEYS[0]), 0.0, 0.0);
+        assert_eq!(m.open_select, Some(GROUP_KEYS[0]));
+        let archer_idx = CLASS_CYCLE.iter().position(|c| *c == "archer").unwrap() as u8;
+        m.click(Ctrl::Option(GROUP_KEYS[0], archer_idx), 0.0, 0.0);
+        assert_eq!(m.groups[0].1, "archer");
+        assert_eq!(m.open_select, None);
+        // unmapped pick clears it
+        m.click(Ctrl::Select(GROUP_KEYS[0]), 0.0, 0.0);
+        m.click(Ctrl::Option(GROUP_KEYS[0], 0), 0.0, 0.0);
+        assert_eq!(m.groups[0].1, "");
+        // the picker renders as a select row
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let (_, regions, _) = render(&m, &fonts, &icons, 1.0);
+        assert!(regions.iter().any(|r| r.ctrl == Ctrl::Select(GROUP_KEYS[0])));
+    }
+
+    #[test]
+    fn margin_sliders_span_the_full_screen() {
+        set_screen_dims(1920.0, 1080.0);
+        let (x0, x1) = slider_range("margin_x");
+        let (y0, y1) = slider_range("margin_y");
+        assert_eq!((x0, x1), (0.0, 1920.0), "«координаты по всему экрану»");
+        assert_eq!((y0, y1), (0.0, 1080.0));
+        set_screen_dims(3840.0, 2160.0); // restore shared default for other tests
+    }
+
+    #[test]
     fn close_not_eaten_by_header_drag() {
         // the × region sits inside the header drag strip; the drag handler
         // must yield to Close (see run_loop Ev::DragStart)
@@ -2295,15 +2402,10 @@ mod tests {
     }
 
     #[test]
-    fn group_rows_cycle_classes() {
-        let mut m = model();
+    fn group_rows_cover_all_ids() {
+        let m = model();
         assert_eq!(m.groups.len(), 17);
-        m.click(Ctrl::GroupMap(0), 0.0, 0.0);
-        assert_eq!(m.groups[0].1, "kanglong");
-        for _ in 0..CLASS_CYCLE.len() - 1 {
-            m.click(Ctrl::GroupMap(0), 0.0, 0.0);
-        }
-        assert_eq!(m.groups[0].1, ""); // wrapped around to «нет»
+        assert_eq!(GROUP_KEYS.len(), 17);
     }
 
     #[test]
