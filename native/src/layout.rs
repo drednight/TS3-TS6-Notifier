@@ -542,7 +542,7 @@ fn draw_user_row(
         }
     }
     if u.talking || talk_alpha < 0.999 {
-        let glow_a = ((0.25 + 0.5 * pal.glow) as f32) * talk_alpha;
+        let glow_a = ((0.12 + 1.05 * pal.glow) as f32) * talk_alpha;
         buf.stroke_circle(cx, cy, av * 0.5 + c.s(1.0), tpal.accent, c.s(2.0));
         for i in 0..3 {
             let g = (i as f32 + 1.0) * c.s(2.5);
@@ -550,7 +550,7 @@ fn draw_user_row(
                 cx,
                 cy,
                 av * 0.5 + c.s(1.0) + g,
-                tpal.accent.scale_a((255.0 * glow_a * 0.16) as f64),
+                tpal.accent.scale_a((255.0 * glow_a * 0.22) as f64),
                 c.s(2.2),
             );
         }

@@ -836,20 +836,50 @@ fn draw_icon(b: &mut SBuf, cx: f32, cy: f32, s: f32, kind: u8, col: Rgba, bg: Rg
 }
 
 /// Preset tile (icon above label), Glass mockup.
-fn draw_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str, icon: u8, active: bool) {
-    // mockup «vid-3»: text chip; active = neon outline + glow
-    let _ = icon;
+fn draw_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str, cols: [Rgba; 3], active: bool) {
+    // «разными и красивыми»: chip shows the theme's own colours as three bars
     let bg = crate::theme::mix(c.pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05);
-    buf.round_rect(x, y, w, h, h * 0.5, bg);
-    if active {
-        buf.stroke_round_rect(x, y, w, h, h * 0.5, c.pal.accent, 2.0);
-        buf.stroke_round_rect(x - 2.5, y - 2.5, w + 5.0, h + 5.0, h * 0.5 + 2.5, c.pal.accent.scale_a(65.0), 1.3);
-        buf.stroke_round_rect(x - 5.0, y - 5.0, w + 10.0, h + 10.0, h * 0.5 + 5.0, c.pal.accent.scale_a(30.0), 1.1);
-    } else {
-        buf.stroke_round_rect(x, y, w, h, h * 0.5, c.pal.muted.scale_a(110.0), 1.1);
+    buf.round_rect(x, y, w, h, 12.0, bg);
+    let gap = 4.0;
+    let bw = (w - 16.0 - gap * 2.0) / 3.0;
+    for (i, col) in cols.iter().enumerate() {
+        let bx = x + 8.0 + i as f32 * (bw + gap);
+        buf.round_rect(bx, y + 9.0, bw, 15.0, 5.0, *col);
     }
-    let tw = c.fonts.measure(label, 12.5, active);
-    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h * 0.5 + 4.5, label, 12.5, active, if active { c.pal.text } else { c.pal.muted });
+    let tw = c.fonts.measure(label, 12.0, active);
+    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h - 11.0, label, 12.0, active, if active { c.pal.text } else { c.pal.muted });
+    if active {
+        let acc = cols[0];
+        buf.stroke_round_rect(x, y, w, h, 12.0, acc, 2.0);
+        buf.stroke_round_rect(x - 2.5, y - 2.5, w + 5.0, h + 5.0, 14.5, acc.scale_a(70.0), 1.3);
+        buf.stroke_round_rect(x - 5.0, y - 5.0, w + 10.0, h + 10.0, 17.0, acc.scale_a(32.0), 1.1);
+    } else {
+        buf.stroke_round_rect(x, y, w, h, 12.0, c.pal.muted.scale_a(110.0), 1.1);
+    }
+}
+
+/// Shrink-to-fit text so labels never look «обрезанными».
+fn draw_label(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, avail: f32, label: &str, fs: f32, col: Rgba, bold: bool) {
+    let mut s = fs;
+    let tw = c.fonts.measure(label, s, bold);
+    if tw > avail && tw > 0.0 {
+        s *= (avail / tw).max(0.78);
+    }
+    buf.text(&c.fonts, x, y, label, s, bold, col);
+}
+
+/// Compact switch (mockup): pill track + round knob.
+fn draw_switch(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, on: bool) {
+    let (w, h) = (44.0, 22.0);
+    if on {
+        buf.round_rect(x, y, w, h, 11.0, c.pal.accent);
+        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, 12.0, c.pal.accent.scale_a(90.0), 1.1);
+        buf.circle(x + w - 11.0, y + h * 0.5, 8.5, Rgba::rgb(255, 255, 255));
+    } else {
+        buf.round_rect(x, y, w, h, 11.0, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.28));
+        buf.stroke_round_rect(x, y, w, h, 11.0, c.pal.muted.scale_a(150.0), 1.1);
+        buf.circle(x + 11.0, y + h * 0.5, 8.5, c.pal.muted.scale_a(210.0));
+    }
 }
 
 /// Accent pill button («Переместить оверлей»).
@@ -899,8 +929,13 @@ fn draw_button(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &
     // soft glow halo (vid-3)
     buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, 13.0, c.pal.accent.scale_a(85.0), 1.2);
     buf.stroke_round_rect(x - 3.0, y - 3.0, w + 6.0, h + 6.0, 15.0, c.pal.accent.scale_a(40.0), 1.1);
-    let tw = c.fonts.measure(label, 13.5, true);
-    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h * 0.5 + 5.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
+    let mut fs = 13.5;
+    let mut tw = c.fonts.measure(label, fs, true);
+    if tw > w - 22.0 && tw > 0.0 {
+        fs *= ((w - 22.0) / tw).max(0.78);
+        tw = c.fonts.measure(label, fs, true);
+    }
+    buf.text(&c.fonts, x + (w - tw) * 0.5, y + h * 0.5 + fs * 0.36, label, fs, true, Rgba::rgb(255, 255, 255));
 }
 
 /// Small pin glyph on the preview card.
@@ -910,22 +945,11 @@ fn draw_pin(c: &Ctx, buf: &mut SBuf, x: f32, y: f32) {
 }
 
 fn draw_toggle(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, label: &str, on: bool) {
-    // «убери сами ползунки» — a plain highlightable BUTTON, a bit bigger than
-    // the action buttons: lit when ON, dim but clearly readable when OFF
+    // mockup style: label on the left, compact switch on the right
     let h = 36.0;
-    let r = 12.0;
-    if on {
-        buf.round_rect(x, y, w, h, r, c.pal.accent.scale_a(235.0));
-        buf.stroke_round_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, r + 1.0, c.pal.accent.scale_a(90.0), 1.2);
-        buf.stroke_round_rect(x - 3.5, y - 3.5, w + 7.0, h + 7.0, r + 3.5, c.pal.accent.scale_a(42.0), 1.1);
-        let tw = c.fonts.measure(label, 13.5, true);
-        buf.text(&c.fonts, x + (w - tw) * 0.5, y + 23.0, label, 13.5, true, Rgba::rgb(255, 255, 255));
-    } else {
-        buf.round_rect(x, y, w, h, r, crate::theme::mix(c.pal.panel_bg, Rgba::rgb(0, 0, 0), 0.18));
-        buf.stroke_round_rect(x, y, w, h, r, c.pal.muted.scale_a(175.0), 1.2);
-        let tw = c.fonts.measure(label, 13.5, false);
-        buf.text(&c.fonts, x + (w - tw) * 0.5, y + 23.0, label, 13.5, false, c.pal.muted);
-    }
+    let col = if on { c.pal.text } else { c.pal.text.scale_a(200.0) };
+    draw_label(c, buf, x + 4.0, y + h * 0.5 + 4.5, w - 64.0, label, 13.0, col, false);
+    draw_switch(c, buf, x + w - 46.0, y + (h - 22.0) * 0.5, on);
 }
 
 /// Slider row: label left, value right (accent), track + in-bounds knob below.
@@ -1106,6 +1130,57 @@ fn sample_input<'a>(
     ghost.whisper_channel = Some("Другая".into());
     ghost.away = true;
     ghost.away_message = "Шёпот из канала «Другая»".into();
+    let mut query = UserState::new("102", "ServerQuery");
+    query.is_query = true;
+    query.input_muted = true;
+
+    // предпросмотр живой: «Элементы» видны сразу — что выключили, то исчезло
+    let mut pairs: Vec<(UserState, Option<String>)> = if a.talking_first {
+        vec![
+            (alice, Some("archer".into())),
+            (me, Some("mage".into())),
+            (bob, Some("warrior".into())),
+        ]
+    } else {
+        vec![
+            (me, Some("mage".into())),
+            (bob, Some("warrior".into())),
+            (alice, Some("archer".into())),
+        ]
+    };
+    if a.only_talking {
+        pairs.retain(|(u, _)| u.talking);
+    }
+    if !a.show_self {
+        pairs.retain(|(u, _)| !u.is_self);
+    }
+    if !a.hide_query {
+        pairs.push((query, None));
+    }
+    let mut users = Vec::new();
+    let mut class_keys = Vec::new();
+    for (u, k) in pairs {
+        users.push(u);
+        class_keys.push(k);
+    }
+    let (whisperers, whisper_keys) = if a.show_whispers {
+        (vec![ghost], vec![("103".to_string(), Some("ghost".to_string()))])
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut feed = vec![
+        FeedItem { nickname: "Маша".into(), text: "привет!".into(), kind: 1, alpha: 1.0 },
+        FeedItem { nickname: "Bob".into(), text: "кто в канале?".into(), kind: 2, alpha: 1.0 },
+        FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0, alpha: 1.0 },
+    ];
+    if !a.show_chat {
+        feed.retain(|f| f.kind == 0);
+    } else if a.chat_private {
+        feed.retain(|f| f.kind != 2);
+    }
+    if !a.show_events {
+        feed.retain(|f| f.kind != 0);
+    }
     FrameInput {
         appearance: a,
         pal,
@@ -1115,12 +1190,12 @@ fn sample_input<'a>(
         server_name: "Eternals",
         channel_name: "Генеральный штаб",
         user_count: 4,
-        users: vec![alice, me, bob],
+        users,
         talk_alphas: vec![],
-        class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into())],
-        whisper_keys: vec![("103".into(), Some("ghost".into()))],
-        whisperers: vec![ghost],
-        feed: vec![FeedItem { nickname: "Мыsha".into(), text: "привет!".into(), kind: 1, alpha: 1.0 }],
+        class_keys,
+        whisper_keys,
+        whisperers,
+        feed,
         lang: "ru",
         move_mode: false,
         now_ms: 1500,
@@ -1249,13 +1324,17 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                 let bx = base_x + i as f32 * (cw + gap);
                 let active = m.app.style == st.0;
                 let label = tr(&m.lang, st.1, st.2);
-                draw_tile(&c, &mut buf, bx, y, cw, 38.0, &label, 0, active);
+                // каждый чип показывает палитру своего стиля («разными и красивыми»)
+                let acc = parse_color(StyleKind::ACCENTS[i]);
+                let second = StyleKind::parse(st.0).second(acc);
+                let light = crate::theme::mix(acc, Rgba::rgb(255, 255, 255), 0.45);
+                draw_tile(&c, &mut buf, bx, y, cw, 52.0, &label, [acc, second, light], active);
                 regions.push(Region {
-                    rect: crate::layout::Rect { x: bx, y, w: cw, h: 38.0 },
+                    rect: crate::layout::Rect { x: bx, y, w: cw, h: 52.0 },
                     ctrl: Ctrl::Style(i as u8),
                 });
             }
-            y += 52.0;
+            y += 66.0;
         }
         // «Пресеты»: chips 2 rows of 4 (mockup format)
         buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Пресеты", "Presets"), 15.0, true, pal.text);
@@ -1265,16 +1344,17 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             let cw = (base_w - gap * 3.0) / 4.0;
             for (i, p) in PRESETS.iter().enumerate() {
                 let bx = base_x + (i % 4) as f32 * (cw + gap);
-                let by = y + (i / 4) as f32 * 48.0;
+                let by = y + (i / 4) as f32 * 62.0;
                 let active = m.app.theme == p.0;
                 let label = tr(&m.lang, p.1, p.2);
-                draw_tile(&c, &mut buf, bx, by, cw, 38.0, &label, 0, active);
+                // превью палитры пресета: акцент / ник / сообщения
+                draw_tile(&c, &mut buf, bx, by, cw, 52.0, &label, [parse_color(p.3), parse_color(p.4), parse_color(p.5)], active);
                 regions.push(Region {
-                    rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 38.0 },
+                    rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 52.0 },
                     ctrl: Ctrl::Preset(i as u8),
                 });
             }
-            y += 2.0 * 48.0 + 4.0;
+            y += 2.0 * 62.0 + 4.0;
         }
         // «Цвета»: swatch rows (mockup rounded squares + glow)
         buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Цвета", "Colors"), 15.0, true, pal.text);
@@ -1304,6 +1384,25 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             let cap = format!("{}: {} ({})", tr(&m.lang, "Цвет", "Color"), cname, m.app.accent);
             buf.text(&c.fonts, base_x + 2.0, y + 12.0, &cap, 11.5, false, pal.muted);
             y += 28.0;
+        }
+    }
+    if m.page == 2 {
+        // «Связь»: «Источник данных» — строка во всю ширину, чтобы колонки
+        // TeamSpeak 3 и TeamSpeak 6 стояли на одной высоте
+        buf.text(&c.fonts, base_x + 2.0, y + 16.0, &tr(&m.lang, "Связь", "Connection"), 15.0, true, pal.text);
+        y += 32.0;
+        {
+            let label = tr(&m.lang, "Источник данных", "Data source");
+            let cur = select_index("source", m);
+            let opts = select_options("source", &m.lang);
+            let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
+            let open = m.open_select == Some("source");
+            let boxrect = draw_select(&c, &mut buf, base_x + 2.0, y, base_w - 4.0, &label, &value, open);
+            if open {
+                open_sel_at = Some((boxrect.x, boxrect.y));
+            }
+            regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("source") });
+            y += 40.0;
         }
     }
     // two-column body (mockup format); wide pages span the full row
@@ -1440,10 +1539,10 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             // высоты карточек по содержимому; строке задаёт высоту большая
             let h_p: f32 = 38.0 + 5.0 * 40.0 + 14.0;
             let h_s: f32 = 38.0 + 5.0 * 40.0 + 14.0;
-            let h_v: f32 = 38.0 + 3.0 * 40.0 + 36.0 + 52.0 + 52.0 + 22.0 + 14.0;
+            let h_v: f32 = 38.0 + 3.0 * 40.0 + 36.0 + 52.0 + 52.0 + 40.0 + 14.0;
             let h_c: f32 = 38.0 + 3.0 * 40.0 + 52.0 + 14.0;
             let h_e: f32 = 38.0 + 40.0 + 52.0 + 52.0 + 14.0;
-            let h_k: f32 = 38.0 + 5.0 * 82.0 + 14.0;
+            let h_k: f32 = 38.0 + 5.0 * 42.0 + 14.0;
             let row0 = h_p.max(h_s);
             let row1 = h_v.max(h_c);
             let row2 = h_e.max(h_k);
@@ -1559,8 +1658,11 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                         "Подсветка говорящего плавно гаснет через это время после речи",
                         "The talking highlight fades out this many seconds after speech",
                     );
-                    buf.text(&c.fonts, pane_x + 8.0, y + 2.0, &hint, c.fs * 0.85, false, c.pal.text.scale_a(150.0));
-                    y += 22.0;
+                    for ln in wrap_text(&c.fonts, &hint, c.fs * 0.85, pane_w - 16.0) {
+                        buf.text(&c.fonts, pane_x + 8.0, y + 14.0, &ln, c.fs * 0.85, false, c.pal.text.scale_a(150.0));
+                        y += 17.0;
+                    }
+                    y += 6.0;
                 }
             }
 
@@ -1642,20 +1744,20 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     ("show_ev_poke", "ev_scope_group", "Поке", "Pokes"),
                     ("show_ev_chat", "ev_scope_chat", "Чат", "Chat"),
                 ] {
-                    // «столбиками»: toggle row, scope select below it
+                    // «красиво»: switch + название в одну линию, область справа
                     let label = tr(&m.lang, ru, en);
                     let on = get_toggle(&m.app, tkey);
-                    draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+                    draw_switch(&c, &mut buf, pane_x + 4.0, y + 10.0, on);
+                    draw_label(&c, &mut buf, pane_x + 56.0, y + 25.0, 74.0, &label, 13.0, pal.text, true);
                     regions.push(Region {
-                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
+                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: 133.0, h: 42.0 },
                         ctrl: Ctrl::Toggle(tkey),
                     });
-                    y += 40.0;
                     let cur = select_index(skey, m);
                     let opts = select_options(skey, &m.lang);
                     let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
                     let open = m.open_select == Some(skey);
-                    let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, "", &value, open);
+                    let boxrect = draw_select(&c, &mut buf, pane_x + pane_w - 134.0, y + 8.0, 130.0, "", &value, open);
                     if open {
                         open_sel_at = Some((boxrect.x, boxrect.y));
                     }
@@ -1666,21 +1768,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             y = y2 + row2 + 6.0;
         } else if m.page == 2 {
             if col == 0 {
-                section(&mut buf, &c, y, &tr(&m.lang, "Связь", "Connection"));
-                y += 34.0;
-                {
-                    let label = tr(&m.lang, "Источник данных", "Data source");
-                    let cur = select_index("source", m);
-                    let opts = select_options("source", &m.lang);
-                    let value = opts.iter().find(|(_, i)| *i == cur).map(|(l, _)| l.clone()).unwrap_or_default();
-                    let open = m.open_select == Some("source");
-                    let boxrect = draw_select(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, &value, open);
-                    if open {
-                        open_sel_at = Some((boxrect.x, boxrect.y));
-                    }
-                    regions.push(Region { rect: boxrect, ctrl: Ctrl::Select("source") });
-                    y += 36.0;
-                }
                 {
                     buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 3", 12.5, true, pal.text);
                     y += 24.0;
@@ -2758,6 +2845,18 @@ mod qa {
                 let (bs, _, _) = render(&m, &fonts, &icons, 1.0);
                 write_png(&format!("{dir}/settings-p1-bottom.png"), &bs).unwrap();
             }
+        }
+        {
+            // живой предпросмотр: выключенные элементы должны исчезать
+            m.page = 1;
+            m.scroll = 0.0;
+            m.app.show_avatars = false;
+            m.app.show_chat = false;
+            m.app.show_whispers = false;
+            m.app.show_events = false;
+            m.app.hide_query = false;
+            let (bq, _, _) = render(&m, &fonts, &icons, 1.0);
+            write_png(&format!("{dir}/settings-p1-alt.png"), &bq).unwrap();
         }
         m.page = 0;
         // middle — corner grid + roster sections
