@@ -1344,24 +1344,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     regions.push(Region { rect: track, ctrl: Ctrl::Slider(key) });
                     y += 52.0;
                 }
-                section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
-                y += 34.0;
-                for (key, ru, en) in [
-                    ("show_header", "Шапка", "Header"),
-                    ("show_server_name", "Имя сервера", "Server name"),
-                    ("show_user_count", "Счётчик", "User count"),
-                    ("compact", "Компактный", "Compact"),
-                    ("animations", "Анимации", "Animations"),
-                ] {
-                    let label = tr(&m.lang, ru, en);
-                    let on = get_toggle(&m.app, key);
-                    draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
-                    regions.push(Region {
-                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
-                        ctrl: Ctrl::Toggle(key),
-                    });
-                    y += 40.0;
-                }
             } else {
                 section(&mut buf, &c, y, &tr(&m.lang, "Расположение", "Placement"));
                 y += 34.0;
@@ -1437,6 +1419,24 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             }
         } else if m.page == 1 {
             if col == 0 {
+                section(&mut buf, &c, y, &tr(&m.lang, "Панель", "Panel"));
+                y += 34.0;
+                for (key, ru, en) in [
+                    ("show_header", "Шапка", "Header"),
+                    ("show_server_name", "Имя сервера", "Server name"),
+                    ("show_user_count", "Счётчик", "User count"),
+                    ("compact", "Компактный", "Compact"),
+                    ("animations", "Анимации", "Animations"),
+                ] {
+                    let label = tr(&m.lang, ru, en);
+                    let on = get_toggle(&m.app, key);
+                    draw_toggle(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, &label, on);
+                    regions.push(Region {
+                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 36.0 },
+                        ctrl: Ctrl::Toggle(key),
+                    });
+                    y += 40.0;
+                }
                 section(&mut buf, &c, y, &tr(&m.lang, "Состав канала", "Channel roster"));
                 y += 34.0;
                 for (key, ru, en) in [
