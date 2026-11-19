@@ -3,6 +3,7 @@
 
 use crate::render::Buf;
 use crate::theme::Rgba;
+use std::sync::OnceLock;
 
 struct Glyph {
     cp: u32,
@@ -19,13 +20,20 @@ struct Atlas {
     size: u32,
     w: u32,
     h: u32,
-    glyphs: Vec<Glyph>,
-    alpha: Vec<u8>,
+    glyphs: Vec<Glyph>,        // sorted by cp → binary search
+    alpha_raw: &'static [u8],  // RLE slice of the embedded blob (no copy)
+    alpha: OnceLock<Vec<u8>>,  // decoded on first use (lazy, RAM-friendly)
 }
 
 impl Atlas {
+    /// Decoded alpha pixels (RLE-decoded once, on first use of this size).
+    fn pixels(&self) -> &[u8] {
+        self.alpha
+            .get_or_init(|| rle_decode(self.alpha_raw, (self.w * self.h) as usize))
+    }
+
     fn glyph(&self, cp: u32) -> Option<&Glyph> {
-        self.glyphs.iter().find(|g| g.cp == cp)
+        self.glyphs.binary_search_by_key(&cp, |g| g.cp).ok().map(|i| &self.glyphs[i])
     }
 }
 
@@ -49,7 +57,7 @@ pub struct Fonts {
 
 impl Fonts {
     pub fn load() -> Fonts {
-        let raw: &[u8] = include_bytes!("../assets/font.bin");
+        let raw: &'static [u8] = include_bytes!("../assets/font.bin");
         assert_eq!(&raw[..8], b"TSNF1\0\0\0", "bad font.bin magic");
         let count = u32::from_le_bytes(raw[8..12].try_into().unwrap()) as usize;
         let mut regular = Vec::new();
@@ -88,9 +96,9 @@ impl Fonts {
                 dec += raw[end] as usize;
                 end += 2;
             }
-            let alpha = rle_decode(&raw[p..end], want);
+            let alpha_raw: &'static [u8] = &raw[p..end];
             p = end;
-            let atlas = Atlas { size, w, h, glyphs, alpha };
+            let atlas = Atlas { size, w, h, glyphs, alpha_raw, alpha: OnceLock::new() };
             if bold_flag {
                 bold.push(atlas);
             } else {
@@ -210,11 +218,12 @@ fn sample_atlas(atlas: &Atlas, g: &Glyph, sx: f32, sy: f32) -> f32 {
     if sx < -1.0 || sy < -1.0 || sx > g.w as f32 || sy > g.h as f32 {
         return 0.0;
     }
+    let px = atlas.pixels();
     let at = |ix: i32, iy: i32| -> f32 {
         if ix < 0 || iy < 0 || ix >= g.w as i32 || iy >= g.h as i32 {
             return 0.0;
         }
-        atlas.alpha[((g.y as i32 + iy) * atlas.w as i32 + (g.x as i32 + ix)) as usize] as f32 / 255.0
+        px[((g.y as i32 + iy) * atlas.w as i32 + (g.x as i32 + ix)) as usize] as f32 / 255.0
     };
     let fx = sx.floor();
     let fy = sy.floor();
@@ -227,4 +236,42 @@ fn sample_atlas(atlas: &Atlas, g: &Glyph, sx: f32, sy: f32) -> f32 {
         + at(x, y + 1) * (1.0 - tx) * ty
         + at(x + 1, y + 1) * tx * ty;
     a.clamp(0.0, 1.0)
+}
+
+impl Fonts {
+    /// True when the atlas really has the glyph (no '?' fallback) — tests/QA.
+    #[cfg(test)]
+    pub fn has_glyph(&self, ch: char) -> bool {
+        self.regular.iter().any(|a| a.glyph(ch as u32).is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn covers_scripts_and_symbols() {
+        let f = Fonts::load();
+        // греческий (пример «Σκuλλα»)
+        for ch in "ΣκuλλαΩΔπφθ".chars() {
+            assert!(f.has_glyph(ch), "greek {:?}", ch);
+        }
+        // латиница с диакритикой
+        for ch in "ŁukaszŠimonİlhaməÉmileNørbäkçñü".chars() {
+            assert!(f.has_glyph(ch), "latin-ext {:?}", ch);
+        }
+        // кириллица + расширения (украинская, казахская, татарская…)
+        for ch in "ЖаннаЎіїєґҒғҚқҢңҮүҰұӘәӨөӰӱ".chars() {
+            assert!(f.has_glyph(ch), "cyrillic-ext {:?}", ch);
+        }
+        // символы и валюты
+        for ch in "₽€£¥№™←→↑↓≈≠≤≥■□●○★☆♠♥".chars() {
+            assert!(f.has_glyph(ch), "symbol {:?}", ch);
+        }
+        // неизвестный глиф (например CJK) не падает — рисуется «?»
+        assert!(f.measure("李小龍", 13.0, false) > 0.0);
+        // ширина греческого ника считается по настоящим глифам
+        assert!(f.measure("Σκuλλα", 13.0, true) > 10.0);
+    }
 }

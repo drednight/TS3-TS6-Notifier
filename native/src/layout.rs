@@ -1825,6 +1825,48 @@ mod qa {
             }
         }
 
+        // мультиязычные ники (греческий, латиница с диакритикой, кириллица+, символы)
+        {
+            let mut a3 = Appearance::default();
+            a3.show_events = true;
+            let pal3 = Palette::from_appearance(&a3);
+            let mk = |id: &str, nick: &str, talk: bool, self_: bool| {
+                let mut u = UserState::new(id, nick);
+                u.talking = talk;
+                u.is_self = self_;
+                u
+            };
+            let inp = FrameInput {
+                appearance: &a3,
+                pal: &pal3,
+                fonts: &fonts,
+                icons: &icons,
+                status: "live",
+                server_name: "Eternals Ω",
+                channel_name: "Генеральный штаб",
+                user_count: 5,
+                users: vec![
+                    mk("100", "Σκuλλα", true, false),
+                    mk("101", "ŁukaszŠimon", false, false),
+                    mk("1", "Игрок", false, true),
+                    mk("102", "Әли Ғафур", false, false),
+                    mk("103", "Émile", false, false),
+                ],
+                talk_alphas: vec![],
+                class_keys: vec![None, None, None, None, None],
+                whisper_keys: vec![],
+                whisperers: vec![mk("104", "Nørbäk", true, false)],
+                feed: vec![FeedItem { nickname: "Жанна".into(), text: "Ново€ сообщение — GL HF!".into(), kind: 1, alpha: 1.0 }],
+                lang: "ru",
+                move_mode: false,
+                now_ms: 1500,
+                work_h: 1080.0,
+                roster_scroll: 0.0,
+            };
+            let frame = render_frame(&inp);
+            write_png(&format!("{dir}/frame-langs.png"), &frame.buf).unwrap();
+        }
+
         let mut a2 = Appearance::default();
         a2.theme = "frost".into();
         a2.compact = true;
