@@ -273,6 +273,102 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// Style-defining panel chrome («рамки»): each style draws its own frame.
+fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32) {
+    let b = c.border(c.pal.panel_border);
+    let acc = c.pal.accent;
+    match c.sk {
+        StyleKind::Glass => {
+            buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+        }
+        StyleKind::Neon => {
+            // glowing double frame
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(150.0), 2.0);
+            buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, acc.scale_a(42.0), 1.0);
+        }
+        StyleKind::Hud => {
+            // tactical corner brackets + thin line
+            buf.stroke_round_rect(x, y, w, h, r, b.scale_a(120.0), 1.0);
+            let t = c.s(2.0);
+            let arm = c.s(14.0);
+            let a = acc.scale_a(190.0);
+            buf.line(x, y, x + arm, y, t, a);
+            buf.line(x, y, x, y + arm, t, a);
+            buf.line(x + w - arm, y, x + w, y, t, a);
+            buf.line(x + w, y, x + w, y + arm, t, a);
+            buf.line(x, y + h - arm, x, y + h, t, a);
+            buf.line(x, y + h, x + arm, y + h, t, a);
+            buf.line(x + w - arm, y + h, x + w, y + h, t, a);
+            buf.line(x + w, y + h - arm, x + w, y + h, t, a);
+        }
+        StyleKind::Soft => {
+            // no hard border — soft light rim only
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(28.0), 1.0);
+        }
+        StyleKind::Crt => {
+            // screen bezel: hairline + inner inset frame
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 1.0);
+            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), r, acc.scale_a(38.0), 1.0);
+        }
+        StyleKind::Minimal => {
+            buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+        }
+        StyleKind::Cyber => {
+            // notched corners: border of 8 segments with corner cuts + top dashes
+            let cut = c.s(12.0);
+            let t = c.s(1.6);
+            let a = acc.scale_a(150.0);
+            buf.line(x + cut, y, x + w - cut, y, t, a);
+            buf.line(x + w - cut, y, x + w, y + cut, t, a);
+            buf.line(x + w, y + cut, x + w, y + h - cut, t, a);
+            buf.line(x + w, y + h - cut, x + w - cut, y + h, t, a);
+            buf.line(x + w - cut, y + h, x + cut, y + h, t, a);
+            buf.line(x + cut, y + h, x, y + h - cut, t, a);
+            buf.line(x, y + h - cut, x, y + cut, t, a);
+            buf.line(x, y + cut, x + cut, y, t, a);
+            for i in 0..5 {
+                let dx = x + w * (0.16 + 0.17 * i as f32);
+                buf.fill_rect(dx, y - c.s(1.0), c.s(10.0), c.s(2.0), acc.scale_a(120.0));
+            }
+        }
+        StyleKind::Ice => {
+            // crystalline double rim + sparkle ticks at the top corners
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(70.0), 1.2);
+            buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, mix(acc, Rgba::rgb(255, 255, 255), 0.5).scale_a(50.0), 1.0);
+            let t = c.s(1.4);
+            let cols = [x + c.s(9.0), x + w - c.s(9.0)];
+            for cx2 in cols {
+                buf.line(cx2 - c.s(3.5), y + c.s(6.0), cx2 + c.s(3.5), y + c.s(6.0), t, Rgba::rgb(255, 255, 255).scale_a(120.0));
+                buf.line(cx2, y + c.s(2.5), cx2, y + c.s(9.5), t, Rgba::rgb(255, 255, 255).scale_a(120.0));
+            }
+        }
+        StyleKind::Lava => {
+            // warm heavy frame + hot gradient top edge
+            buf.stroke_round_rect(x, y, w, h, r, mix(acc, Rgba::rgb(255, 90, 20), 0.35), 2.0);
+            for i in 0..12 {
+                let t = i as f32 / 12.0;
+                let warm = mix(acc, Rgba::rgb(255, 160, 40), (0.5 - 0.5 * t) as f64);
+                buf.fill_rect(x + r + (w - 2.0 * r) * t, y, (w - 2.0 * r) / 12.0 + 1.0, c.s(2.2), warm.scale_a(150.0));
+            }
+        }
+        StyleKind::Retro => {
+            // chunky hard double frame, square corners
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 2.4);
+            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), 0.0, acc.scale_a(60.0), 1.2);
+        }
+    }
+}
+
+/// Style-based row grid line («сетка строк»): subtle separator per style.
+fn row_grid_line(c: &Ctx) -> Option<Rgba> {
+    match c.sk {
+        StyleKind::Hud | StyleKind::Minimal | StyleKind::Crt => Some(c.pal.muted.scale_a(48.0)),
+        StyleKind::Cyber | StyleKind::Retro => Some(c.pal.accent.scale_a(40.0)),
+        StyleKind::Ice => Some(Rgba::rgb(255, 255, 255).scale_a(24.0)),
+        _ => None,
+    }
+}
+
 fn draw_you_chip(c: &Ctx, buf: &mut Buf, x: f32, y: f32, label: &str) -> f32 {
     let size = c.em(0.72);
     let tw = c.fonts.measure(label, size, true);
@@ -500,27 +596,87 @@ fn draw_user_row(
         let bg = if c.borderless { Rgba([0, 0, 0, 0]) } else { tpal.talking_bg };
         let ac = tpal.accent;
         match c.sk {
-            StyleKind::Neon | StyleKind::Cyber => {
-                buf.round_rect(x, y, w, h, radius, bg);
-                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), ac);
-                buf.fill_rect(x, y, c.s(2.0), h, ac.scale_a(120.0 * talk_alpha as f64));
-            }
-            StyleKind::Hud | StyleKind::Lava => {
-                buf.round_rect(x, y, w, h, radius, bg);
-                buf.fill_rect(x, y, c.s(3.0), h, ac);
-                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(90.0 * talk_alpha as f64), 1.0);
-            }
-            StyleKind::Soft | StyleKind::Ice => {
-                buf.round_rect(x, y, w, h, h * 0.42, bg);
-                buf.stroke_round_rect(x, y, w, h, h * 0.42, tpal.talk_outline.scale_a(150.0 * talk_alpha as f64), c.s(1.5));
-            }
-            StyleKind::Crt | StyleKind::Retro => {
-                buf.round_rect(x, y, w, h, radius, ac.scale_a(30.0 * talk_alpha as f64));
-                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(170.0 * talk_alpha as f64), 1.0);
-            }
-            StyleKind::Glass | StyleKind::Minimal => {
+            StyleKind::Glass => {
+                // классическая обводка строки целиком
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.0));
+            }
+            StyleKind::Neon => {
+                // неон: гало-обводка + яркая полоса снизу
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x - c.s(1.5), y - c.s(1.5), w + c.s(3.0), h + c.s(3.0), radius, ac.scale_a(55.0 * talk_alpha as f64), 1.2);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.0));
+                buf.fill_rect(x + c.s(6.0), y + h - c.s(2.5), w - c.s(12.0), c.s(2.0), ac);
+            }
+            StyleKind::Hud => {
+                // тактический индикатор: бар слева + засечки + рамка
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y, c.s(3.5), h, ac);
+                for i in 0..3 {
+                    buf.fill_rect(x + c.s(5.0), y + h * (0.22 + 0.28 * i as f32), c.s(7.0), c.s(2.0), ac.scale_a(150.0 * talk_alpha as f64));
+                }
+                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(85.0 * talk_alpha as f64), 1.0);
+            }
+            StyleKind::Soft => {
+                // мягкое подчёркивание снизу, pill-фон
+                buf.round_rect(x, y, w, h, h * 0.42, bg);
+                let steps = 10;
+                for i in 0..steps {
+                    let t = i as f32 / steps as f32;
+                    let a2 = ((120.0 * (1.0 - t * 0.85)) * talk_alpha) as f64;
+                    buf.fill_rect(x + w * t, y + h - c.s(3.0), w / steps as f32 + 1.0, c.s(3.0), tpal.talk_outline.scale_a(a2));
+                }
+            }
+            StyleKind::Crt => {
+                // фосфорная полоса: заливка + яркие линии сверху/снизу
+                buf.round_rect(x, y, w, h, radius, ac.scale_a(34.0 * talk_alpha as f64));
+                buf.fill_rect(x, y, w, c.s(2.0), tpal.talk_outline.scale_a(190.0 * talk_alpha as f64));
+                buf.fill_rect(x, y + h - c.s(2.0), w, c.s(2.0), tpal.talk_outline.scale_a(190.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(120.0 * talk_alpha as f64), 1.0);
+            }
+            StyleKind::Minimal => {
+                // только акцентный бар слева, без обводки
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y, c.s(2.5), h, tpal.talk_outline);
+            }
+            StyleKind::Cyber => {
+                // срезанные углы + акцентная засечка слева
+                let cut = c.s(9.0);
+                let t = c.s(1.6);
+                let a2 = tpal.talk_outline.scale_a(175.0 * talk_alpha as f64);
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.line(x + cut, y, x + w - cut, y, t, a2);
+                buf.line(x + w - cut, y, x + w, y + cut, t, a2);
+                buf.line(x + w, y + cut, x + w, y + h - cut, t, a2);
+                buf.line(x + w, y + h - cut, x + w - cut, y + h, t, a2);
+                buf.line(x + w - cut, y + h, x + cut, y + h, t, a2);
+                buf.line(x + cut, y + h, x, y + h - cut, t, a2);
+                buf.line(x, y + h - cut, x, y + cut, t, a2);
+                buf.line(x, y + cut, x + cut, y, t, a2);
+                buf.fill_rect(x, y + cut, c.s(2.5), h - cut * 2.0, ac.scale_a(110.0 * talk_alpha as f64));
+            }
+            StyleKind::Ice => {
+                // двойная ледяная обводка + блик сверху
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x, y, w, h, radius, Rgba::rgb(255, 255, 255).scale_a(120.0 * talk_alpha as f64), 1.4);
+                buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), radius, tpal.talk_outline.scale_a(140.0 * talk_alpha as f64), 1.0);
+                buf.fill_rect(x + c.s(8.0), y + c.s(1.5), w - c.s(16.0), c.s(1.2), Rgba::rgb(255, 255, 255).scale_a(90.0 * talk_alpha as f64));
+            }
+            StyleKind::Lava => {
+                // раскалённая полоса снизу (градиент углей) + тёплая рамка
+                buf.round_rect(x, y, w, h, radius, bg);
+                let steps = 10;
+                for i in 0..steps {
+                    let t = i as f32 / steps as f32;
+                    let warm = mix(ac, Rgba::rgb(255, 150, 40), (0.5 - 0.5 * t) as f64);
+                    buf.fill_rect(x + w * t, y + h - c.s(3.5), w / steps as f32 + 1.0, c.s(3.5), warm.scale_a(170.0 * talk_alpha as f64));
+                }
+                buf.stroke_round_rect(x, y, w, h, radius, ac.scale_a(75.0 * talk_alpha as f64), 1.0);
+            }
+            StyleKind::Retro => {
+                // жёсткий блок-выделение, прямые углы
+                buf.round_rect(x, y, w, h, radius, ac.scale_a(42.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(2.2));
             }
         }
     }
@@ -776,7 +932,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if !c.borderless {
         buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
         buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
-        buf.stroke_round_rect(px, py, panel_w, panel_h, pr, c.border(inp.pal.panel_border), 1.0);
+        draw_frame_chrome(&c, &mut buf, px, py, panel_w, panel_h, pr);
     }
 
     let mut cy = py;
@@ -928,8 +1084,12 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if card_rows && !c.borderless {
             buf.round_rect(px + list_pad, cy, panel_w - list_pad * 2.0, row_h, c.rad(c.s(10.0)), rc.pal.row_hover.scale_a(150.0));
         }
-        if separators && !c.borderless && i + 1 < inp.users.len() {
-            buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, c.pal.muted.scale_a(70.0));
+        if !c.borderless && i + 1 < inp.users.len() {
+            if separators {
+                buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, c.pal.muted.scale_a(70.0));
+            } else if let Some(sc) = row_grid_line(&c) {
+                buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, sc);
+            }
         }
         draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, inp.talk_alphas.get(i).copied().unwrap_or(1.0), &you_label, &opts);
         cy += row_h + row_gap;
@@ -958,8 +1118,12 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             if card_rows && !c.borderless {
                 buf.round_rect(px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, c.rad(c.s(10.0)), c.pal.row_hover.scale_a(150.0));
             }
-            if separators && !c.borderless && wi + 1 < inp.whisperers.len() {
-                buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, c.pal.muted.scale_a(70.0));
+            if !c.borderless && wi + 1 < inp.whisperers.len() {
+                if separators {
+                    buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, c.pal.muted.scale_a(70.0));
+                } else if let Some(sc) = row_grid_line(&c) {
+                    buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, sc);
+                }
             }
             draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, 1.0, &you_label, &opts);
             // whisperPulse: whole-row opacity 0.55 ↔ 1 (2.6s)
@@ -1207,6 +1371,48 @@ mod tests {
         // move-mode hits: save + discard + drag
         let has = |h: Hit| frame.hits.iter().any(|(_, x)| *x == h);
         assert!(has(Hit::Save) && has(Hit::Discard) && has(Hit::Drag));
+        // styles draw distinctly: frame/talk/row languages differ between styles
+        {
+            let mut seen: Vec<Vec<u8>> = Vec::new();
+            for st in StyleKind::ALL.iter() {
+                let mut a3 = Appearance::default();
+                a3.style = st.0.to_string();
+                a3.show_events = true;
+                let pal3 = Palette::from_appearance(&a3);
+                let mut u1 = crate::model::UserState::new("1", "A");
+                u1.talking = true;
+                let inp = FrameInput {
+                    appearance: &a3,
+                    pal: &pal3,
+                    fonts: &fonts,
+                    icons: &icons,
+                    status: "live",
+                    server_name: "S",
+                    channel_name: "C",
+                    user_count: 1,
+                    users: vec![u1],
+                    talk_alphas: vec![],
+                    class_keys: vec![],
+                    whisper_keys: vec![],
+                    whisperers: vec![],
+                    feed: vec![],
+                    lang: "ru",
+                    move_mode: false,
+                    now_ms: 1500,
+                    work_h: 1080.0,
+                    roster_scroll: 0.0,
+                };
+                let f = render_frame(&inp);
+                assert!(!f.buf.px.is_empty(), "style {} renders", st.0);
+                assert!(
+                    seen.iter().all(|prev| prev != &f.buf.px),
+                    "style {} draws differently",
+                    st.0
+                );
+                seen.push(f.buf.px);
+            }
+        }
+
         // talking outline pixels exist (talk-outline green around row)
         // center of panel is opaque
         let i = ((frame.buf.h / 2 * frame.buf.w + frame.buf.w / 2) * 4) as usize;
@@ -1350,6 +1556,50 @@ mod qa {
             };
             let frame = render_frame(&inp);
             write_png(&format!("{dir}/frame-{}.png", lk.0), &frame.buf).unwrap();
+        }
+
+        // «Стиль оформления» — каждый стиль рисует по-своему (рамка, строки, говорящий)
+        {
+            let mk = |id: &str, nick: &str, talk: bool, self_: bool| {
+                let mut u = UserState::new(id, nick);
+                u.talking = talk;
+                u.is_self = self_;
+                u
+            };
+            let mut ghost = mk("103", "Ghost", true, false);
+            ghost.whispering = true;
+            for st in StyleKind::ALL.iter() {
+                let mut a3 = Appearance::default();
+                a3.style = st.0.to_string();
+                a3.show_events = true;
+                let pal3 = Palette::from_appearance(&a3);
+                let inp = FrameInput {
+                    appearance: &a3,
+                    pal: &pal3,
+                    fonts: &fonts,
+                    icons: &icons,
+                    status: "live",
+                    server_name: "Eternals",
+                    channel_name: "Генеральный штаб",
+                    user_count: 4,
+                    users: vec![mk("100", "Alice", true, false), mk("1", "Я", false, true), mk("101", "Bob", false, false)],
+                    talk_alphas: vec![],
+                    class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into())],
+                    whisper_keys: vec![("103".into(), Some("ghost".into()))],
+                    whisperers: vec![ghost.clone()],
+                    feed: vec![
+                        FeedItem { nickname: "Маша".into(), text: "привет!".into(), kind: 1, alpha: 1.0 },
+                        FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0, alpha: 1.0 },
+                    ],
+                    lang: "ru",
+                    move_mode: false,
+                    now_ms: 1500,
+                    work_h: 1080.0,
+                    roster_scroll: 0.0,
+                };
+                let frame = render_frame(&inp);
+                write_png(&format!("{dir}/style-{}.png", st.0), &frame.buf).unwrap();
+            }
         }
 
         let mut a2 = Appearance::default();

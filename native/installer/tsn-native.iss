@@ -7,7 +7,7 @@
   #define StageDir "..\..\dist-win\tsn-native"
 #endif
 #ifndef AppVersion
-  #define AppVersion "2.0.13"
+  #define AppVersion "2.0.14"
 #endif
 
 [Setup]
