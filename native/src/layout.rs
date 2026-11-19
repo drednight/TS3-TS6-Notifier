@@ -634,6 +634,53 @@ struct RowOpts {
     eq_style: String,
 }
 
+/// «Вид оверлея» — structural mockups of the overlay window. Every variant
+/// keeps the full functionality: header, roster, whisper block, feed, badges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutKind {
+    Classic,
+    Cards,
+    Compact,
+    Minimal,
+    Banner,
+}
+
+impl LayoutKind {
+    pub const ALL: [(&str, &str, &str); 5] = [
+        ("classic", "Классик", "Classic"),
+        ("cards", "Карточки", "Cards"),
+        ("compact", "Плотный", "Compact"),
+        ("minimal", "Минимал", "Minimal"),
+        ("banner", "Баннер", "Banner"),
+    ];
+
+    pub fn parse(s: &str) -> LayoutKind {
+        match s {
+            "cards" => LayoutKind::Cards,
+            "compact" => LayoutKind::Compact,
+            "minimal" => LayoutKind::Minimal,
+            "banner" => LayoutKind::Banner,
+            _ => LayoutKind::Classic,
+        }
+    }
+
+    pub fn id(&self) -> &'static str {
+        LayoutKind::ALL[*self as usize].0
+    }
+
+    /// (row height ×, extra row gap, per-row cards, hairline separators,
+    /// header height ×, header font ×, feed cards)
+    fn cfg(&self) -> (f32, f32, bool, bool, f32, f32, bool) {
+        match self {
+            LayoutKind::Classic => (1.0, 0.0, false, false, 1.0, 1.0, false),
+            LayoutKind::Cards => (1.05, 4.0, true, false, 1.0, 1.0, true),
+            LayoutKind::Compact => (0.78, -1.0, false, false, 0.85, 0.92, false),
+            LayoutKind::Minimal => (0.92, 0.0, false, true, 0.9, 0.95, false),
+            LayoutKind::Banner => (1.0, 0.0, false, false, 1.42, 1.35, false),
+        }
+    }
+}
+
 /// Full panel frame: shadow, panel, header, rows, whisper block, feed, move handle.
 pub fn render_frame(inp: &FrameInput) -> Frame {
     let a = inp.appearance;
@@ -666,14 +713,16 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         .collect();
 
     // ---------------- layout pass (panel coords) ----------------
+    let lk = LayoutKind::parse(&a.layout);
+    let (row_mul, gap_add, card_rows, separators, head_mul, head_font, feed_cards) = lk.cfg();
     let handle_h = if inp.move_mode { c.s(44.0) } else { 0.0 };
     let header_h = if a.show_header {
-        c.s(if a.compact { 44.0 } else { 52.0 })
+        c.s(if a.compact { 44.0 } else { 52.0 }) * head_mul
     } else {
         0.0
     };
-    let row_h = if a.compact { c.s(31.0) } else { c.s(42.0) };
-    let row_gap = c.s(2.0);
+    let row_h = (if a.compact { c.s(31.0) } else { c.s(42.0) }) * row_mul;
+    let row_gap = c.s((2.0 + gap_add).max(0.5));
     let list_pad = if a.compact { c.s(4.0) } else { c.s(6.0) };
     let whisper_head_h = if inp.whisperers.is_empty() { 0.0 } else { c.s(20.0) };
     let feed_row_h = c.s(26.0);
@@ -823,13 +872,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         }
         // titles
         let tx = px + c.s(31.0);
-        let ch_size = c.em(1.02);
+        let t_y = ((header_h - c.s(36.0)) * 0.5).max(0.0) + c.s(13.0);
+        let ch_size = c.em(1.02 * head_font);
         let ch = inp.fonts.truncate(inp.channel_name, ch_size, true, panel_w - c.s(31.0) - c.s(84.0));
-        inp.fonts.draw(&mut buf, tx, cy + c.s(19.0) + ch_size * 0.4, &ch, ch_size, true, inp.pal.text);
+        inp.fonts.draw(&mut buf, tx, cy + t_y + ch_size * 0.4, &ch, ch_size, true, inp.pal.text);
         if a.show_server_name {
             let sv = inp.server_name.to_uppercase();
             let sv = inp.fonts.truncate(&sv, c.em(0.78), false, panel_w - c.s(31.0) - c.s(84.0));
-            inp.fonts.draw(&mut buf, tx, cy + c.s(33.0) + c.em(0.78) * 0.6, &sv, c.em(0.78), false, inp.pal.muted);
+            inp.fonts.draw(&mut buf, tx, cy + t_y + c.s(14.0) + c.em(0.78) * 0.6, &sv, c.em(0.78), false, inp.pal.muted);
         }
         // right cluster: user count pill (the settings button lives in the
         // tray now — «убери кнопку настроек с оверлея самого»)
@@ -875,6 +925,12 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         } else {
             Ctx { pal: c.pal, fonts: c.fonts, icons: c.icons, k: c.k, fs: c.fs, now: c.now, anim: c.anim, sk: c.sk, borderless: c.borderless }
         };
+        if card_rows && !c.borderless {
+            buf.round_rect(px + list_pad, cy, panel_w - list_pad * 2.0, row_h, c.rad(c.s(10.0)), rc.pal.row_hover.scale_a(150.0));
+        }
+        if separators && !c.borderless && i + 1 < inp.users.len() {
+            buf.fill_rect(px + list_pad + c.s(6.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - list_pad * 2.0 - c.s(12.0), 1.0, c.pal.muted.scale_a(70.0));
+        }
         draw_user_row(&rc, &mut buf, px + list_pad, cy, panel_w - list_pad * 2.0, row_h, u, key, false, inp.talk_alphas.get(i).copied().unwrap_or(1.0), &you_label, &opts);
         cy += row_h + row_gap;
     }
@@ -897,8 +953,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             secc.scale_a(0.0),
         );
         cy += whisper_head_h + c.s(2.0);
-        for u in &inp.whisperers {
+        for (wi, u) in inp.whisperers.iter().enumerate() {
             let key = inp.whisper_keys.iter().find(|(id, _)| *id == u.id).and_then(|(_, k)| k.as_deref());
+            if card_rows && !c.borderless {
+                buf.round_rect(px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, c.rad(c.s(10.0)), c.pal.row_hover.scale_a(150.0));
+            }
+            if separators && !c.borderless && wi + 1 < inp.whisperers.len() {
+                buf.fill_rect(px + c.s(16.0), cy + row_h + row_gap * 0.5 - 0.5, panel_w - c.s(32.0), 1.0, c.pal.muted.scale_a(70.0));
+            }
             draw_user_row(&c, &mut buf, px + c.s(10.0), cy, panel_w - c.s(20.0), row_h, u, key, true, 1.0, &you_label, &opts);
             // whisperPulse: whole-row opacity 0.55 ↔ 1 (2.6s)
             if c.anim {
@@ -921,6 +983,10 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             let size = c.em(0.92);
             let line_h = c.s(16.0);
             let al = item.alpha.clamp(0.0, 1.0) as f64;
+            if feed_cards && item.kind != 1 && !c.borderless {
+                let fr = c.rad(c.s(10.0));
+                buf.round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.row_hover.scale_a(120.0 * al));
+            }
             if item.kind == 1 && !c.borderless {
                 let fr = c.rad(c.s(10.0));
                 buf.round_rect(x0, y0, panel_w - c.s(20.0), g.row_h, fr, inp.pal.accent.scale_a(26.0 * al));
@@ -1244,6 +1310,47 @@ mod qa {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
         std::fs::create_dir_all(dir).unwrap();
         write_png(&format!("{dir}/frame.png"), &frame.buf).unwrap();
+
+        // «Вид оверлея» — каждый макет окна целиком (весь функционал внутри)
+        for lk in LayoutKind::ALL.iter() {
+            let mut a3 = Appearance::default();
+            a3.layout = lk.0.to_string();
+            let pal3 = Palette::from_appearance(&a3);
+            let mk3 = |id: &str, nick: &str, talk: bool, self_: bool| {
+                let mut u = UserState::new(id, nick);
+                u.talking = talk;
+                u.is_self = self_;
+                u
+            };
+            let mut ghost = mk3("103", "Ghost", true, false);
+            ghost.whispering = true;
+            let inp = FrameInput {
+                appearance: &a3,
+                pal: &pal3,
+                fonts: &fonts,
+                icons: &icons,
+                status: "live",
+                server_name: "Eternals",
+                channel_name: "Генеральный штаб",
+                user_count: 4,
+                users: vec![mk3("100", "Alice", true, false), mk3("1", "Я", false, true), mk3("101", "Bob", false, false)],
+                talk_alphas: vec![],
+                class_keys: vec![Some("archer".into()), Some("mage".into()), Some("warrior".into())],
+                whisper_keys: vec![("103".into(), Some("ghost".into()))],
+                whisperers: vec![ghost],
+                feed: vec![
+                    FeedItem { nickname: "Маша".into(), text: "привет!".into(), kind: 1, alpha: 1.0 },
+                    FeedItem { nickname: "Bob".into(), text: "вошёл в Генеральный штаб".into(), kind: 0, alpha: 1.0 },
+                ],
+                lang: "ru",
+                move_mode: false,
+                now_ms: 1500,
+                work_h: 1080.0,
+                roster_scroll: 0.0,
+            };
+            let frame = render_frame(&inp);
+            write_png(&format!("{dir}/frame-{}.png", lk.0), &frame.buf).unwrap();
+        }
 
         let mut a2 = Appearance::default();
         a2.theme = "frost".into();
