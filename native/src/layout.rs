@@ -233,10 +233,10 @@ impl<'a> Ctx<'a> {
             StyleKind::Glass => base,
             StyleKind::Neon | StyleKind::Hud => (base * 0.3).clamp(self.s(1.5), self.s(6.0)),
             StyleKind::Soft => base * 1.5,
-            StyleKind::Crt | StyleKind::Retro => 0.0,
-            StyleKind::Minimal | StyleKind::Cyber => (base * 0.2).clamp(self.s(1.5), self.s(6.0)),
-            StyleKind::Ice => base * 1.3,
-            StyleKind::Lava => base * 0.8,
+            StyleKind::Minimal | StyleKind::Cyber | StyleKind::Matrix => (base * 0.2).clamp(self.s(1.5), self.s(6.0)),
+            StyleKind::Plasma => base * 0.9,
+            StyleKind::Draft => 0.0,
+            StyleKind::Radiance => base * 1.1,
         }
     }
     /// Style-aware panel/row background tint.
@@ -246,11 +246,12 @@ impl<'a> Ctx<'a> {
             StyleKind::Neon => mix(base, Rgba::rgb(2, 3, 8), 0.42),
             StyleKind::Hud => mix(base, Rgba::rgb(6, 8, 10), 0.24),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.10),
-            StyleKind::Crt | StyleKind::Retro => mix(base, Rgba::rgb(4, 6, 4), 0.35),
             StyleKind::Minimal => mix(base, Rgba::rgb(0, 0, 0), 0.10),
             StyleKind::Cyber => mix(base, Rgba::rgb(12, 0, 22), 0.45),
-            StyleKind::Ice => mix(base, Rgba::rgb(10, 22, 38), 0.28),
-            StyleKind::Lava => mix(base, Rgba::rgb(22, 7, 3), 0.38),
+            StyleKind::Plasma => mix(base, Rgba::rgb(20, 4, 30), 0.32),
+            StyleKind::Draft => mix(base, Rgba::rgb(8, 16, 28), 0.30),
+            StyleKind::Matrix => mix(base, Rgba::rgb(2, 14, 6), 0.32),
+            StyleKind::Radiance => mix(base, Rgba::rgb(30, 24, 10), 0.22),
         }
     }
     /// Style-aware border color.
@@ -260,11 +261,12 @@ impl<'a> Ctx<'a> {
             StyleKind::Neon => self.pal.accent.scale_a(150.0),
             StyleKind::Hud => mix(base, self.pal.accent, 0.35),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.22),
-            StyleKind::Crt | StyleKind::Retro => self.pal.accent.scale_a(110.0),
             StyleKind::Minimal => base.scale_a(160.0),
             StyleKind::Cyber => self.pal.accent.scale_a(140.0),
-            StyleKind::Ice => mix(base, Rgba::rgb(255, 255, 255), 0.35),
-            StyleKind::Lava => mix(base, self.pal.accent, 0.5),
+            StyleKind::Plasma => self.pal.accent.scale_a(160.0),
+            StyleKind::Draft => mix(base, self.pal.accent, 0.45),
+            StyleKind::Matrix => self.pal.accent.scale_a(140.0),
+            StyleKind::Radiance => mix(base, Rgba::rgb(255, 255, 255), 0.30),
         }
     }
     /// Whisper/talk secondary accent (neon magenta, CRT amber, else user accent).
@@ -335,19 +337,26 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             // no hard border — soft light rim only
             buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(28.0), 1.0);
         }
-        StyleKind::Crt => {
-            // экранная трубка: толстый бейзел + яркое кольцо + «винты» по углам
-            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(70.0), 3.0);
-            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), r, acc.scale_a(120.0), 1.0);
-            let d = c.s(2.2);
-            let dots = [
-                (x + c.s(12.0), y + c.s(12.0)),
-                (x + w - c.s(12.0), y + c.s(12.0)),
-                (x + c.s(12.0), y + h - c.s(12.0)),
-                (x + w - c.s(12.0), y + h - c.s(12.0)),
-            ];
-            for (dx, dy) in dots {
-                buf.circle(dx, dy, d, acc.scale_a(150.0));
+        StyleKind::Plasma => {
+            // энергетическая рамка: свечение + орбитальные «кометы»
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 1.8);
+            buf.stroke_round_rect(x + c.s(2.0), y + c.s(2.0), w - c.s(4.0), h - c.s(4.0), r, acc.scale_a(40.0), 1.0);
+            let per = 2.0 * (w + h);
+            for k in 0..2 {
+                let head = if c.anim {
+                    ((((c.now / 2400.0) + k as f64 * 0.5) % 1.0) * per as f64) as f32
+                } else {
+                    per * (0.13 + 0.5 * k as f32)
+                };
+                for tail in 0..7 {
+                    let mut p = (head - tail as f32 * c.s(4.5)) % per;
+                    if p < 0.0 {
+                        p += per;
+                    }
+                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let a2 = ((170.0 - tail as f64 * 22.0).max(20.0)) as f64;
+                    buf.fill_rect(sx - c.s(1.2), sy - c.s(1.2), c.s(2.4), c.s(2.4), mix(acc, Rgba::rgb(255, 255, 255), 0.35).scale_a(a2));
+                }
             }
         }
         StyleKind::Minimal => {
@@ -371,51 +380,74 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                 buf.fill_rect(dx, y - c.s(1.0), c.s(10.0), c.s(2.0), acc.scale_a(120.0));
             }
         }
-        StyleKind::Ice => {
-            // ледяной контур + бахрома-сосульки по верхней кромке
-            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(85.0), 1.3);
-            buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, mix(acc, Rgba::rgb(255, 255, 255), 0.55).scale_a(55.0), 1.0);
-            let n = 26;
-            for i in 0..n {
-                let fx = x + c.s(6.0) + (w - c.s(12.0)) * (i as f32 / (n - 1) as f32);
-                let len = c.s(3.0) + c.s(6.0) * (((i * 7) % 5) as f32 / 4.0);
-                buf.fill_rect(fx, y, c.s(1.2), len, Rgba::rgb(255, 255, 255).scale_a(95.0));
+        StyleKind::Draft => {
+            // технический чертёж: двойной контур + линейки по рёбрам + кресты в углах
+            buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+            buf.stroke_round_rect(x + c.s(4.0), y + c.s(4.0), w - c.s(8.0), h - c.s(8.0), r, b.scale_a(70.0), 1.0);
+            let tick = c.s(4.0);
+            let step = c.s(18.0);
+            let a = acc.scale_a(120.0);
+            let mut tx = x + step;
+            while tx < x + w - step {
+                buf.fill_rect(tx, y + c.s(1.0), 1.0, tick, a);
+                buf.fill_rect(tx, y + h - c.s(1.0) - tick, 1.0, tick, a);
+                tx += step;
+            }
+            let mut ty = y + step;
+            while ty < y + h - step {
+                buf.fill_rect(x + c.s(1.0), ty, tick, 1.0, a);
+                buf.fill_rect(x + w - c.s(1.0) - tick, ty, tick, 1.0, a);
+                ty += step;
+            }
+            let crosses = [
+                (x + c.s(9.0), y + c.s(9.0)),
+                (x + w - c.s(9.0), y + c.s(9.0)),
+                (x + c.s(9.0), y + h - c.s(9.0)),
+                (x + w - c.s(9.0), y + h - c.s(9.0)),
+            ];
+            for (cx0, cy0) in crosses {
+                buf.fill_rect(cx0 - c.s(3.5), cy0, c.s(7.0), 1.2, acc.scale_a(150.0));
+                buf.fill_rect(cx0, cy0 - c.s(3.5), 1.2, c.s(7.0), acc.scale_a(150.0));
             }
         }
-        StyleKind::Lava => {
-            // тлеющий низ: тёплый контур + раскалённое подсвечивание снизу
-            buf.stroke_round_rect(x, y, w, h, r, mix(acc, Rgba::rgb(255, 90, 20), 0.35), 1.8);
-            for i in 0..3 {
-                let warm = mix(acc, Rgba::rgb(255, 150, 40), (0.2 + 0.25 * i as f32) as f64);
-                buf.fill_rect(x + r + c.s(4.0), y + h - c.s(1.0) - i as f32 * c.s(2.2), w - 2.0 * r - c.s(8.0), c.s(2.0), warm.scale_a(120.0 - 30.0 * i as f64));
+        StyleKind::Matrix => {
+            // печатная плата: сплошная трасса, узлы-квадраты по углам, пады по кромкам
+            let t = c.s(1.2);
+            let a = acc.scale_a(130.0);
+            buf.stroke_round_rect(x, y, w, h, r, a, t);
+            let mut px2 = x + c.s(20.0);
+            while px2 < x + w - c.s(10.0) {
+                buf.fill_rect(px2 - c.s(1.4), y - c.s(1.4), c.s(2.8), c.s(2.8), acc.scale_a(170.0));
+                buf.fill_rect(px2 - c.s(1.4), y + h - c.s(1.4), c.s(2.8), c.s(2.8), acc.scale_a(170.0));
+                px2 += c.s(26.0);
             }
-            let embers = [x + w * 0.22, x + w * 0.5, x + w * 0.78];
-            for (i, ex) in embers.iter().enumerate() {
-                let warm = mix(acc, Rgba::rgb(255, 170, 50), 0.6);
-                buf.circle(*ex, y + h - c.s(3.0), c.s(1.2 + (i % 2) as f32), warm.scale_a(170.0));
+            let nodes = [
+                (x + c.s(1.5), y + c.s(1.5)),
+                (x + w - c.s(6.5), y + c.s(1.5)),
+                (x + c.s(1.5), y + h - c.s(6.5)),
+                (x + w - c.s(6.5), y + h - c.s(6.5)),
+            ];
+            for (nx, ny) in nodes {
+                buf.round_rect(nx, ny, c.s(5.0), c.s(5.0), c.s(1.0), acc.scale_a(190.0));
             }
         }
-        StyleKind::Retro => {
-            // пиксельная рамка из чередующихся блоков + внутренний контур
-            let t = c.s(3.0);
-            let blk = c.s(9.0);
-            let gap = c.s(5.0);
-            let a = acc.scale_a(165.0);
-            let mut px2 = x;
-            while px2 < x + w {
-                let seg = blk.min(x + w - px2);
-                buf.fill_rect(px2, y, seg, t, a);
-                buf.fill_rect(px2, y + h - t, seg, t, a);
-                px2 += blk + gap;
+        StyleKind::Radiance => {
+            // сияющий контур + бегущая волна света по верхней кромке
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(55.0), 1.2);
+            buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, acc.scale_a(38.0), 1.0);
+            let segs = 22;
+            let seg_w = w / segs as f32;
+            let pos = if c.anim { ((c.now / 3200.0) % 1.0) as f32 } else { 0.5 };
+            for i in 0..segs {
+                let t = (i as f32 + 0.5) / segs as f32;
+                let d = (t - pos).abs().min(1.0 - (t - pos).abs());
+                let glow = (1.0 - d * 6.0).clamp(0.0, 1.0);
+                if glow <= 0.0 {
+                    continue;
+                }
+                let col = mix(acc, Rgba::rgb(255, 255, 255), (0.45 * glow) as f64);
+                buf.fill_rect(x + seg_w * i as f32, y, seg_w + 1.0, c.s(2.4), col.scale_a(40.0 + 150.0 * glow as f64));
             }
-            let mut py2 = y;
-            while py2 < y + h {
-                let seg = blk.min(y + h - py2);
-                buf.fill_rect(x, py2, t, seg, a);
-                buf.fill_rect(x + w - t, py2, t, seg, a);
-                py2 += blk + gap;
-            }
-            buf.stroke_round_rect(x + c.s(3.5), y + c.s(3.5), w - c.s(7.0), h - c.s(7.0), 0.0, acc.scale_a(60.0), 1.1);
         }
     }
 }
@@ -430,10 +462,10 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
         StyleKind::Cyber => {
             buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(40.0));
         }
-        StyleKind::Glass | StyleKind::Ice => {
+        StyleKind::Glass | StyleKind::Radiance => {
             buf.fill_rect(x, y, w, 1.0, Rgba::rgb(255, 255, 255).scale_a(26.0));
         }
-        StyleKind::Hud => {
+        StyleKind::Hud | StyleKind::Draft => {
             // пунктир
             let mut dx = x;
             while dx < x + w {
@@ -445,21 +477,64 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
                 dx += c.s(8.0);
             }
         }
-        StyleKind::Crt => {
-            buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(32.0));
-        }
-        StyleKind::Retro => {
-            // точечный пунктир
+        StyleKind::Plasma => {
+            // энергетический пунктир
             let mut dx = x;
             while dx < x + w {
-                buf.fill_rect(dx, y, c.s(2.0), 1.0, c.pal.accent.scale_a(45.0));
-                dx += c.s(5.0);
+                let seg = c.s(4.0).min(x + w - dx);
+                if seg <= 0.0 {
+                    break;
+                }
+                buf.fill_rect(dx, y, seg, 1.0, c.pal.accent.scale_a(36.0));
+                dx += c.s(7.0);
             }
         }
-        StyleKind::Lava => {
-            buf.fill_rect(x, y, w, 1.0, c.pal.accent.scale_a(38.0));
+        StyleKind::Matrix => {
+            // точечный «паяльный» шов с узлами
+            let mut dx = x;
+            let mut k = 0;
+            while dx < x + w {
+                let sz = if k % 3 == 2 { 2.4 } else { 1.4 };
+                buf.fill_rect(dx, y - sz * 0.5 + 0.5, sz, sz, c.pal.accent.scale_a(45.0));
+                dx += c.s(5.5);
+                k += 1;
+            }
         }
         _ => {}
+    }
+}
+
+/// Point along a rect perimeter (clockwise from the top-left corner).
+fn perimeter_point(x: f32, y: f32, w: f32, h: f32, p: f32) -> (f32, f32) {
+    let per = 2.0 * (w + h);
+    let p = ((p % per) + per) % per;
+    if p < w {
+        (x + p, y)
+    } else if p < w + h {
+        (x + w, y + (p - w))
+    } else if p < 2.0 * w + h {
+        (x + w - (p - w - h), y + h)
+    } else {
+        (x, y + h - (p - 2.0 * w - h))
+    }
+}
+
+/// Clear a rect to full transparency («вырезание» срезанных углов рамки).
+fn clear_rect(buf: &mut Buf, x: f32, y: f32, w: f32, h: f32) {
+    let x0 = x.floor().max(0.0) as i32;
+    let y0 = y.floor().max(0.0) as i32;
+    let x1 = (x + w).ceil().min(buf.w as f32) as i32;
+    let y1 = (y + h).ceil().min(buf.h as f32) as i32;
+    for yy in y0..y1 {
+        for xx in x0..x1 {
+            let i = ((yy * buf.w + xx) * 4) as usize;
+            if i + 3 < buf.px.len() {
+                buf.px[i] = 0;
+                buf.px[i + 1] = 0;
+                buf.px[i + 2] = 0;
+                buf.px[i + 3] = 0;
+            }
+        }
     }
 }
 
@@ -735,15 +810,26 @@ fn draw_user_row(
                     buf.fill_rect(x + w * t, y + h - c.s(3.0), w / steps as f32 + 1.0, c.s(3.0), tpal.talk_outline.scale_a(a2));
                 }
             }
-            StyleKind::Crt => {
-                // строчная развёртка: яркие линии через строку + торцевые скобки
-                buf.round_rect(x, y, w, h, radius, ac.scale_a(30.0 * talk_alpha as f64));
-                for i in 0..3 {
-                    let ly = y + h * (0.22 + 0.28 * i as f32);
-                    buf.fill_rect(x + c.s(4.0), ly, w - c.s(8.0), c.s(1.8), tpal.talk_outline.scale_a((190.0 - 45.0 * i as f64) * talk_alpha as f64));
+            StyleKind::Plasma => {
+                // энергетический контур + бегущая искра по рамке строки
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x - c.s(2.0), y - c.s(2.0), w + c.s(4.0), h + c.s(4.0), radius, ac.scale_a(50.0 * talk_alpha as f64), 1.2);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.8));
+                let per = 2.0 * (w + h);
+                let head = if c.anim {
+                    (((c.now / 1400.0) % 1.0) * per as f64) as f32
+                } else {
+                    per * 0.2
+                };
+                for tail in 0..5 {
+                    let mut p = (head - tail as f32 * c.s(5.0)) % per;
+                    if p < 0.0 {
+                        p += per;
+                    }
+                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let a2 = ((160.0 - tail as f64 * 28.0).max(30.0)) * talk_alpha as f64;
+                    buf.fill_rect(sx - c.s(1.1), sy - c.s(1.1), c.s(2.2), c.s(2.2), mix(tpal.talk_outline, Rgba::rgb(255, 255, 255), 0.4).scale_a(a2));
                 }
-                buf.fill_rect(x, y + h * 0.2, c.s(2.2), h * 0.6, ac.scale_a(170.0 * talk_alpha as f64));
-                buf.fill_rect(x + w - c.s(2.2), y + h * 0.2, c.s(2.2), h * 0.6, ac.scale_a(170.0 * talk_alpha as f64));
             }
             StyleKind::Minimal => {
                 // только акцентный бар слева, без обводки
@@ -766,49 +852,60 @@ fn draw_user_row(
                 buf.line(x, y + cut, x + cut, y, t, a2);
                 buf.fill_rect(x, y + cut, c.s(2.5), h - cut * 2.0, ac.scale_a(110.0 * talk_alpha as f64));
             }
-            StyleKind::Ice => {
-                // изморозь: бликующая обводка + сосульки внутри строки
+            StyleKind::Draft => {
+                // размерная линия: тонкий контур + выносные засечки + размер под строкой
                 buf.round_rect(x, y, w, h, radius, bg);
-                buf.stroke_round_rect(x, y, w, h, radius, Rgba::rgb(255, 255, 255).scale_a(115.0 * talk_alpha as f64), 1.3);
-                buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), radius, tpal.talk_outline.scale_a(130.0 * talk_alpha as f64), 1.0);
-                let n = 18;
-                for i in 0..n {
-                    let fx = x + c.s(8.0) + (w - c.s(16.0)) * (i as f32 / (n - 1) as f32);
-                    let len = c.s(2.5) + c.s(4.5) * (((i * 5) % 4) as f32 / 3.0);
-                    buf.fill_rect(fx, y, c.s(1.1), len, Rgba::rgb(255, 255, 255).scale_a(85.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(150.0 * talk_alpha as f64), 1.1);
+                let ext = c.s(3.5);
+                let corners = [(x, y, -1.0f32, -1.0f32), (x + w, y, 1.0, -1.0), (x, y + h, -1.0, 1.0), (x + w, y + h, 1.0, 1.0)];
+                for (cx0, cy0, sx, sy) in corners {
+                    let xx = if sx < 0.0 { cx0 - ext } else { cx0 };
+                    let yy = if sy < 0.0 { cy0 - 1.2 } else { cy0 };
+                    buf.fill_rect(xx, yy, ext, 1.2, tpal.talk_outline.scale_a(170.0 * talk_alpha as f64));
+                    let xx2 = if sx < 0.0 { cx0 - 1.2 } else { cx0 };
+                    let yy2 = if sy < 0.0 { cy0 - ext } else { cy0 };
+                    buf.fill_rect(xx2, yy2, 1.2, ext, tpal.talk_outline.scale_a(170.0 * talk_alpha as f64));
+                }
+                let ly = y + h - c.s(3.2);
+                buf.fill_rect(x + c.s(5.0), ly, w - c.s(10.0), 1.1, ac.scale_a(150.0 * talk_alpha as f64));
+                buf.fill_rect(x + c.s(5.0), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
+                buf.fill_rect(x + w - c.s(6.1), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
+            }
+            StyleKind::Matrix => {
+                // блочная подсветка данных: заглушки по краям + ступенчатая рамка + такты
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y + c.s(3.0), c.s(3.5), h - c.s(6.0), ac.scale_a(160.0 * talk_alpha as f64));
+                buf.fill_rect(x + w - c.s(3.5), y + c.s(3.0), c.s(3.5), h - c.s(6.0), ac.scale_a(160.0 * talk_alpha as f64));
+                let t = c.s(1.6);
+                let a2 = tpal.talk_outline.scale_a(165.0 * talk_alpha as f64);
+                buf.fill_rect(x + c.s(6.0), y, w - c.s(12.0), t, a2);
+                buf.fill_rect(x + c.s(6.0), y + h - t, w - c.s(12.0), t, a2);
+                buf.fill_rect(x, y + c.s(2.0), c.s(6.0) + t, t, a2);
+                buf.fill_rect(x + w - c.s(6.0) - t, y + c.s(2.0), c.s(6.0) + t, t, a2);
+                buf.fill_rect(x, y + h - c.s(2.0) - t, c.s(6.0) + t, t, a2);
+                buf.fill_rect(x + w - c.s(6.0) - t, y + h - c.s(2.0) - t, c.s(6.0) + t, t, a2);
+                let mut bx = x + c.s(12.0);
+                while bx < x + w - c.s(12.0) {
+                    buf.fill_rect(bx, y + h - c.s(5.5), c.s(2.0), c.s(2.0), ac.scale_a(150.0 * talk_alpha as f64));
+                    bx += c.s(5.0);
                 }
             }
-            StyleKind::Lava => {
-                // раскалённый разлом: яркий низ, тлеющие бока, искры
+            StyleKind::Radiance => {
+                // сияющая подсветка: мягкое свечение + бегущая волна снизу
                 buf.round_rect(x, y, w, h, radius, bg);
-                let warm_hi = mix(ac, Rgba::rgb(255, 170, 50), 0.55);
-                buf.fill_rect(x + c.s(4.0), y + h - c.s(3.0), w - c.s(8.0), c.s(3.0), warm_hi.scale_a(190.0 * talk_alpha as f64));
-                buf.fill_rect(x, y + h * 0.35, c.s(1.6), h * 0.65, warm_hi.scale_a(110.0 * talk_alpha as f64));
-                buf.fill_rect(x + w - c.s(1.6), y + h * 0.35, c.s(1.6), h * 0.65, warm_hi.scale_a(110.0 * talk_alpha as f64));
-                buf.fill_rect(x + c.s(4.0), y, w - c.s(8.0), c.s(1.2), ac.scale_a(70.0 * talk_alpha as f64));
-                let es = [x + w * 0.3, x + w * 0.62, x + w * 0.85];
-                for ex in es {
-                    buf.circle(ex, y + h - c.s(2.0), c.s(1.3), mix(ac, Rgba::rgb(255, 200, 90), 0.7).scale_a(200.0 * talk_alpha as f64));
-                }
-            }
-            StyleKind::Retro => {
-                // аркадная выделялка: угловые скобки-пиксели + пунктир снизу
-                buf.round_rect(x, y, w, h, radius, bg);
-                let t = c.s(3.0);
-                let arm = c.s(8.0);
-                let a2 = tpal.talk_outline.scale_a(210.0 * talk_alpha as f64);
-                buf.fill_rect(x, y, arm, t, a2);
-                buf.fill_rect(x, y, t, arm, a2);
-                buf.fill_rect(x + w - arm, y, arm, t, a2);
-                buf.fill_rect(x + w - t, y, t, arm, a2);
-                buf.fill_rect(x, y + h - t, arm, t, a2);
-                buf.fill_rect(x, y + h - arm, t, arm, a2);
-                buf.fill_rect(x + w - arm, y + h - t, arm, t, a2);
-                buf.fill_rect(x + w - t, y + h - arm, t, arm, a2);
-                let mut dx = x + c.s(10.0);
-                while dx < x + w - c.s(10.0) {
-                    buf.fill_rect(dx, y + h - c.s(2.2), c.s(3.0), c.s(2.0), a2);
-                    dx += c.s(5.5);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(130.0 * talk_alpha as f64), 1.4);
+                buf.stroke_round_rect(x - c.s(1.5), y - c.s(1.5), w + c.s(3.0), h + c.s(3.0), radius, tpal.talk_outline.scale_a(35.0 * talk_alpha as f64), 1.0);
+                let segs = 14;
+                let seg_w = w / segs as f32;
+                let pos = if c.anim { ((c.now / 2200.0) % 1.0) as f32 } else { 0.5 };
+                for i in 0..segs {
+                    let t = (i as f32 + 0.5) / segs as f32;
+                    let d = (t - pos).abs().min(1.0 - (t - pos).abs());
+                    let glow = (1.0 - d * 7.0).clamp(0.0, 1.0);
+                    if glow <= 0.0 {
+                        continue;
+                    }
+                    buf.fill_rect(x + seg_w * i as f32, y + h - c.s(3.2), seg_w + 1.0, c.s(3.2), mix(tpal.talk_outline, Rgba::rgb(255, 255, 255), (0.4 * glow) as f64).scale_a(((60.0 + 150.0 * glow as f64) * talk_alpha as f64) as f64));
                 }
             }
         }
@@ -1106,7 +1203,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if a.show_header {
         if !c.borderless {
         match c.sk {
-            StyleKind::Glass | StyleKind::Soft | StyleKind::Ice => {
+            StyleKind::Glass | StyleKind::Soft | StyleKind::Radiance => {
                 // accent wash (linear-gradient 115deg ≈ horizontal fade)
                 for i in 0..14 {
                     let t = i as f32 / 14.0;
@@ -1124,21 +1221,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 }
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
-            StyleKind::Neon | StyleKind::Cyber | StyleKind::Lava => {
+            StyleKind::Neon | StyleKind::Cyber | StyleKind::Plasma | StyleKind::Matrix => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(2, 3, 8).scale_a(90.0));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(150.0));
             }
-            StyleKind::Hud | StyleKind::Minimal => {
+            StyleKind::Hud | StyleKind::Minimal | StyleKind::Draft => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(0, 0, 0).scale_a(30.0));
                 buf.fill_rect(px, cy + header_h - 2.0, panel_w, 1.0, c.border(inp.pal.panel_border));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(90.0));
-            }
-            StyleKind::Crt | StyleKind::Retro => {
-                let mut dx = px;
-                while dx < px + panel_w - c.s(4.0) {
-                    buf.fill_rect(dx, cy + header_h - 1.0, c.s(6.0), 1.0, inp.pal.accent.scale_a(120.0));
-                    dx += c.s(12.0);
-                }
             }
         }
         }
@@ -1154,7 +1244,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if dot_glow {
             buf.stroke_circle(dot_x, dot_y, c.s(4.5) + c.s(2.0), dot_c.scale_a(120.0), c.s(3.0));
         }
-        if c.sk == StyleKind::Hud {
+        if c.sk == StyleKind::Hud || c.sk == StyleKind::Matrix {
             buf.round_rect(dot_x - c.s(4.0), dot_y - c.s(4.0), c.s(8.0), c.s(8.0), c.s(1.0), dot_c);
         } else {
             buf.circle(dot_x, dot_y, c.s(4.5), dot_c);
@@ -1329,12 +1419,31 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     // ---- style texture overlays (paint-only) ----
     if !c.borderless {
     match c.sk {
-        StyleKind::Crt | StyleKind::Retro => {
-            // phosphor scanlines
-            let mut yy = py + 1.0;
-            while yy < py + panel_h - 1.0 {
-                buf.fill_rect(px + 1.0, yy, panel_w - 2.0, 1.0, Rgba([0, 0, 0, 42]));
-                yy += c.s(3.0);
+        StyleKind::Draft => {
+            // миллиметровка: тонкая сетка
+            let step = c.s(16.0);
+            let mut gx = px + step;
+            while gx < px + panel_w - 1.0 {
+                buf.fill_rect(gx, py + 2.0, 1.0, panel_h - 4.0, inp.pal.accent.scale_a(7.0));
+                gx += step;
+            }
+            let mut gy = py + step;
+            while gy < py + panel_h - 1.0 {
+                buf.fill_rect(px + 2.0, gy, panel_w - 4.0, 1.0, inp.pal.accent.scale_a(7.0));
+                gy += step;
+            }
+        }
+        StyleKind::Matrix => {
+            // редкие узлы-точки (микросхема)
+            let step = c.s(30.0);
+            let mut gx = px + step;
+            while gx < px + panel_w - 2.0 {
+                let mut gy = py + step;
+                while gy < py + panel_h - 2.0 {
+                    buf.fill_rect(gx, gy, 1.5, 1.5, inp.pal.accent.scale_a(18.0));
+                    gy += step;
+                }
+                gx += step;
             }
         }
         StyleKind::Hud => {
@@ -1362,11 +1471,11 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 buf.fill_rect(cx0.min(cx0 + sx * th), cy0.min(cy0 + sy * ln), th, ln, col);
             }
         }
-        StyleKind::Neon | StyleKind::Cyber => {
+        StyleKind::Neon | StyleKind::Cyber | StyleKind::Plasma => {
             // inner glow frame
             buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
         }
-        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Ice | StyleKind::Lava => {}
+        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Radiance => {}
     }
     }
 
@@ -1380,6 +1489,24 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             } else if ry + row_h > scroll + content_h_total {
                 scroll_to = (ry + row_h - content_h_total).clamp(0.0, scroll_max);
             }
+        }
+    }
+
+    // «Кибер»: срезанные углы — контент не должен вылезать за их пределы
+    if c.sk == StyleKind::Cyber && !c.borderless {
+        let cut = c.s(12.0).min(panel_w * 0.25).min(panel_h * 0.25);
+        let n = cut.ceil().max(1.0);
+        let mut i = 0.0;
+        while i < n {
+            let dy = i + 0.5;
+            let ww = (cut - dy).max(0.0);
+            if ww > 0.0 {
+                clear_rect(&mut buf, px, py + dy, ww, 1.0);
+                clear_rect(&mut buf, px + panel_w - ww, py + dy, ww, 1.0);
+                clear_rect(&mut buf, px, py + panel_h - dy - 1.0, ww, 1.0);
+                clear_rect(&mut buf, px + panel_w - ww, py + panel_h - dy - 1.0, ww, 1.0);
+            }
+            i += 1.0;
         }
     }
 

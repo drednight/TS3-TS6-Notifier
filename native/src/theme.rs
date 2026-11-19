@@ -50,12 +50,12 @@ pub enum StyleKind {
     Neon,
     Hud,
     Soft,
-    Crt,
     Minimal,
     Cyber,
-    Ice,
-    Lava,
-    Retro,
+    Plasma,
+    Draft,
+    Matrix,
+    Radiance,
 }
 
 impl StyleKind {
@@ -64,17 +64,17 @@ impl StyleKind {
         ("neon", "Неон", "Neon"),
         ("hud", "Тактический", "Tactical"),
         ("soft", "Мягкий", "Soft"),
-        ("crt", "Кинескоп", "CRT"),
         ("minimal", "Минимал", "Minimal"),
         ("cyber", "Кибер", "Cyber"),
-        ("ice", "Лёд", "Ice"),
-        ("lava", "Лава", "Lava"),
-        ("retro", "Ретро", "Retro"),
+        ("plasma", "Плазма", "Plasma"),
+        ("draft", "Чертёж", "Draft"),
+        ("matrix", "Матрица", "Matrix"),
+        ("radiance", "Сияние", "Radiance"),
     ];
     /// Signature accent per style (applied when the style tile is clicked).
     pub const ACCENTS: [&str; 10] = [
-        "#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#4ade80",
-        "#e5e7eb", "#ff2fd6", "#38bdf8", "#ff5d3b", "#ffd166",
+        "#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#e5e7eb",
+        "#ff2fd6", "#8b5cf6", "#38bdf8", "#4ade80", "#ffd166",
     ];
 
     pub fn parse(s: &str) -> StyleKind {
@@ -82,12 +82,12 @@ impl StyleKind {
             "neon" => StyleKind::Neon,
             "hud" => StyleKind::Hud,
             "soft" => StyleKind::Soft,
-            "crt" => StyleKind::Crt,
             "minimal" => StyleKind::Minimal,
             "cyber" => StyleKind::Cyber,
-            "ice" => StyleKind::Ice,
-            "lava" => StyleKind::Lava,
-            "retro" => StyleKind::Retro,
+            "plasma" => StyleKind::Plasma,
+            "draft" => StyleKind::Draft,
+            "matrix" => StyleKind::Matrix,
+            "radiance" => StyleKind::Radiance,
             _ => StyleKind::Glass,
         }
     }
@@ -96,14 +96,14 @@ impl StyleKind {
         StyleKind::ALL[*self as usize].0
     }
 
-    /// Secondary accent (neon magenta, CRT amber) — otherwise the user accent.
+    /// Style signature whisper accent — otherwise the user accent.
     pub fn second(&self, accent: Rgba) -> Rgba {
         match self {
             StyleKind::Neon => Rgba::rgb(255, 47, 214),
-            StyleKind::Crt | StyleKind::Retro => Rgba::rgb(255, 176, 60),
             StyleKind::Cyber => Rgba::rgb(182, 255, 46),
-            StyleKind::Ice => Rgba::rgb(125, 249, 255),
-            StyleKind::Lava => Rgba::rgb(255, 140, 66),
+            StyleKind::Plasma => Rgba::rgb(196, 125, 255),
+            StyleKind::Matrix => Rgba::rgb(74, 222, 128),
+            StyleKind::Radiance => Rgba::rgb(255, 200, 87),
             _ => accent,
         }
     }
