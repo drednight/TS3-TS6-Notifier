@@ -344,7 +344,7 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             let per = 2.0 * (w + h);
             for k in 0..2 {
                 let head = if c.anim {
-                    ((((c.now / 2400.0) + k as f64 * 0.5) % 1.0) * per as f64) as f32
+                    ((((c.now / 1800.0) + k as f64 * 0.5) % 1.0) * per as f64) as f32
                 } else {
                     per * (0.13 + 0.5 * k as f32)
                 };
@@ -435,13 +435,13 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             // сияющий контур + бегущая волна света по верхней кромке
             buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(55.0), 1.2);
             buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, acc.scale_a(38.0), 1.0);
-            let segs = 22;
+            let segs = ((w / c.s(2.0)).ceil() as i32).clamp(24, 170);
             let seg_w = w / segs as f32;
-            let pos = if c.anim { ((c.now / 3200.0) % 1.0) as f32 } else { 0.5 };
+            let pos = if c.anim { ((c.now / 2300.0) % 1.0) as f32 } else { 0.5 };
             for i in 0..segs {
                 let t = (i as f32 + 0.5) / segs as f32;
                 let d = (t - pos).abs().min(1.0 - (t - pos).abs());
-                let glow = (1.0 - d * 6.0).clamp(0.0, 1.0);
+                let glow = (1.0 - d * 4.2).clamp(0.0, 1.0);
                 if glow <= 0.0 {
                     continue;
                 }
@@ -516,25 +516,6 @@ fn perimeter_point(x: f32, y: f32, w: f32, h: f32, p: f32) -> (f32, f32) {
         (x + w - (p - w - h), y + h)
     } else {
         (x, y + h - (p - 2.0 * w - h))
-    }
-}
-
-/// Clear a rect to full transparency («вырезание» срезанных углов рамки).
-fn clear_rect(buf: &mut Buf, x: f32, y: f32, w: f32, h: f32) {
-    let x0 = x.floor().max(0.0) as i32;
-    let y0 = y.floor().max(0.0) as i32;
-    let x1 = (x + w).ceil().min(buf.w as f32) as i32;
-    let y1 = (y + h).ceil().min(buf.h as f32) as i32;
-    for yy in y0..y1 {
-        for xx in x0..x1 {
-            let i = ((yy * buf.w + xx) * 4) as usize;
-            if i + 3 < buf.px.len() {
-                buf.px[i] = 0;
-                buf.px[i + 1] = 0;
-                buf.px[i + 2] = 0;
-                buf.px[i + 3] = 0;
-            }
-        }
     }
 }
 
@@ -817,7 +798,7 @@ fn draw_user_row(
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.8));
                 let per = 2.0 * (w + h);
                 let head = if c.anim {
-                    (((c.now / 1400.0) % 1.0) * per as f64) as f32
+                    (((c.now / 1100.0) % 1.0) * per as f64) as f32
                 } else {
                     per * 0.2
                 };
@@ -895,13 +876,13 @@ fn draw_user_row(
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(130.0 * talk_alpha as f64), 1.4);
                 buf.stroke_round_rect(x - c.s(1.5), y - c.s(1.5), w + c.s(3.0), h + c.s(3.0), radius, tpal.talk_outline.scale_a(35.0 * talk_alpha as f64), 1.0);
-                let segs = 14;
+                let segs = ((w / c.s(2.0)).ceil() as i32).clamp(20, 170);
                 let seg_w = w / segs as f32;
-                let pos = if c.anim { ((c.now / 2200.0) % 1.0) as f32 } else { 0.5 };
+                let pos = if c.anim { ((c.now / 1800.0) % 1.0) as f32 } else { 0.5 };
                 for i in 0..segs {
                     let t = (i as f32 + 0.5) / segs as f32;
                     let d = (t - pos).abs().min(1.0 - (t - pos).abs());
-                    let glow = (1.0 - d * 7.0).clamp(0.0, 1.0);
+                    let glow = (1.0 - d * 4.6).clamp(0.0, 1.0);
                     if glow <= 0.0 {
                         continue;
                     }
@@ -1489,24 +1470,6 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             } else if ry + row_h > scroll + content_h_total {
                 scroll_to = (ry + row_h - content_h_total).clamp(0.0, scroll_max);
             }
-        }
-    }
-
-    // «Кибер»: срезанные углы — контент не должен вылезать за их пределы
-    if c.sk == StyleKind::Cyber && !c.borderless {
-        let cut = c.s(12.0).min(panel_w * 0.25).min(panel_h * 0.25);
-        let n = cut.ceil().max(1.0);
-        let mut i = 0.0;
-        while i < n {
-            let dy = i + 0.5;
-            let ww = (cut - dy).max(0.0);
-            if ww > 0.0 {
-                clear_rect(&mut buf, px, py + dy, ww, 1.0);
-                clear_rect(&mut buf, px + panel_w - ww, py + dy, ww, 1.0);
-                clear_rect(&mut buf, px, py + panel_h - dy - 1.0, ww, 1.0);
-                clear_rect(&mut buf, px + panel_w - ww, py + panel_h - dy - 1.0, ww, 1.0);
-            }
-            i += 1.0;
         }
     }
 

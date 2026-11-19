@@ -546,9 +546,11 @@ impl Overlay {
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
 
         // ---- dirty check: an unchanged frame skips render + present ----
-        let anim_active = a.animations && (rows.iter().any(|u| u.talking) || !whisperers.is_empty());
+        let style_anim = a.style == "plasma" || a.style == "radiance";
+        let anim_active =
+            a.animations && (style_anim || rows.iter().any(|u| u.talking) || !whisperers.is_empty());
         let time_bucket = if anim_active {
-            now_ms / 33
+            now_ms / 16
         } else if !feed.is_empty() {
             now_ms / 500 // feed lines expire over time
         } else {
