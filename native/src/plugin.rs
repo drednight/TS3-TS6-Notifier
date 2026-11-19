@@ -6,7 +6,6 @@ use crate::chatlog::{sys_row, ChatLog};
 use crate::diag::diag;
 use crate::json::{obj, Json};
 use crate::model::{now_ms, ChatKind, ChatMessage, OverlayState, ServerGroup, UserState};
-use crate::ts3::Ts3Connector;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -215,12 +214,6 @@ fn handle_plugin_conn(
             continue;
         };
         if msg.get("e").map(|v| v.loose_str()).as_deref() == Some("ping") {
-            // Пинги не логируем (спам каждые 5 с), но рост очереди на стороне
-            // плагина — сигнал, что строки копятся (см. "q" в ping).
-            let backlog = msg.get("q").map(|v| v.loose_i64()).unwrap_or(0);
-            if backlog > 4 {
-                diag("plugin", &format!("plugin queue backlog: {backlog}"));
-            }
             continue;
         }
         diag("plugin", crate::diag::snip(trimmed, 240));
@@ -672,29 +665,6 @@ fn forward<T: Send + 'static>(
     });
 }
 
-fn ensure_query(
-    query_stop: &mut Option<Arc<AtomicBool>>,
-    evt_tx: &Sender<ConnEvent>,
-    host: &str,
-    port: i64,
-    api_key: &str,
-    stop: &Arc<AtomicBool>,
-) {
-    if query_stop.is_some() || stop.load(Ordering::SeqCst) {
-        return;
-    }
-    let qstop = Arc::new(AtomicBool::new(false));
-    *query_stop = Some(qstop.clone());
-    let tx = evt_tx.clone();
-    let host = host.to_string();
-    let api_key = api_key.to_string();
-    thread::spawn(move || {
-        Ts3Connector::run(host, port, api_key, qstop, move |st| {
-            let _ = tx.send(ConnEvent::QueryState(Box::new(st)));
-        });
-    });
-}
-
 #[allow(clippy::too_many_arguments)]
 fn machine_loop(
     evt_rx: Receiver<ConnEvent>,
@@ -707,12 +677,11 @@ fn machine_loop(
     stop: Arc<AtomicBool>,
     plugin_active: Arc<AtomicBool>,
 ) {
+    // ClientQuery отключён: параметры подключения к query не используются.
+    let _ = (evt_tx, host, port, api_key);
     let mut using_plugin = false;
     let mut plugin_state: Option<PluginState> = None;
     let mut last_snapshot_req: u64 = 0;
-    let mut hold_until: u64 = 0;
-    let mut query_live = false;
-    let mut query_stop: Option<Arc<AtomicBool>> = None;
 
     while !stop.load(Ordering::SeqCst) {
         let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else { continue };
@@ -721,11 +690,9 @@ fn machine_loop(
                 if !using_plugin {
                     using_plugin = true;
                     plugin_active.store(true, Ordering::SeqCst);
-                    if let Some(s) = query_stop.take() {
-                        s.store(true, Ordering::SeqCst);
-                    }
                     plugin_state = Some(PluginState::new(emit.clone()));
-                    println!("[ts3] plugin bridge active — ClientQuery connector paused");
+                    println!("[ts3] plugin bridge active");
+                    diag("plugin", "plugin link active");
                     bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
                     last_snapshot_req = now_ms();
                 }
@@ -746,41 +713,20 @@ fn machine_loop(
                 if using_plugin {
                     using_plugin = false;
                     plugin_active.store(false, Ordering::SeqCst);
-                    hold_until = now_ms() + 6000;
-                    query_live = false;
-                    println!("[ts3] plugin bridge idle — falling back to ClientQuery");
+                    println!("[ts3] plugin bridge idle — ждём плагин (ClientQuery отключён)");
+                    diag("plugin", "plugin link idle — waiting for plugin (clientquery disabled)");
                 }
-                ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
             }
             ConnEvent::FallbackTimer => {
-                if !using_plugin {
-                    ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
-                }
+                /* ClientQuery отключён (v2.0.27): источник данных — только плагин. */
             }
             ConnEvent::QueryState(st) => {
-                if using_plugin {
-                    continue;
-                }
-                if st.status == "live" {
-                    query_live = true;
-                }
-                if !query_live {
-                    if let Some(ps) = plugin_state.as_ref() {
-                        if now_ms() < hold_until {
-                            emit(ps.build_state());
-                            continue;
-                        }
-                    }
-                }
-                plugin_state = None;
-                emit(*st);
+                /* Недостижимо: ClientQuery-коннектор больше не запускается. */
+                let _ = st;
             }
         }
     }
     bridge.stop();
-    if let Some(s) = query_stop.take() {
-        s.store(true, Ordering::SeqCst);
-    }
 }
 
 #[cfg(test)]
