@@ -94,6 +94,15 @@ struct Ts3Session {
     talk_event_at: HashMap<i64, (u64, bool, bool)>,
     /// отложенные лёгкие refresh после подключения (~1.5 и ~4 с)
     refresh_followups: Vec<u64>,
+    /// до этого момента join/leave-строки не пишутся (всплеск при подключении)
+    join_quiet_until: u64,
+    /// следующий refresh — новая точка отсчёта (подключение / смена сервера)
+    baseline_pending: bool,
+    /// сколько notify-строк получено за сессию (доходят ли события вообще)
+    events_seen: u64,
+    events_stat_base: u64,
+    /// когда в следующий раз перепроверить регистрацию на события
+    notify_recheck_at: u64,
     refresh_pending_at: u64,
     refresh_heavy: bool,
     refresh_first_at: u64,
@@ -159,6 +168,7 @@ impl Ts3Session {
     /* ---------------- event handling ---------------- */
 
     fn handle_event(&mut self, line: &str) {
+        self.events_seen += 1;
         let space = line.find(' ').unwrap_or(line.len());
         let name = &line[..space];
         // diagnostics: talk flaps sampled 1-in-10
@@ -404,6 +414,15 @@ impl Ts3Session {
                 if f_has(&fields, "client_away_message") {
                     u.away_message = f_str(&fields, "client_away_message");
                 }
+                if f_has(&fields, "client_input_hardware") && !f_bool(&fields, "client_input_hardware") {
+                    u.input_muted = true;
+                }
+                if f_has(&fields, "client_output_hardware") && !f_bool(&fields, "client_output_hardware") {
+                    u.output_muted = true;
+                }
+                if f_has(&fields, "client_outputonly_muted") && f_bool(&fields, "client_outputonly_muted") {
+                    u.output_muted = true;
+                }
                 if f_has(&fields, "client_flag_talking") {
                     u.talking = f_bool(&fields, "client_flag_talking");
                 }
@@ -426,7 +445,8 @@ impl Ts3Session {
                     }
                 }
                 self.clients.insert(clid, u);
-                if is_new && !nick.is_empty() && !is_query && clid != self.own_clid {
+                let quiet = now_ms() < self.join_quiet_until;
+                if is_new && !quiet && !nick.is_empty() && !is_query && clid != self.own_clid {
                     let in_our = ctid > 0 && ctid == self.own_cid;
                     let detail = if in_our { self.channels.get(&ctid).map(|c| c.name.clone()).unwrap_or_default() } else { String::new() };
                     self.push_chat(sys_row(&clid.to_string(), &nick, &nick, "join", &detail, in_our));
@@ -457,6 +477,9 @@ impl Ts3Session {
             }
             "notifyconnectstatuschange" => {
                 if in_scope {
+                    // новое подключение: всплеск enterview/диффов — не новости
+                    self.join_quiet_until = now_ms() + 5000;
+                    self.baseline_pending = true;
                     self.schedule_refresh(true);
                     // Ревью 2026-11 (v2.0.32): список клиентов дозаполняется
                     // после подключения — два лёгких догоняющих refresh.
@@ -475,6 +498,8 @@ impl Ts3Session {
                 let hid = f_int(&fields, "schandlerid");
                 if hid > 0 && hid != self.active_schandler_id {
                     self.active_schandler_id = hid;
+                    self.join_quiet_until = now_ms() + 5000;
+                    self.baseline_pending = true;
                     self.schedule_refresh(true);
                 }
             }
@@ -508,12 +533,14 @@ impl Ts3Session {
                 diag(
                     "ts3",
                     &format!(
-                        "refresh: {} calls/min ({} heavy), total {} ms, max {} ms",
-                        self.refresh_stat_calls, self.refresh_stat_heavy, self.refresh_stat_ms, self.refresh_stat_max
+                        "refresh: {} calls/min ({} heavy), total {} ms, max {} ms, notify events {}",
+                        self.refresh_stat_calls, self.refresh_stat_heavy, self.refresh_stat_ms, self.refresh_stat_max,
+                        self.events_seen.saturating_sub(self.events_stat_base)
                     ),
                 );
             }
             self.refresh_stat_at = now;
+            self.events_stat_base = self.events_seen;
             self.refresh_stat_calls = 0;
             self.refresh_stat_heavy = 0;
             self.refresh_stat_ms = 0;
@@ -545,6 +572,21 @@ impl ChatMessage {
 
 /* ---------------- connection plumbing ---------------- */
 
+/// ClientQuery завершает строки парой "\n\r" (не "\r\n"): read_line режет по
+/// '\n', поэтому КАЖДАЯ следующая строка приходит с ведущим '\r'. Без обрезки
+/// с обеих сторон `starts_with("notify")` не срабатывал, и все события
+/// молча терялись — оставался только опрос раз в 15 с.
+fn clean_line(raw: &str) -> String {
+    raw.trim_matches(|c| c == '\r' || c == '\n').to_string()
+}
+
+/// Писать ли в ленту join/leave по разнице снимков: не на первом снимке, не
+/// при смене сервера/клиента, не в «тихом окне» после подключения и не при
+/// массовом изменении (flood-правило v1.4.7, как в plugin.rs).
+fn diff_announce_allowed(announced_once: bool, baseline: bool, quiet: bool, mass: bool) -> bool {
+    announced_once && !baseline && !quiet && !mass
+}
+
 struct Link {
     stream: TcpStream,
     lines: Receiver<String>,
@@ -572,7 +614,7 @@ fn open_link(host: &str, port: i64) -> Result<Link, String> {
                     if line.len() > 1_000_000 {
                         break;
                     }
-                    let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
+                    let trimmed = clean_line(&line);
                     if tx.send(trimmed).is_err() {
                         break;
                     }
@@ -683,6 +725,31 @@ impl Ts3Session {
         }
     }
 
+    /// Регистрация на события ClientQuery. Раньше ответ с ошибкой молча
+    /// игнорировался (проверялась только доставка команды).
+    fn register_notifications(&mut self, link: &mut Link) -> Result<(), String> {
+        let res = self.command(link, "clientnotifyregister schandlerid=0 event=any", 2500)?;
+        if res.error_id == 0 {
+            diag("ts3", "clientnotifyregister schandlerid=0 event=any: ok");
+            return Ok(());
+        }
+        diag(
+            "ts3",
+            &format!("clientnotifyregister schandlerid=0 failed: id={} msg={}", res.error_id, res.error_message),
+        );
+        // запасной путь: каждая вкладка отдельно
+        let list = self.safe(link, "serverconnectionhandlerlist", 2500);
+        let mut ids: Vec<i64> = list.items.iter().map(|i| f_int(i, "schandlerid")).filter(|n| *n > 0).collect();
+        if ids.is_empty() {
+            ids.push(1);
+        }
+        for hid in ids {
+            let r = self.safe(link, &format!("clientnotifyregister schandlerid={hid} event=any"), 2500);
+            diag("ts3", &format!("clientnotifyregister schandlerid={hid}: id={}", r.error_id));
+        }
+        Ok(())
+    }
+
     fn find_active_handler(&mut self, link: &mut Link) {
         // Ревью 2026-11 (v2.0.32): один запрос currentschandlerid вместо
         // обхода всех вкладок (по 3–4 запроса на каждую), как в референсе.
@@ -766,14 +833,22 @@ impl Ts3Session {
             return;
         }
         let self_item = who.items[0].clone();
+        let prev_own_clid = self.own_clid;
         self.own_clid = f_int(&self_item, "clid");
         self.own_cid = f_int(&self_item, "cid");
+        // другой клиент/сервер или первый успех после offline — новая точка
+        // отсчёта: список людей «появляется» целиком, это не события входа
+        let mut baseline = std::mem::take(&mut self.baseline_pending) || prev_own_clid != self.own_clid;
         self.own_clid_by_handler.insert(self.active_schandler_id, self.own_clid);
 
         if heavy {
             let server = self.safe(link, "servervariable virtualserver_name", 2500);
             if let Some(item) = server.items.first() {
-                self.server_name = f_str(item, "virtualserver_name");
+                let name = f_str(item, "virtualserver_name");
+                if !self.server_name.is_empty() && !name.is_empty() && name != self.server_name {
+                    baseline = true;
+                }
+                self.server_name = name;
             }
 
             let ch_res = self.safe(link, "channellist", 3000);
@@ -857,7 +932,17 @@ impl Ts3Session {
         }
 
         // diff-announce missed joins/leaves (after the first silent baseline)
-        if self.announced_once {
+        if baseline {
+            self.join_quiet_until = now_ms() + 5000;
+        }
+        // flood-правило: массовое изменение списка и всплеск сразу после
+        // подключения — не новости входа/выхода
+        let added_n = clients.keys().copied().filter(|id| !self.clients.contains_key(id)).count();
+        let removed_n = self.clients.keys().copied().filter(|id| !clients.contains_key(id)).count();
+        let mass_limit = 5f64.max(self.clients.len() as f64 * 0.3);
+        let mass = (added_n as f64) > mass_limit || (removed_n as f64) > mass_limit;
+        let announce = diff_announce_allowed(self.announced_once, baseline, now_ms() < self.join_quiet_until, mass);
+        if announce {
             for (id, u) in &clients {
                 if self.clients.contains_key(id) || u.is_query || u.is_self || u.nickname.is_empty() {
                     continue;
@@ -966,10 +1051,14 @@ impl Ts3Session {
             );
         }
 
-        self.command(link, "clientnotifyregister schandlerid=0 event=any", 2500)?;
+        self.events_seen = 0;
+        self.events_stat_base = 0;
+        self.join_quiet_until = now_ms() + 5000;
+        self.register_notifications(link)?;
         self.find_active_handler(link);
         self.full_refresh(link);
         self.refresh_fails = 0;
+        self.notify_recheck_at = now_ms() + 45_000;
 
         // event + timer loop
         let mut next_refresh = now_ms() + 15_000; // лёгкая страховка (15 с)
@@ -1009,6 +1098,14 @@ impl Ts3Session {
             if now >= next_keepalive {
                 next_keepalive = now + 20_000;
                 self.safe(link, "version", 2500);
+            }
+            // страховка регистрации: ни одного notify-события за сессию —
+            // регистрируемся заново (раз в минуту) и пишем это в диагностику
+            if self.events_seen == 0 && self.cur_status == "live" && now >= self.notify_recheck_at {
+                self.notify_recheck_at = now + 60_000;
+                let hid = self.active_schandler_id;
+                let r = self.safe(link, &format!("clientnotifyregister schandlerid={hid} event=any"), 2500);
+                diag("ts3", &format!("no notify events yet - re-register schandlerid={hid}: id={}", r.error_id));
             }
             match link.lines.recv_timeout(Duration::from_millis(100)) {
                 Ok(line) => {
@@ -1060,6 +1157,11 @@ impl Ts3Connector {
             talk_diag_skipped: 0,
             talk_event_at: HashMap::new(),
             refresh_followups: Vec::new(),
+            join_quiet_until: 0,
+            baseline_pending: false,
+            events_seen: 0,
+            events_stat_base: 0,
+            notify_recheck_at: 0,
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1139,6 +1241,11 @@ mod tests {
             talk_diag_skipped: 0,
             talk_event_at: HashMap::new(),
             refresh_followups: Vec::new(),
+            join_quiet_until: 0,
+            baseline_pending: false,
+            events_seen: 0,
+            events_stat_base: 0,
+            notify_recheck_at: 0,
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1266,5 +1373,111 @@ mod tests {
         assert!(s.refresh_pending_at > 0);
         s.schedule_refresh(true);
         assert!(s.refresh_heavy, "heavy sticks while pending");
+    }
+
+    /// Строки ClientQuery заканчиваются на "\n\r": после read_line следующая
+    /// строка начинается с '\r'. Регрессия «события не обрабатывались».
+    #[test]
+    fn clean_line_strips_leading_cr() {
+        assert_eq!(clean_line("\rnotifytalkstatuschange clid=1 status=1\n"), "notifytalkstatuschange clid=1 status=1");
+        assert_eq!(clean_line("\rerror id=0 msg=ok\n"), "error id=0 msg=ok");
+        assert_eq!(clean_line("TS3 Client\n"), "TS3 Client");
+        let pieces = split_glued(&clean_line("\rerror id=0 msg=ok\n"));
+        assert_eq!(pieces, vec!["error id=0 msg=ok".to_string()]);
+    }
+
+    /// enterview в «тихом окне» после подключения создаёт клиента, но не пишет join.
+    #[test]
+    fn enterview_is_silent_during_connect_burst() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.join_quiet_until = now_ms() + 10_000;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0");
+        assert!(s.clients.contains_key(&5), "user is created");
+        assert!(!s.chat.rows().iter().any(|c| c.event == Some("join")), "no join row in the quiet window");
+        s.join_quiet_until = 0;
+        s.handle_event("notifycliententerview clid=6 ctid=3 client_nickname=Bravo client_type=0");
+        assert!(
+            s.chat.rows().iter().any(|c| c.event == Some("join") && c.nickname == "Bravo"),
+            "join row after the window"
+        );
+    }
+
+    #[test]
+    fn diff_announce_rules() {
+        assert!(diff_announce_allowed(true, false, false, false));
+        assert!(!diff_announce_allowed(false, false, false, false), "first snapshot is a silent baseline");
+        assert!(!diff_announce_allowed(true, true, false, false), "server/client change is a new baseline");
+        assert!(!diff_announce_allowed(true, false, true, false), "quiet window after connect");
+        assert!(!diff_announce_allowed(true, false, false, true), "mass change is not news");
+    }
+
+    /// Hardware-флаги из enterview попадают в mute-бейджи сразу.
+    #[test]
+    fn enterview_folds_hardware_flags() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0 client_input_hardware=0 client_output_hardware=1");
+        let u = s.clients.get(&5).unwrap();
+        assert!(u.input_muted && !u.output_muted);
+    }
+
+    /// Сквозная регрессия: фальшивый ClientQuery с настоящими терминаторами
+    /// "\n\r" шлёт notifytalkstatuschange — говорящий должен засветиться
+    /// сразу, а не через опрос раз в 15 с.
+    #[test]
+    fn talk_event_over_nr_wire_reaches_state() {
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port() as i64;
+        thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let reader = BufReader::new(sock.try_clone().unwrap());
+            let _ = sock.write_all(
+                b"TS3 Client\n\rWelcome to the TeamSpeak 3 ClientQuery interface\n\rselected schandlerid=1\n\r",
+            );
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let cmd = line.trim().to_string();
+                let name = cmd.split(' ').next().unwrap_or("");
+                let body = match name {
+                    "whoami" => "clid=5 cid=3\n\r",
+                    "currentschandlerid" => "schandlerid=1\n\r",
+                    "servervariable" => "virtualserver_name=Srv\n\r",
+                    "channellist" => "cid=3 pid=0 channel_name=Home\n\r",
+                    "clientlist" => "clid=5 cid=3 client_nickname=Me client_type=0 client_flag_talking=0|clid=6 cid=3 client_nickname=Bob client_type=0 client_flag_talking=0\n\r",
+                    "servergrouplist" => "sgid=1 name=Admin iconid=0\n\r",
+                    _ => "",
+                };
+                if sock.write_all(format!("{body}error id=0 msg=ok\n\r").as_bytes()).is_err() {
+                    break;
+                }
+                if name == "servergrouplist" {
+                    thread::sleep(Duration::from_millis(200));
+                    let _ = sock.write_all(b"notifytalkstatuschange schandlerid=1 status=1 isreceivedwhisper=0 clid=6\n\r");
+                }
+            }
+        });
+        let states: Arc<Mutex<Vec<OverlayState>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = states.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        thread::spawn(move || {
+            Ts3Connector::run("127.0.0.1".to_string(), port, "k".to_string(), stop2, move |st| {
+                sink.lock().unwrap().push(st);
+            });
+        });
+        let mut seen = false;
+        for _ in 0..80 {
+            thread::sleep(Duration::from_millis(50));
+            let all = states.lock().unwrap();
+            if all.iter().any(|st| st.users.iter().any(|u| u.nickname == "Bob" && u.talking)) {
+                seen = true;
+                break;
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        assert!(seen, "notifytalkstatuschange must light up Bob within 4 s (wire lines end with \\n\\r)");
     }
 }

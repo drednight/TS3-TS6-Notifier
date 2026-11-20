@@ -1301,11 +1301,10 @@ pub(crate) mod win32 {
     static KEYS: std::sync::Mutex<Vec<Ev>> = std::sync::Mutex::new(Vec::new());
     const WHEEL_TTL_MS: u64 = 1500;
 
+    /// Монотонное время (как now_ms во всём приложении): скачок системных
+    /// часов не должен ни выбрасывать, ни «залипать» события колеса.
     fn wheel_now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
+        crate::model::now_ms()
     }
 
     unsafe extern "system" fn mouse_ll_proc(code: i32, w: usize, l: isize) -> isize {
