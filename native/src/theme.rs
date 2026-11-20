@@ -53,46 +53,51 @@ pub fn parse_color(s: &str) -> Rgba {
 /// стандартных стиля (спокойная половина каталога пополнилась).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleKind {
-    Glass,
+    // «Спокойные» (CALM_COUNT первых в ALL) — без постоянной анимации
     Soft,
-    Minimal,
+    Flat,
+    Classic,
     Cyber,
     Chip,
     Draft,
-    Flat,
-    Classic,
+    // «Анимированные»
+    Glass,
+    Minimal,
     Neon,
     Hud,
     Plasma,
     Radiance,
     Matrix,
     Radar,
+    Aurora,
 }
 
 impl StyleKind {
     /// Number of leading «спокойные» styles in `ALL` (picker grouping).
-    pub const CALM_COUNT: usize = 8;
-    pub const ALL: [(&str, &str, &str); 14] = [
-        ("glass", "Стекло", "Glass"),
+    pub const CALM_COUNT: usize = 6;
+    pub const ALL: [(&str, &str, &str); 15] = [
         ("soft", "Мягкий", "Soft"),
-        ("minimal", "Минимал", "Minimal"),
+        ("flat", "Плоский", "Flat"),
+        ("classic", "Классика", "Classic"),
         ("cyber", "Кибер", "Cyber"),
         ("chip", "Плата", "Circuit"),
         ("draft", "Чертёж", "Draft"),
-        ("flat", "Плоский", "Flat"),
-        ("classic", "Классика", "Classic"),
+        ("glass", "Стекло", "Glass"),
+        ("minimal", "Минимал", "Minimal"),
         ("neon", "Неон", "Neon"),
         ("hud", "Тактический", "Tactical"),
         ("plasma", "Плазма", "Plasma"),
         ("radiance", "Сияние", "Radiance"),
         ("matrix", "Матрица", "Matrix"),
         ("radar", "Радар", "Radar"),
+        ("aurora", "Аврора", "Aurora"),
     ];
     /// Signature accent per style (applied when the style tile is clicked).
-    pub const ACCENTS: [&str; 14] = [
-        "#7c6cff", "#c084fc", "#e5e7eb", "#ff2fd6", "#38bdf8", "#93c5fd",
-        "#cbd5e1", "#94a3b8",
+    pub const ACCENTS: [&str; 15] = [
+        "#c084fc", "#cbd5e1", "#94a3b8", "#ff2fd6", "#38bdf8", "#93c5fd",
+        "#7c6cff", "#e5e7eb",
         "#22d3ee", "#f59e0b", "#8b5cf6", "#ffd166", "#4ade80", "#34d399",
+        "#2dd4bf",
     ];
 
     pub fn parse(s: &str) -> StyleKind {
@@ -110,6 +115,7 @@ impl StyleKind {
             "matrix" => StyleKind::Matrix,
             "radar" => StyleKind::Radar,
             "radiance" => StyleKind::Radiance,
+            "aurora" => StyleKind::Aurora,
             _ => StyleKind::Glass,
         }
     }
@@ -132,14 +138,15 @@ impl StyleKind {
                 | StyleKind::Radiance
                 | StyleKind::Matrix
                 | StyleKind::Radar
+                | StyleKind::Aurora
         )
     }
 
     /// One-line picker hint (what the style actually looks like).
     pub fn desc(&self, ru: bool) -> &'static str {
         match (self, ru) {
-            (StyleKind::Glass, true) => "стекло, блик по контуру",
-            (StyleKind::Glass, false) => "glass with a light sweep",
+            (StyleKind::Glass, true) => "стекло, скользящий блик",
+            (StyleKind::Glass, false) => "glass with a drifting sheen",
             (StyleKind::Soft, true) => "мягкие кромки, тихое дыхание",
             (StyleKind::Soft, false) => "soft edges, quiet breathing",
             (StyleKind::Minimal, true) => "почти без рамки, бегущий огонёк",
@@ -160,12 +167,14 @@ impl StyleKind {
             (StyleKind::Hud, false) => "tactical stencil and scan",
             (StyleKind::Plasma, true) => "орбитальные кометы по рамке",
             (StyleKind::Plasma, false) => "orbiting comets on the frame",
-            (StyleKind::Radiance, true) => "сияющая волна по кромке",
-            (StyleKind::Radiance, false) => "shimmering wave along the edge",
+            (StyleKind::Radiance, true) => "волна света по контуру рамки",
+            (StyleKind::Radiance, false) => "light wave around the frame",
             (StyleKind::Matrix, true) => "цифровой дождь, цифры у говорящего",
             (StyleKind::Matrix, false) => "digital rain, glyphs on the speaker",
-            (StyleKind::Radar, true) => "радар: развёртка и блипы у говорящих",
-            (StyleKind::Radar, false) => "radar sweep with blips on speakers",
+            (StyleKind::Radar, true) => "радар: вращающийся луч и блипы у говорящих",
+            (StyleKind::Radar, false) => "radar beam with blips on speakers",
+            (StyleKind::Aurora, true) => "северное сияние: плывущие ленты света",
+            (StyleKind::Aurora, false) => "aurora: drifting ribbons of light",
         }
     }
 
