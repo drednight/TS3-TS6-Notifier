@@ -90,9 +90,11 @@ struct Ts3Session {
     refresh_fails: i32,
     talk_diag_skipped: i32,
     refresh_pending_at: u64,
+    refresh_heavy: bool,
     refresh_first_at: u64,
     refresh_stat_at: u64,
     refresh_stat_calls: u32,
+    refresh_stat_heavy: u32,
     refresh_stat_ms: u64,
     refresh_stat_max: u64,
     whispers: Arc<crate::model::WhisperBook>,
@@ -176,7 +178,7 @@ impl Ts3Session {
                 if !in_scope {
                     if talking && schandlerid > 0 && self.own_clid_by_handler.get(&schandlerid) == Some(&clid) {
                         self.active_schandler_id = schandlerid;
-                        self.schedule_refresh();
+                        self.schedule_refresh(true);
                     }
                     return;
                 }
@@ -195,7 +197,7 @@ impl Ts3Session {
                     u.talking = true;
                     u.whispering = whisper;
                     self.clients.insert(clid, u);
-                    self.schedule_refresh();
+                    self.schedule_refresh(false);
                     self.emit_state();
                 }
                 // A whisper may come from another channel — note it even when
@@ -302,19 +304,24 @@ impl Ts3Session {
                 let clid = f_int(&fields, "clid");
                 let to = f_int(&fields, "ctid");
                 let Some(user) = self.clients.get(&clid).cloned() else {
-                    self.schedule_refresh();
+                    self.schedule_refresh(false);
                     return;
                 };
                 let detail = self.channels.get(&to).map(|c| c.name.clone()).unwrap_or_default();
+                let from = user.channel_id;
                 if user.is_self {
                     self.own_cid = to;
                     self.push_chat(sys_row(&clid.to_string(), &user.nickname, &user.nickname, "move", &detail, true));
                 } else if !user.is_query && clid != self.own_clid {
                     // v1.3.1: every move on the server
-                    let own = to == self.own_cid || user.channel_id == self.own_cid;
+                    let own = to == self.own_cid || from == self.own_cid;
                     self.push_chat(sys_row(&clid.to_string(), &user.nickname, &user.nickname, "move", &detail, own));
                 }
-                self.schedule_refresh();
+                // Рецензия 2026-11: move обновляем локально, refresh не нужен.
+                if let Some(u) = self.clients.get_mut(&clid) {
+                    u.channel_id = to;
+                }
+                self.emit_state();
             }
             "notifyclientleftview" => {
                 if !in_scope {
@@ -338,7 +345,6 @@ impl Ts3Session {
                 if self.clients.remove(&clid).is_some() {
                     self.emit_state();
                 }
-                self.schedule_refresh();
             }
             "notifycliententerview" => {
                 if !in_scope {
@@ -347,13 +353,63 @@ impl Ts3Session {
                 let clid = f_int(&fields, "clid");
                 let nick = f_str(&fields, "client_nickname");
                 let is_query = f_int(&fields, "client_type") == 1;
-                if !nick.is_empty() && !is_query && clid != self.own_clid {
-                    let ctid = f_int(&fields, "ctid");
+                let ctid = f_int(&fields, "ctid");
+                // Рецензия 2026-11: enterview несёт достаточно полей — клиент
+                // создаётся/обновляется локально, без тяжёлого refresh.
+                let is_new = !self.clients.contains_key(&clid);
+                let mut u = self
+                    .clients
+                    .get(&clid)
+                    .cloned()
+                    .unwrap_or_else(|| UserState::new(clid.to_string(), nick.clone()));
+                if !nick.is_empty() {
+                    u.nickname = nick.clone();
+                }
+                if ctid > 0 {
+                    u.channel_id = ctid;
+                }
+                u.is_query = is_query;
+                u.is_self = clid == self.own_clid;
+                if f_has(&fields, "client_input_muted") || f_has(&fields, "client_is_muted") {
+                    u.input_muted = f_bool(&fields, "client_input_muted") || f_bool(&fields, "client_is_muted");
+                }
+                if f_has(&fields, "client_output_muted") {
+                    u.output_muted = f_bool(&fields, "client_output_muted");
+                }
+                if f_has(&fields, "client_away") {
+                    u.away = f_bool(&fields, "client_away");
+                }
+                if f_has(&fields, "client_away_message") {
+                    u.away_message = f_str(&fields, "client_away_message");
+                }
+                if f_has(&fields, "client_flag_talking") {
+                    u.talking = f_bool(&fields, "client_flag_talking");
+                }
+                if f_has(&fields, "client_is_priority_speaker") {
+                    u.priority_speaker = f_bool(&fields, "client_is_priority_speaker");
+                }
+                if f_has(&fields, "client_is_channel_commander") {
+                    u.channel_commander = f_bool(&fields, "client_is_channel_commander");
+                }
+                if f_has(&fields, "client_servergroups") {
+                    let sg = f_str(&fields, "client_servergroups");
+                    if !sg.is_empty() {
+                        u.server_groups = sg;
+                    }
+                }
+                if f_has(&fields, "client_flag_avatar") {
+                    let hash = f_str(&fields, "client_flag_avatar");
+                    if !hash.is_empty() {
+                        u.avatar_hash = hash;
+                    }
+                }
+                self.clients.insert(clid, u);
+                if is_new && !nick.is_empty() && !is_query && clid != self.own_clid {
                     let in_our = ctid > 0 && ctid == self.own_cid;
                     let detail = if in_our { self.channels.get(&ctid).map(|c| c.name.clone()).unwrap_or_default() } else { String::new() };
                     self.push_chat(sys_row(&clid.to_string(), &nick, &nick, "join", &detail, in_our));
                 }
-                self.schedule_refresh();
+                self.emit_state();
             }
             "notifyclientpoke" => {
                 if !in_scope {
@@ -380,14 +436,14 @@ impl Ts3Session {
             "notifychannelcreated" | "notifychanneledited" | "notifychanneldeleted" | "notifychannelmoved"
             | "notifyserverupdated" | "notifyserveredited" | "notifyconnectstatuschange" => {
                 if in_scope {
-                    self.schedule_refresh();
+                    self.schedule_refresh(true);
                 }
             }
             "notifycurrentserverconnectionchanged" => {
                 let hid = f_int(&fields, "schandlerid");
                 if hid > 0 && hid != self.active_schandler_id {
                     self.active_schandler_id = hid;
-                    self.schedule_refresh();
+                    self.schedule_refresh(true);
                 }
             }
             _ => {}
@@ -395,8 +451,9 @@ impl Ts3Session {
     }
 
     /// Замер длительности full_refresh'ей + строка в диагностику раз в минуту.
-    fn note_refresh_stats(&mut self, dt: u64) {
+    fn note_refresh_stats(&mut self, dt: u64, heavy: bool) {
         self.refresh_stat_calls += 1;
+        self.refresh_stat_heavy += if heavy { 1 } else { 0 };
         self.refresh_stat_ms += dt;
         self.refresh_stat_max = self.refresh_stat_max.max(dt);
         let now = now_ms();
@@ -405,26 +462,28 @@ impl Ts3Session {
                 diag(
                     "ts3",
                     &format!(
-                        "refresh: {} calls/min, total {} ms, max {} ms",
-                        self.refresh_stat_calls, self.refresh_stat_ms, self.refresh_stat_max
+                        "refresh: {} calls/min ({} heavy), total {} ms, max {} ms",
+                        self.refresh_stat_calls, self.refresh_stat_heavy, self.refresh_stat_ms, self.refresh_stat_max
                     ),
                 );
             }
             self.refresh_stat_at = now;
             self.refresh_stat_calls = 0;
+            self.refresh_stat_heavy = 0;
             self.refresh_stat_ms = 0;
             self.refresh_stat_max = 0;
         }
     }
 
-    fn schedule_refresh(&mut self) {
+    /// Поставить refresh в очередь. `heavy` = полный набор (channellist,
+    /// группы, сервер, аватары новых); иначе — лёгкий (use/whoami/clientlist).
+    /// Дебаунс без голодания: шаг 250 мс, но не позже 1.5 с от ПЕРВОГО события.
+    fn schedule_refresh(&mut self, heavy: bool) {
         let now = now_ms();
         if self.refresh_pending_at == 0 {
             self.refresh_first_at = now;
         }
-        // Рецензия 2026-11: старый дебаунс голодал — каждое событие сдвигало
-        // refresh на +600 мс, и при плотном потоке он не наступал никогда.
-        // Теперь: шаг 250 мс, но не позже 1.5 с от ПЕРВОГО события пачки.
+        self.refresh_heavy |= heavy;
         self.refresh_pending_at = (now + 250).min(self.refresh_first_at + 1500);
     }
 }
@@ -612,7 +671,22 @@ impl Ts3Session {
         self.safe(link, &format!("use schandlerid={fallback}"), 2500);
     }
 
+    /// Лёгкий refresh: ровно то, что нужно, чтобы показать людей.
+    fn light_refresh(&mut self, link: &mut Link) {
+        self.refresh(link, false);
+    }
+
+    /// Тяжёлый refresh: полный набор (channellist, группы, сервер, аватары).
     fn full_refresh(&mut self, link: &mut Link) {
+        self.refresh(link, true);
+    }
+
+    /// Сплит light/heavy (ревью 2026-11, пункты 1–2):
+    ///  * light — use/whoami/clientlist -voice -away, этого хватает для ростера;
+    ///  * heavy — дополнительно servervariable/channellist/-groups/аватары
+    ///    новых клиентов/servergrouplist: на старте, по событиям channel*/
+    ///    server* и раз в несколько минут.
+    fn refresh(&mut self, link: &mut Link, heavy: bool) {
         if self.stop.load(Ordering::SeqCst) {
             return;
         }
@@ -631,8 +705,8 @@ impl Ts3Session {
             self.publish("offline", "not connected to a TeamSpeak server");
             // Рецензия 2026-11: раньше повтор случался только по событию или
             // через 45 с — «offline» мог висеть минутами. Пробуем снова быстро.
-            self.schedule_refresh();
-            self.note_refresh_stats(now_ms().saturating_sub(t0));
+            self.schedule_refresh(false);
+            self.note_refresh_stats(now_ms().saturating_sub(t0), heavy);
             return;
         }
         let self_item = who.items[0].clone();
@@ -640,25 +714,34 @@ impl Ts3Session {
         self.own_cid = f_int(&self_item, "cid");
         self.own_clid_by_handler.insert(self.active_schandler_id, self.own_clid);
 
-        let server = self.safe(link, "servervariable virtualserver_name", 2500);
-        if let Some(item) = server.items.first() {
-            self.server_name = f_str(item, "virtualserver_name");
-        }
-
-        let ch_res = self.safe(link, "channellist", 3000);
-        self.channels.clear();
-        for item in &ch_res.items {
-            let id = f_int(item, "cid");
-            if id <= 0 {
-                continue;
+        if heavy {
+            let server = self.safe(link, "servervariable virtualserver_name", 2500);
+            if let Some(item) = server.items.first() {
+                self.server_name = f_str(item, "virtualserver_name");
             }
-            self.channels.insert(id, ChannelInfo { id, parent_id: f_int(item, "pid"), name: f_str(item, "channel_name") });
+
+            let ch_res = self.safe(link, "channellist", 3000);
+            self.channels.clear();
+            for item in &ch_res.items {
+                let id = f_int(item, "cid");
+                if id <= 0 {
+                    continue;
+                }
+                self.channels.insert(id, ChannelInfo { id, parent_id: f_int(item, "pid"), name: f_str(item, "channel_name") });
+            }
         }
 
-        let mut cl_res = self.safe(link, "clientlist -uid -away -voice -groups", 3000);
-        if cl_res.error_id != 0 {
-            cl_res = self.safe(link, "clientlist -uid -away -voice", 3000);
-        }
+        // light: только голос/отсутствие — ровно то, что светится в ростере.
+        let cl_res = if heavy {
+            let r = self.safe(link, "clientlist -uid -away -voice -groups", 3000);
+            if r.error_id != 0 {
+                self.safe(link, "clientlist -uid -away -voice", 3000)
+            } else {
+                r
+            }
+        } else {
+            self.safe(link, "clientlist -voice -away", 3000)
+        };
 
         let mut clients = HashMap::new();
         for item in &cl_res.items {
@@ -689,11 +772,31 @@ impl Ts3Session {
                 // клиентов; старый снимок не должен их откатывать.
                 u.talking = prev_u.talking;
                 u.whispering = prev_u.whispering;
+                // light-запрос не тянет -groups/аватары — переносим из прежнего
+                // состояния, чтобы иконки не гасли между heavy-refresh'ами.
+                if !f_has(item, "client_servergroups") || u.server_groups.is_empty() {
+                    u.server_groups = prev_u.server_groups.clone();
+                }
+                if !f_has(item, "client_is_priority_speaker") {
+                    u.priority_speaker = prev_u.priority_speaker;
+                }
+                if !f_has(item, "client_is_channel_commander") {
+                    u.channel_commander = prev_u.channel_commander;
+                }
+                if !f_has(item, "client_away_message") {
+                    u.away_message = prev_u.away_message.clone();
+                }
+                u.avatar_hash = prev_u.avatar_hash.clone();
             }
             clients.insert(id, u);
         }
 
-        self.read_avatars(link, &mut clients);
+        // Аватары — только для НОВЫХ клиентов (ревью: не гонять clientvariable
+        // пачками на каждого). Старые хеши перенесены выше.
+        if heavy {
+            let new_ids: Vec<i64> = clients.keys().copied().filter(|id| !self.clients.contains_key(id)).take(240).collect();
+            self.read_avatars(link, &mut clients, &new_ids);
+        }
 
         // diff-announce missed joins/leaves (after the first silent baseline)
         if self.announced_once {
@@ -724,22 +827,23 @@ impl Ts3Session {
         }
         self.clients = clients;
 
-        let gr_res = self.safe(link, "servergrouplist", 2500);
-        if gr_res.error_id == 0 {
-            self.groups = gr_res
-                .items
-                .iter()
-                .map(|i| ServerGroup { id: f_int(i, "sgid"), name: f_str(i, "name"), icon_id: f_int(i, "iconid") })
-                .collect();
+        if heavy {
+            let gr_res = self.safe(link, "servergrouplist", 2500);
+            if gr_res.error_id == 0 {
+                self.groups = gr_res
+                    .items
+                    .iter()
+                    .map(|i| ServerGroup { id: f_int(i, "sgid"), name: f_str(i, "name"), icon_id: f_int(i, "iconid") })
+                    .collect();
+            }
         }
 
         self.refresh_fails = 0;
         self.publish("live", "");
-        self.note_refresh_stats(now_ms().saturating_sub(t0));
+        self.note_refresh_stats(now_ms().saturating_sub(t0), heavy);
     }
 
-    fn read_avatars(&mut self, link: &mut Link, clients: &mut HashMap<i64, UserState>) {
-        let ids: Vec<i64> = clients.keys().copied().take(240).collect();
+    fn read_avatars(&mut self, link: &mut Link, clients: &mut HashMap<i64, UserState>, ids: &[i64]) {
         for chunk in ids.chunks(40) {
             let blocks: Vec<String> = chunk.iter().map(|id| format!("clid={id} client_flag_avatar")).collect();
             let res = self.safe(link, &format!("clientvariable {}", blocks.join("|")), 2500);
@@ -810,7 +914,8 @@ impl Ts3Session {
         self.refresh_fails = 0;
 
         // event + timer loop
-        let mut next_refresh = now_ms() + 45_000;
+        let mut next_refresh = now_ms() + 45_000; // лёгкая страховка
+        let mut next_heavy = now_ms() + 300_000; // полный набор раз в 5 мин
         let mut next_keepalive = now_ms() + 20_000;
         loop {
             if self.stop.load(Ordering::SeqCst) {
@@ -818,11 +923,17 @@ impl Ts3Session {
             }
             let now = now_ms();
             if self.refresh_pending_at > 0 && now >= self.refresh_pending_at {
+                let heavy = self.refresh_heavy;
                 self.refresh_pending_at = 0;
-                self.full_refresh(link);
+                self.refresh_heavy = false;
+                self.refresh(link, heavy);
             }
             if now >= next_refresh {
                 next_refresh = now + 45_000;
+                self.light_refresh(link);
+            }
+            if now >= next_heavy {
+                next_heavy = now + 300_000;
                 self.full_refresh(link);
             }
             if now >= next_keepalive {
@@ -878,9 +989,11 @@ impl Ts3Connector {
             refresh_fails: 0,
             talk_diag_skipped: 0,
             refresh_pending_at: 0,
+            refresh_heavy: false,
             refresh_first_at: 0,
             refresh_stat_at: 0,
             refresh_stat_calls: 0,
+            refresh_stat_heavy: 0,
             refresh_stat_ms: 0,
             refresh_stat_max: 0,
         };
@@ -919,5 +1032,96 @@ impl Ts3Connector {
                 thread::sleep(Duration::from_millis(200));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::WhisperBook;
+
+    fn session_for_test() -> Ts3Session {
+        Ts3Session {
+            stop: Arc::new(AtomicBool::new(false)),
+            host: "127.0.0.1".to_string(),
+            port: 10011,
+            api_key: String::new(),
+            whispers: WhisperBook::new(Arc::new(|_| {})),
+            emit: Arc::new(|_| {}),
+            clients: HashMap::new(),
+            group_mem: HashMap::new(),
+            announced_once: false,
+            channels: HashMap::new(),
+            groups: Vec::new(),
+            chat: ChatLog::new('c'),
+            own_clid_by_handler: HashMap::new(),
+            own_clid: 0,
+            own_cid: 0,
+            server_name: String::new(),
+            active_schandler_id: 1,
+            cur_status: "connecting",
+            cur_detail: String::new(),
+            auth_failed: false,
+            greeting_seen: false,
+            refresh_fails: 0,
+            talk_diag_skipped: 0,
+            refresh_pending_at: 0,
+            refresh_heavy: false,
+            refresh_first_at: 0,
+            refresh_stat_at: 0,
+            refresh_stat_calls: 0,
+            refresh_stat_heavy: 0,
+            refresh_stat_ms: 0,
+            refresh_stat_max: 0,
+        }
+    }
+
+    /// Ревью 2026-11: enterview создаёт/обновляет клиента ЛОКАЛЬНО.
+    #[test]
+    fn enterview_creates_user_locally() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0 client_away=1 client_servergroups=16,20");
+        let u = s.clients.get(&5).expect("user created without refresh");
+        assert_eq!(u.nickname, "Alfa");
+        assert_eq!(u.channel_id, 3);
+        assert!(u.away);
+        assert_eq!(u.server_groups, "16,20");
+        assert!(s.chat.rows().iter().any(|c| c.event == Some("join")), "join row expected");
+    }
+
+    /// Ревью 2026-11: moved обновляет канал ЛОКАЛЬНО.
+    #[test]
+    fn moved_updates_channel_locally() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0");
+        s.handle_event("notifyclientmoved clid=5 ctid=7");
+        assert_eq!(s.clients.get(&5).map(|u| u.channel_id), Some(7), "channel updated without refresh");
+        assert!(s.chat.rows().iter().any(|c| c.event == Some("move")), "move row expected");
+        assert_eq!(s.refresh_pending_at, 0, "local move must not queue a refresh");
+    }
+
+    /// leftview удаляет клиента локально.
+    #[test]
+    fn leftview_removes_user_locally() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0");
+        s.handle_event("notifyclientleftview clid=5 client_nickname=Alfa");
+        assert!(s.clients.is_empty());
+        assert!(s.chat.rows().iter().any(|c| c.event == Some("leave")), "leave row expected");
+        assert_eq!(s.refresh_pending_at, 0, "local leave must not queue a refresh");
+    }
+
+    /// schedule_refresh: дебаунс без голодания + sticky-флаг heavy.
+    #[test]
+    fn schedule_refresh_marks_heavy_and_debounces() {
+        let mut s = session_for_test();
+        s.schedule_refresh(false);
+        assert!(!s.refresh_heavy);
+        assert!(s.refresh_pending_at > 0);
+        s.schedule_refresh(true);
+        assert!(s.refresh_heavy, "heavy sticks while pending");
     }
 }

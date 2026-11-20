@@ -101,7 +101,7 @@ fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
                 &cfg.ts3.api_key,
                 48912,  // plugin bridge port
                 45000,  // plugin idle timeout
-                4000,   // lazy ClientQuery fallback delay
+                15000,  // ClientQuery safety-net delay (plugin head start)
                 emit,
             );
             app.plugin_active.store(conn.bridge_active(), std::sync::atomic::Ordering::SeqCst);

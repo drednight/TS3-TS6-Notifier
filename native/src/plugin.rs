@@ -14,6 +14,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use crate::ts3::Ts3Connector;
 
 pub type Emit = crate::model::Emit;
 
@@ -695,6 +696,31 @@ fn forward<T: Send + 'static>(
     });
 }
 
+/// Резервный ClientQuery-коннектор (страховка). Запускается ТОЛЬКО когда
+/// плагин молчит: источник данных всегда плагин, query — последний рубеж.
+fn ensure_query(
+    query_stop: &mut Option<Arc<AtomicBool>>,
+    evt_tx: &Sender<ConnEvent>,
+    host: &str,
+    port: i64,
+    api_key: &str,
+    stop: &Arc<AtomicBool>,
+) {
+    if query_stop.is_some() || stop.load(Ordering::SeqCst) {
+        return;
+    }
+    let qstop = Arc::new(AtomicBool::new(false));
+    *query_stop = Some(qstop.clone());
+    let tx = evt_tx.clone();
+    let host = host.to_string();
+    let api_key = api_key.to_string();
+    thread::spawn(move || {
+        Ts3Connector::run(host, port, api_key, qstop, move |st| {
+            let _ = tx.send(ConnEvent::QueryState(Box::new(st)));
+        });
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn machine_loop(
     evt_rx: Receiver<ConnEvent>,
@@ -707,9 +733,8 @@ fn machine_loop(
     stop: Arc<AtomicBool>,
     plugin_active: Arc<AtomicBool>,
 ) {
-    // ClientQuery отключён: параметры подключения к query не используются.
-    let _ = (evt_tx, host, port, api_key);
     let mut using_plugin = false;
+    let mut query_stop: Option<Arc<AtomicBool>> = None;
     let mut plugin_state: Option<PluginState> = None;
     let mut last_snapshot_req: u64 = 0;
     // Диагностика потока: события/мин и длительность разбора снимков.
@@ -725,6 +750,9 @@ fn machine_loop(
                 if !using_plugin {
                     using_plugin = true;
                     plugin_active.store(true, Ordering::SeqCst);
+                    if let Some(q) = query_stop.take() {
+                        q.store(true, Ordering::SeqCst);
+                    }
                     plugin_state = Some(PluginState::new(emit.clone()));
                     println!("[ts3] plugin bridge active");
                     diag("plugin", "plugin link active");
@@ -775,20 +803,34 @@ fn machine_loop(
                 if using_plugin {
                     using_plugin = false;
                     plugin_active.store(false, Ordering::SeqCst);
-                    println!("[ts3] plugin bridge idle — ждём плагин (ClientQuery отключён)");
-                    diag("plugin", "plugin link idle — waiting for plugin (clientquery disabled)");
+                    println!("[ts3] plugin link idle — резерв: ClientQuery");
+                    diag("plugin", "plugin link idle — ClientQuery safety net engaged");
                 }
+                ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
             }
             ConnEvent::FallbackTimer => {
-                /* ClientQuery отключён (v2.0.27): источник данных — только плагин. */
+                // Плагин так и не появился (не установлен/отключён) — страховка.
+                if !using_plugin {
+                    diag("plugin", "no plugin link — ClientQuery safety net engaged");
+                    ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
+                }
             }
-            ConnEvent::QueryState(st) => {
-                /* Недостижимо: ClientQuery-коннектор больше не запускается. */
-                let _ = st;
+            ConnEvent::QueryState(mut st) => {
+                if using_plugin {
+                    continue;
+                }
+                // Помечаем источник: резерв должен быть виден и в оверлее,
+                // и в диагностике («плагин всегда первый»).
+                st.detail = "ClientQuery (резерв)".to_string();
+                plugin_state = None;
+                emit(*st);
             }
         }
     }
     bridge.stop();
+    if let Some(q) = query_stop.take() {
+        q.store(true, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
