@@ -63,13 +63,13 @@
   }
 
   function sourceKey(source) {
-    return { mock: 'sourceMock', ts3: 'sourceTs3', ts6: 'sourceTs6' }[source] || 'sourceMock';
+    return { auto: 'sourceAuto', mock: 'sourceMock', ts3: 'sourceTs3', ts6: 'sourceTs6' }[source] || 'sourceMock';
   }
 
   function statusHint() {
     if (state?.detail) return state.detail;
     if (!state) return '';
-    return { mock: 'hintMock', ts3: 'hintTs3', ts6: 'hintTs6' }[state.source] || '';
+    return { auto: 'hintAuto', mock: 'hintMock', ts3: 'hintTs3', ts6: 'hintTs6' }[state.source] || '';
   }
 
   /* ---------------- row rendering ---------------- */

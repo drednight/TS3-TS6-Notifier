@@ -42,39 +42,50 @@ pub fn parse_color(s: &str) -> Rgba {
     opt(s).unwrap_or(Rgba::rgb(255, 255, 255))
 }
 
-/// Overlay panel style variant (mockups 1..5). Paint-only: shapes + palette
-/// tints in the software rasterizer — zero extra runtime memory.
+/// Overlay panel style variant. Paint-only: shapes + palette tints in the
+/// software rasterizer — zero extra runtime memory.
+///
+/// v2.1.0: split into «спокойные» (0..CALM_COUNT, static or near-static) and
+/// «анимированные» (CALM_COUNT.., drive their own clock-based effects).
+/// `matrix` is now the digital rain; the old circuit-board paint lives on as
+/// `chip`, so saved configs keep their look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleKind {
     Glass,
-    Neon,
-    Hud,
     Soft,
     Minimal,
     Cyber,
-    Plasma,
+    Chip,
     Draft,
-    Matrix,
+    Neon,
+    Hud,
+    Plasma,
     Radiance,
+    Matrix,
+    Radar,
 }
 
 impl StyleKind {
-    pub const ALL: [(&str, &str, &str); 10] = [
+    /// Number of leading «спокойные» styles in `ALL` (picker grouping).
+    pub const CALM_COUNT: usize = 6;
+    pub const ALL: [(&str, &str, &str); 12] = [
         ("glass", "Стекло", "Glass"),
-        ("neon", "Неон", "Neon"),
-        ("hud", "Тактический", "Tactical"),
         ("soft", "Мягкий", "Soft"),
         ("minimal", "Минимал", "Minimal"),
         ("cyber", "Кибер", "Cyber"),
-        ("plasma", "Плазма", "Plasma"),
+        ("chip", "Плата", "Circuit"),
         ("draft", "Чертёж", "Draft"),
-        ("matrix", "Матрица", "Matrix"),
+        ("neon", "Неон", "Neon"),
+        ("hud", "Тактический", "Tactical"),
+        ("plasma", "Плазма", "Plasma"),
         ("radiance", "Сияние", "Radiance"),
+        ("matrix", "Матрица", "Matrix"),
+        ("radar", "Радар", "Radar"),
     ];
     /// Signature accent per style (applied when the style tile is clicked).
-    pub const ACCENTS: [&str; 10] = [
-        "#7c6cff", "#22d3ee", "#f59e0b", "#c084fc", "#e5e7eb",
-        "#ff2fd6", "#8b5cf6", "#38bdf8", "#4ade80", "#ffd166",
+    pub const ACCENTS: [&str; 12] = [
+        "#7c6cff", "#c084fc", "#e5e7eb", "#ff2fd6", "#38bdf8", "#93c5fd",
+        "#22d3ee", "#f59e0b", "#8b5cf6", "#ffd166", "#4ade80", "#34d399",
     ];
 
     pub fn parse(s: &str) -> StyleKind {
@@ -84,9 +95,11 @@ impl StyleKind {
             "soft" => StyleKind::Soft,
             "minimal" => StyleKind::Minimal,
             "cyber" => StyleKind::Cyber,
+            "chip" => StyleKind::Chip,
             "plasma" => StyleKind::Plasma,
             "draft" => StyleKind::Draft,
             "matrix" => StyleKind::Matrix,
+            "radar" => StyleKind::Radar,
             "radiance" => StyleKind::Radiance,
             _ => StyleKind::Glass,
         }
@@ -96,6 +109,53 @@ impl StyleKind {
         StyleKind::ALL[*self as usize].0
     }
 
+    /// Time-based effect that must redraw even when nobody is talking
+    /// (`overlay::tick` keeps the frame loop alive for these).
+    pub fn needs_tick(&self) -> bool {
+        matches!(
+            self,
+            StyleKind::Glass
+                | StyleKind::Soft
+                | StyleKind::Minimal
+                | StyleKind::Neon
+                | StyleKind::Hud
+                | StyleKind::Plasma
+                | StyleKind::Radiance
+                | StyleKind::Matrix
+                | StyleKind::Radar
+        )
+    }
+
+    /// One-line picker hint (what the style actually looks like).
+    pub fn desc(&self, ru: bool) -> &'static str {
+        match (self, ru) {
+            (StyleKind::Glass, true) => "стекло, блик по контуру",
+            (StyleKind::Glass, false) => "glass with a light sweep",
+            (StyleKind::Soft, true) => "мягкие кромки, тихое дыхание",
+            (StyleKind::Soft, false) => "soft edges, quiet breathing",
+            (StyleKind::Minimal, true) => "почти без рамки, бегущий огонёк",
+            (StyleKind::Minimal, false) => "barely a frame, one drifting light",
+            (StyleKind::Cyber, true) => "срезанные углы, киберпанк",
+            (StyleKind::Cyber, false) => "notched corners, cyberpunk",
+            (StyleKind::Chip, true) => "печатная плата с падами",
+            (StyleKind::Chip, false) => "circuit board with pads",
+            (StyleKind::Draft, true) => "чертёж с миллиметровкой",
+            (StyleKind::Draft, false) => "blueprint with graph paper",
+            (StyleKind::Neon, true) => "неон, пульс и редкое мерцание",
+            (StyleKind::Neon, false) => "neon pulse with a rare flicker",
+            (StyleKind::Hud, true) => "тактический трафарет и скан",
+            (StyleKind::Hud, false) => "tactical stencil and scan",
+            (StyleKind::Plasma, true) => "орбитальные кометы по рамке",
+            (StyleKind::Plasma, false) => "orbiting comets on the frame",
+            (StyleKind::Radiance, true) => "сияющая волна по кромке",
+            (StyleKind::Radiance, false) => "shimmering wave along the edge",
+            (StyleKind::Matrix, true) => "цифровой дождь, цифры у говорящего",
+            (StyleKind::Matrix, false) => "digital rain, glyphs on the speaker",
+            (StyleKind::Radar, true) => "радар: развёртка и блипы у говорящих",
+            (StyleKind::Radar, false) => "radar sweep with blips on speakers",
+        }
+    }
+
     /// Style signature whisper accent — otherwise the user accent.
     pub fn second(&self, accent: Rgba) -> Rgba {
         match self {
@@ -103,6 +163,7 @@ impl StyleKind {
             StyleKind::Cyber => Rgba::rgb(182, 255, 46),
             StyleKind::Plasma => Rgba::rgb(196, 125, 255),
             StyleKind::Matrix => Rgba::rgb(74, 222, 128),
+            StyleKind::Radar => Rgba::rgb(45, 212, 191),
             StyleKind::Radiance => Rgba::rgb(255, 200, 87),
             _ => accent,
         }
@@ -364,6 +425,37 @@ mod tests {
         assert_eq!(p.panel_bg.0, [14, 16, 27, 183]); // 0.72*255 = 183.6
         assert_eq!(p.accent.0, [0x7c, 0x6c, 0xff, 255]);
         assert_eq!(p.text.0, [0xee, 0xf0, 0xfa, 255]);
+    }
+
+    #[test]
+    fn style_catalogue_is_consistent() {
+        assert_eq!(StyleKind::ALL.len(), StyleKind::ACCENTS.len());
+        let mut ids = std::collections::HashSet::new();
+        for (i, (id, _, _)) in StyleKind::ALL.iter().enumerate() {
+            assert!(ids.insert(*id), "duplicate style id {id}");
+            assert_eq!(StyleKind::parse(id).id(), *id, "{id} round-trips");
+            assert_eq!(StyleKind::ACCENTS[i].len(), 7, "{id} accent is #rrggbb");
+        }
+        // «анимированные» — только вторая половина каталога, и каждый из них
+        // обязан тикать; спокойные без эффекта тикать не должны
+        for (i, (id, _, _)) in StyleKind::ALL.iter().enumerate() {
+            let sk = StyleKind::parse(id);
+            if i >= StyleKind::CALM_COUNT {
+                assert!(sk.needs_tick(), "{id}: animated group must tick");
+            } else if matches!(sk, StyleKind::Cyber | StyleKind::Chip | StyleKind::Draft) {
+                assert!(!sk.needs_tick(), "{id}: static calm style must not tick");
+            }
+            assert!(!sk.desc(true).is_empty() && !sk.desc(false).is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn legacy_matrix_still_resolves() {
+        // старые конфиги приходят со style="matrix" — это новый цифровой дождь;
+        // прежнюю «плату» отдаём отдельным id
+        assert_eq!(StyleKind::parse("matrix"), StyleKind::Matrix);
+        assert_eq!(StyleKind::parse("chip"), StyleKind::Chip);
+        assert_eq!(StyleKind::parse("crt"), StyleKind::Glass, "dropped ids fall back");
     }
 
     #[test]

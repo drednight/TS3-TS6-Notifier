@@ -233,7 +233,9 @@ impl<'a> Ctx<'a> {
             StyleKind::Glass => base,
             StyleKind::Neon | StyleKind::Hud => (base * 0.3).clamp(self.s(1.5), self.s(6.0)),
             StyleKind::Soft => base * 1.5,
-            StyleKind::Minimal | StyleKind::Cyber | StyleKind::Matrix => (base * 0.2).clamp(self.s(1.5), self.s(6.0)),
+            StyleKind::Minimal | StyleKind::Cyber | StyleKind::Chip | StyleKind::Matrix | StyleKind::Radar => {
+                (base * 0.2).clamp(self.s(1.5), self.s(6.0))
+            }
             StyleKind::Plasma => base * 0.9,
             StyleKind::Draft => 0.0,
             StyleKind::Radiance => base * 1.1,
@@ -248,9 +250,11 @@ impl<'a> Ctx<'a> {
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.10),
             StyleKind::Minimal => mix(base, Rgba::rgb(0, 0, 0), 0.10),
             StyleKind::Cyber => mix(base, Rgba::rgb(12, 0, 22), 0.45),
+            StyleKind::Chip => mix(base, Rgba::rgb(2, 14, 6), 0.32),
             StyleKind::Plasma => mix(base, Rgba::rgb(20, 4, 30), 0.32),
             StyleKind::Draft => mix(base, Rgba::rgb(8, 16, 28), 0.30),
-            StyleKind::Matrix => mix(base, Rgba::rgb(2, 14, 6), 0.32),
+            StyleKind::Matrix => mix(base, Rgba::rgb(0, 8, 4), 0.52),
+            StyleKind::Radar => mix(base, Rgba::rgb(2, 12, 14), 0.46),
             StyleKind::Radiance => mix(base, Rgba::rgb(30, 24, 10), 0.22),
         }
     }
@@ -263,9 +267,11 @@ impl<'a> Ctx<'a> {
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.22),
             StyleKind::Minimal => base.scale_a(160.0),
             StyleKind::Cyber => self.pal.accent.scale_a(140.0),
+            StyleKind::Chip => self.pal.accent.scale_a(140.0),
             StyleKind::Plasma => self.pal.accent.scale_a(160.0),
             StyleKind::Draft => mix(base, self.pal.accent, 0.45),
-            StyleKind::Matrix => self.pal.accent.scale_a(140.0),
+            StyleKind::Matrix => self.pal.accent.scale_a(120.0),
+            StyleKind::Radar => self.pal.accent.scale_a(130.0),
             StyleKind::Radiance => mix(base, Rgba::rgb(255, 255, 255), 0.30),
         }
     }
@@ -517,7 +523,7 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                 buf.fill_rect(cx0, cy0 - c.s(3.5), 1.2, c.s(7.0), acc.scale_a(150.0));
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // печатная плата: сплошная трасса, узлы-квадраты по углам, пады по кромкам
             let t = c.s(1.2);
             let a = acc.scale_a(130.0);
@@ -536,6 +542,49 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             ];
             for (nx, ny) in nodes {
                 buf.round_rect(nx, ny, c.s(5.0), c.s(5.0), c.s(1.0), acc.scale_a(190.0));
+            }
+        }
+        StyleKind::Matrix => {
+            // терминал: тонкая рамка, угловые скобки и «бегущая строка» из цифр
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(95.0), 1.1);
+            let arm = c.s(14.0);
+            let t = c.s(2.0);
+            let a = acc.scale_a(200.0);
+            buf.line(x, y, x + arm, y, t, a);
+            buf.line(x, y, x, y + arm, t, a);
+            buf.line(x + w - arm, y, x + w, y, t, a);
+            buf.line(x + w, y, x + w, y + arm, t, a);
+            buf.line(x, y + h - arm, x, y + h, t, a);
+            buf.line(x, y + h, x + arm, y + h, t, a);
+            buf.line(x + w - arm, y + h, x + w, y + h, t, a);
+            buf.line(x + w, y + h - arm, x + w, y + h, t, a);
+            // «01»-засечки у верхней кромки
+            let step = c.s(7.0);
+            let mut dx = x + arm + c.s(8.0);
+            while dx < x + w - arm - c.s(8.0) {
+                buf.fill_rect(dx, y + c.s(1.6), c.s(3.0), c.s(1.4), acc.scale_a(70.0));
+                dx += step;
+            }
+        }
+        StyleKind::Radar => {
+            // радар: тонкая рамка, угловые засечки-кресты и шкала дальности
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(105.0), 1.1);
+            let t = c.s(1.4);
+            let a = acc.scale_a(185.0);
+            for (cx0, cy0) in [
+                (x + c.s(8.0), y + c.s(8.0)),
+                (x + w - c.s(8.0), y + c.s(8.0)),
+                (x + c.s(8.0), y + h - c.s(8.0)),
+                (x + w - c.s(8.0), y + h - c.s(8.0)),
+            ] {
+                buf.fill_rect(cx0 - c.s(4.5), cy0 - t * 0.5, c.s(9.0), t, a);
+                buf.fill_rect(cx0 - t * 0.5, cy0 - c.s(4.5), t, c.s(9.0), a);
+            }
+            let step = c.s(9.0);
+            let mut dx = x + c.s(30.0);
+            while dx < x + w - c.s(30.0) {
+                buf.fill_rect(dx, y + h - c.s(4.0), c.s(1.2), c.s(2.6), acc.scale_a(120.0));
+                dx += step;
             }
         }
         StyleKind::Radiance => {
@@ -596,7 +645,7 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
                 dx += c.s(7.0);
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // точечный «паяльный» шов с узлами
             let mut dx = x;
             let mut k = 0;
@@ -605,6 +654,26 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
                 buf.fill_rect(dx, y - sz * 0.5 + 0.5, sz, sz, c.pal.accent.scale_a(45.0));
                 dx += c.s(5.5);
                 k += 1;
+            }
+        }
+        StyleKind::Matrix => {
+            // редкая пунктирная строка терминала
+            let mut dx = x;
+            while dx < x + w {
+                let seg = c.s(3.0).min(x + w - dx);
+                if seg <= 0.0 {
+                    break;
+                }
+                buf.fill_rect(dx, y, seg, 1.0, c.pal.accent.scale_a(40.0));
+                dx += c.s(7.0);
+            }
+        }
+        StyleKind::Radar => {
+            // прицел: редкие деления и точка в середине
+            let mid = x + w * 0.5;
+            buf.fill_rect(mid - 1.0, y - 0.5, 2.0, 2.0, c.pal.accent.scale_a(60.0));
+            for f in [0.25f32, 0.75] {
+                buf.fill_rect(x + w * f - 0.5, y, 1.0, 1.0, c.pal.muted.scale_a(55.0));
             }
         }
         _ => {}
@@ -624,6 +693,150 @@ fn perimeter_point(x: f32, y: f32, w: f32, h: f32, p: f32) -> (f32, f32) {
     } else {
         (x, y + h - (p - 2.0 * w - h))
     }
+}
+
+/// Stable 64-bit mix — rain columns and radar blips need deterministic
+/// pseudo-randomness without an RNG dependency.
+fn hash_u64(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    x ^ (x >> 33)
+}
+
+/// Matrix digital rain: one falling tail of glyphs per column, faintest at the
+/// end. `strength` scales the alpha (panel ≈ 1, picker thumbnail ≈ 2.5).
+/// With `anim` off the rain freezes at t=0 so static frames stay reproducible.
+fn draw_rain(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, strength: f64) {
+    const GLYPHS: [char; 10] = ['0', '1', '7', '4', '9', '2', '5', '8', '3', '6'];
+    let size = c.s(9.0);
+    let step = size * 1.35;
+    let col_w = c.s(13.0);
+    if w < col_w || h < step {
+        return;
+    }
+    let cols = ((w / col_w).floor() as i32).max(1);
+    let tail = 10i32;
+    let t = if c.anim { c.now / 1000.0 } else { 0.0 } as f32;
+    let acc = c.pal.accent;
+    for i in 0..cols {
+        let hsh = hash_u64(i as u64 * 0x9e37_79b9 + 0x1234_5678);
+        let speed = 22.0 + (hsh % 30) as f32; // px/s
+        let phase = ((hsh >> 12) % 500) as f32;
+        let span = h + tail as f32 * step;
+        let head = (t * speed + phase) % span - tail as f32 * step;
+        let gx = x + col_w * i as f32 + c.s(2.0);
+        for r in 0..tail {
+            let gy = head - r as f32 * step;
+            if gy < -step || gy > h - step * 0.6 {
+                continue;
+            }
+            let fade = 1.0 - r as f32 / tail as f32;
+            let alpha = (58.0 * fade as f64 * strength).min(210.0);
+            let ch = GLYPHS[((hsh >> (r % 12)) as usize + r as usize) % GLYPHS.len()];
+            let col = if r == 0 {
+                mix(acc, Rgba::rgb(255, 255, 255), 0.6)
+            } else {
+                acc
+            };
+            let mut utf = [0u8; 4];
+            c.fonts
+                .draw(buf, gx, y + gy + size, ch.encode_utf8(&mut utf), size, false, col.scale_a(alpha));
+        }
+    }
+}
+
+/// Radar scope: range rings, crosshair, a rotating sweep with a fading trail
+/// and a few blips.
+fn draw_scope(c: &Ctx, buf: &mut Buf, cx: f32, cy: f32, r: f32, strength: f64) {
+    let acc = c.pal.accent;
+    for i in 1..=3 {
+        buf.stroke_circle(cx, cy, r * i as f32 / 3.0, acc.scale_a(20.0 * strength), 1.0);
+    }
+    buf.fill_rect(cx - r, cy - 0.5, r * 2.0, 1.0, acc.scale_a(12.0 * strength));
+    buf.fill_rect(cx - 0.5, cy - r, 1.0, r * 2.0, acc.scale_a(12.0 * strength));
+    let ang = if c.anim {
+        (c.now / 2600.0 * std::f64::consts::TAU) as f32
+    } else {
+        0.7
+    };
+    for tail in 0..16 {
+        let a = ang - tail as f32 * 0.05;
+        let fade = (1.0 - tail as f32 / 16.0).powi(2);
+        for step in 1..=5 {
+            let rr = r * step as f32 / 5.0;
+            let px = cx + a.cos() * rr;
+            let py = cy + a.sin() * rr;
+            buf.fill_rect(
+                px - 1.0,
+                py - 1.0,
+                2.0,
+                2.0,
+                acc.scale_a((52.0 * fade as f64 * strength).min(225.0)),
+            );
+        }
+    }
+    for i in 0..3u64 {
+        let hsh = hash_u64(i + 17);
+        let a = (hsh % 360) as f32 * std::f32::consts::PI / 180.0;
+        let rr = r * (0.25 + ((hsh >> 9) % 60) as f32 / 100.0);
+        buf.circle(cx + a.cos() * rr, cy + a.sin() * rr, c.s(1.7), acc.scale_a(95.0 * strength));
+    }
+}
+
+/// Panel-wide paint for styles with a background texture. Drawn right after
+/// the panel body, so rows/feed stay readable on top.
+fn draw_panel_tex(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, strength: f64) {
+    match c.sk {
+        StyleKind::Matrix => draw_rain(c, buf, x, y, w, h, strength),
+        StyleKind::Radar => {
+            let r = (w.min(h) * 0.46).max(c.s(18.0));
+            draw_scope(c, buf, x + w * 0.5, y + h * 0.40, r, strength)
+        }
+        _ => {}
+    }
+}
+
+/// Picker thumbnail: a miniature panel painted by the real style chrome.
+/// (`k` and the rect are PHYSICAL px — the settings window calls this with
+/// coords already multiplied by its UI scale.)
+#[allow(clippy::too_many_arguments)]
+pub fn draw_style_preview(
+    buf: &mut Buf,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    style: &str,
+    pal: &Palette,
+    fonts: &Fonts,
+    icons: &Icons,
+    k: f32,
+    now_ms: f64,
+    anim: bool,
+) {
+    let c = Ctx {
+        pal,
+        fonts,
+        icons,
+        k,
+        fs: 13.0 * k,
+        now: now_ms,
+        anim,
+        sk: StyleKind::parse(style),
+        borderless: false,
+    };
+    let r = c.rad(c.s(7.0));
+    buf.round_rect(x, y, w, h, r, c.bg(pal.panel_bg));
+    draw_panel_tex(&c, buf, x, y, w, h, 2.6);
+    // «говорящая» мини-строка + две обычные
+    let bar_h = c.s(7.0);
+    let inset = c.s(5.0);
+    buf.round_rect(x + inset, y + c.s(5.0), w - inset * 2.0, bar_h, c.rad(c.s(3.0)), pal.accent.scale_a(80.0));
+    buf.fill_rect(x + inset, y + c.s(5.0) + bar_h + c.s(3.0), (w - inset * 2.0) * 0.62, c.s(2.6), pal.muted.scale_a(110.0));
+    buf.fill_rect(x + inset, y + c.s(5.0) + bar_h + c.s(8.0), (w - inset * 2.0) * 0.42, c.s(2.6), pal.muted.scale_a(80.0));
+    draw_frame_chrome(&c, buf, x, y, w, h, r);
 }
 
 fn draw_you_chip(c: &Ctx, buf: &mut Buf, x: f32, y: f32, label: &str) -> f32 {
@@ -959,7 +1172,7 @@ fn draw_user_row(
                 buf.fill_rect(x + c.s(5.0), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
                 buf.fill_rect(x + w - c.s(6.1), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
             }
-            StyleKind::Matrix => {
+            StyleKind::Chip => {
                 // блочная подсветка данных: заглушки по краям + ступенчатая рамка + такты
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.fill_rect(x, y + c.s(3.0), c.s(3.5), h - c.s(6.0), ac.scale_a(160.0 * talk_alpha as f64));
@@ -976,6 +1189,42 @@ fn draw_user_row(
                 while bx < x + w - c.s(12.0) {
                     buf.fill_rect(bx, y + h - c.s(5.5), c.s(2.0), c.s(2.0), ac.scale_a(150.0 * talk_alpha as f64));
                     bx += c.s(5.0);
+                }
+            }
+            StyleKind::Matrix => {
+                // цифровой дождь в строке говорящего: слабые цифры за ником
+                buf.round_rect(x, y, w, h, radius, bg);
+                let rain = Ctx {
+                    pal: &tpal,
+                    fonts: c.fonts,
+                    icons: c.icons,
+                    k: c.k,
+                    fs: c.fs,
+                    now: c.now,
+                    anim: c.anim,
+                    sk: c.sk,
+                    borderless: c.borderless,
+                };
+                buf.set_clip(x + w * 0.34, y, w * 0.66, h);
+                draw_rain(&rain, buf, x + w * 0.34, y, w * 0.66, h, 1.5 * talk_alpha as f64);
+                buf.clear_clip();
+                buf.fill_rect(x, y + c.s(2.0), c.s(2.5), h - c.s(4.0), ac.scale_a(200.0 * talk_alpha as f64));
+                let t = c.s(1.2);
+                let a2 = tpal.talk_outline.scale_a(150.0 * talk_alpha as f64);
+                buf.stroke_round_rect(x, y, w, h, radius, a2, t);
+            }
+            StyleKind::Radar => {
+                // радарный «пинг» вокруг аватара + засечка слева
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y + c.s(3.0), c.s(2.5), h - c.s(6.0), ac.scale_a(190.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(135.0 * talk_alpha as f64), 1.2);
+                let (pcx, pcy) = (x + c.s(23.0), y + h * 0.5);
+                let phase = if c.anim { (c.now / 1400.0) % 1.0 } else { 0.35 };
+                for k2 in 0..2 {
+                    let t2 = ((phase + k2 as f64 * 0.5) % 1.0) as f32;
+                    let rr = c.s(12.0) + t2 * c.s(13.0);
+                    let a2 = (1.0 - t2) * 150.0 * talk_alpha as f32;
+                    buf.stroke_circle(pcx, pcy, rr, tpal.accent.scale_a(a2 as f64), 1.2);
                 }
             }
             StyleKind::Radiance => {
@@ -1250,6 +1499,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     if !c.borderless {
         buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
         buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
+        draw_panel_tex(&c, &mut buf, px, py, panel_w, panel_h, 1.0);
         draw_frame_chrome(&c, &mut buf, px, py, panel_w, panel_h, pr);
     }
 
@@ -1309,11 +1559,11 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 }
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
-            StyleKind::Neon | StyleKind::Cyber | StyleKind::Plasma | StyleKind::Matrix => {
+            StyleKind::Neon | StyleKind::Cyber | StyleKind::Chip | StyleKind::Plasma | StyleKind::Matrix => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(2, 3, 8).scale_a(90.0));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(150.0));
             }
-            StyleKind::Hud | StyleKind::Minimal | StyleKind::Draft => {
+            StyleKind::Hud | StyleKind::Minimal | StyleKind::Draft | StyleKind::Radar => {
                 buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(0, 0, 0).scale_a(30.0));
                 buf.fill_rect(px, cy + header_h - 2.0, panel_w, 1.0, c.border(inp.pal.panel_border));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(90.0));
@@ -1332,7 +1582,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if dot_glow {
             buf.stroke_circle(dot_x, dot_y, c.s(4.5) + c.s(2.0), dot_c.scale_a(120.0), c.s(3.0));
         }
-        if c.sk == StyleKind::Hud || c.sk == StyleKind::Matrix {
+        if c.sk == StyleKind::Hud || c.sk == StyleKind::Chip {
             buf.round_rect(dot_x - c.s(4.0), dot_y - c.s(4.0), c.s(8.0), c.s(8.0), c.s(1.0), dot_c);
         } else {
             buf.circle(dot_x, dot_y, c.s(4.5), dot_c);
@@ -1521,7 +1771,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 gy += step;
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // редкие узлы-точки (микросхема)
             let step = c.s(30.0);
             let mut gx = px + step;
@@ -1532,6 +1782,25 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                     gy += step;
                 }
                 gx += step;
+            }
+        }
+        StyleKind::Matrix => {
+            // скан-линия терминала: одиночная тусклая полоса медленно ползёт вниз
+            let y0 = if c.anim {
+                let hh = panel_h.max(1.0);
+                py + ((c.now / 40.0) as f32 % hh)
+            } else {
+                py + panel_h * 0.5
+            };
+            buf.fill_rect(px + 2.0, y0, panel_w - 4.0, 1.0, inp.pal.accent.scale_a(26.0));
+        }
+        StyleKind::Radar => {
+            // развёртка уже в фоне; сверху только лёгкая «сетка дальности»
+            let step = c.s(26.0);
+            let mut gy = py + step;
+            while gy < py + panel_h - 2.0 {
+                buf.fill_rect(px + c.s(6.0), gy, panel_w - c.s(12.0), 1.0, inp.pal.accent.scale_a(7.0));
+                gy += step;
             }
         }
         StyleKind::Hud => {
@@ -1563,8 +1832,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             // inner glow frame
             buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
         }
-        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Radiance => {}
-    }
+        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Radiance => {}    }
     }
 
     // keep the first talking row visible (auto-follow for capped panels)
@@ -1782,16 +2050,18 @@ mod tests {
         assert_eq!(frame.panel_w, PANEL_W * 1.25);
         assert!(frame.hits.is_empty());
     }
-    /// Анимации старых стилей: при выключенных animations кадр статичен
-    /// (пиксель-в-пиксель), при включённых — зависит от времени.
+    /// Анимации стилей: при выключенных animations кадр статичен
+    /// (пиксель-в-пиксель), а стили с `needs_tick()` при включённых зависят
+    /// от времени. Проверяем весь каталог — новый стиль не сможет тихо
+    /// проскочить мимо гейта оверлея.
     #[test]
-    fn old_style_frame_anim_is_gated() {
+    fn style_frame_anim_is_gated() {
         let fonts = Fonts::load();
         let icons = Icons::load();
-        for style in ["glass", "neon", "hud", "soft", "minimal"] {
+        for (id, _, _) in StyleKind::ALL.iter() {
             // статика: два разных времени дают одинаковый кадр
             let mut a = Appearance::default();
-            a.style = style.to_string();
+            a.style = id.to_string();
             a.animations = false;
             let pal = Palette::from_appearance(&a);
             let mut inp = size_inp(&a, &pal, &fonts, &icons);
@@ -1801,10 +2071,13 @@ mod tests {
             let f1 = render_frame(&inp);
             inp.now_ms = 2600;
             let f2 = render_frame(&inp);
-            assert_eq!(f1.buf.px, f2.buf.px, "{style}: static frame must not depend on time");
+            assert_eq!(f1.buf.px, f2.buf.px, "{id}: static frame must not depend on time");
+            if !StyleKind::parse(id).needs_tick() {
+                continue;
+            }
             // анимация: кадр меняется со временем
             let mut a2 = Appearance::default();
-            a2.style = style.to_string();
+            a2.style = id.to_string();
             a2.animations = true;
             let pal2 = Palette::from_appearance(&a2);
             let mut inp2 = size_inp(&a2, &pal2, &fonts, &icons);
@@ -1813,7 +2086,7 @@ mod tests {
             let f3 = render_frame(&inp2);
             inp2.now_ms = 2600;
             let f4 = render_frame(&inp2);
-            assert_ne!(f3.buf.px, f4.buf.px, "{style}: animated frame must tick with time");
+            assert_ne!(f3.buf.px, f4.buf.px, "{id}: animated frame must tick with time");
         }
     }
 }

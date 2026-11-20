@@ -1,11 +1,14 @@
-//! v2.0.34: автоопределение источника данных.
+//! v2.0.34: автоопределение источника данных (доработано в 2.1.0).
 //!
 //! Правило выбора: у кого выше оценка доступности; при равенстве — TS3.
 //! TS3 получает 3, если ClientQuery отвечает и в приветствии видна активная
-//! сессия (`selected schandlerid > 0`), и 2 — если просто отвечает.
+//! сессия (`selected schandlerid > 0`), 1 — если клиент явно жив, но сервер
+//! не выбран (`selected schandlerid=0`), и 2 — если приветствие не сказало
+//! ничего определённого (старое поведение «просто жив»).
 //! TS6 — 2, если порт Remote Apps принимает соединение. 0 — недоступен.
-//! Если доступны оба — сессионный TS3 важнее, иначе живой TS6 важнее
-//! «пустого» TS3, в котором даже не выбран сервер.
+//! Так живой TS6 (2) выигрывает у «пустого» TS3-клиента (1), но простаивающий
+//! TS3 с открытым ClientQuery всё ещё не проигрывает без причин, а при
+//! равенстве выигрывает проверенный путь TS3.
 
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -18,14 +21,13 @@ pub enum Source {
 }
 
 /// Оценка доступности TS3 по приветствию ClientQuery.
-/// 3 — есть активная сессия (`selected schandlerid=N`, N > 0); 2 — просто жив
-/// (соединение уже установлено — этого достаточно, даже без приветствия).
+/// 3 — есть активная сессия; 1 — клиент жив, но ни один сервер не выбран;
+/// 2 — приветствие ничего не сказало (порт живёт — этого достаточно).
 pub fn ts3_greeting_score(greeting: &str) -> u8 {
     for line in greeting.split(['\n', '\r']) {
         if let Some(rest) = line.trim().strip_prefix("selected schandlerid=") {
-            if rest.trim().parse::<i64>().unwrap_or(0) > 0 {
-                return 3;
-            }
+            let id = rest.trim().parse::<i64>().unwrap_or(0);
+            return if id > 0 { 3 } else { 1 };
         }
     }
     2
@@ -87,7 +89,7 @@ mod tests {
     #[test]
     fn greeting_score_prefers_live_session() {
         assert_eq!(ts3_greeting_score("TS3 Client\nselected schandlerid=3\n"), 3);
-        assert_eq!(ts3_greeting_score("\rTS3 Client\r\nselected schandlerid=0\r\n"), 2);
+        assert_eq!(ts3_greeting_score("\rTS3 Client\r\nselected schandlerid=0\r\n"), 1);
         assert_eq!(ts3_greeting_score("TS3 Client\n"), 2);
         assert_eq!(ts3_greeting_score(""), 2);
     }
@@ -96,8 +98,9 @@ mod tests {
     fn pick_prefers_session_then_ts3_on_tie() {
         assert_eq!(pick_source(3, 2), Source::Ts3);
         assert_eq!(pick_source(2, 2), Source::Ts3, "tie goes to the battle-tested path");
-        assert_eq!(pick_source(0, 2), Source::Ts6, "live TS6 beats an idle TS3");
-        assert_eq!(pick_source(2, 0), Source::Ts3);
+        assert_eq!(pick_source(1, 2), Source::Ts6, "live TS6 beats an idle TS3 client");
+        assert_eq!(pick_source(0, 2), Source::Ts6, "live TS6 beats an unreachable TS3");
+        assert_eq!(pick_source(1, 0), Source::Ts3, "TS3 client alive without Remote Apps");
         assert_eq!(pick_source(0, 0), Source::Ts3, "nothing up: TS3 retries internally");
     }
 

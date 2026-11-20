@@ -135,13 +135,18 @@ fn throttled_sink(app: Arc<App>, live: Arc<std::sync::atomic::AtomicU8>) -> Emit
 
 /// v2.0.34: супервисор автоопределения источника.
 /// Пробуем TS3/TS6, запускаем победителя; если источник долго «не live»
-/// (≥20 с) и другой доступен — плавно переключаемся (handover).
+/// и другой доступен — плавно переключаемся (handover).
+///
+/// v2.1.0: переключение через 8 с молчания (было 20 с) и активный источник
+/// сразу публикуется в состоянии (`source` = ts3/ts6), чтобы оверлей, трей и
+/// диагностика показывали, кто реально кормит данные в режиме «Авто».
 fn run_auto_connector(
     store: Arc<Mutex<ConfigStore>>,
     emit: Emit,
     live: Arc<std::sync::atomic::AtomicU8>,
     stop: Arc<AtomicBool>,
 ) {
+    const HANDOVER_MS: u64 = 8_000;
     thread::spawn(move || {
         loop {
             if stop.load(std::sync::atomic::Ordering::SeqCst) {
@@ -156,6 +161,9 @@ fn run_auto_connector(
                 auto::Source::Ts6 => "ts6",
             };
             diag::diag("auto", &format!("probe ts3={s3} ts6={s6} -> {}", name(winner)));
+            // источник в состоянии — фактический, не «auto» (никаких двух
+            // разных «источников» в интерфейсе: один выбор = один активный)
+            emit(crate::model::OverlayState::empty(name(winner), "connecting", ""));
 
             let inner = Arc::new(AtomicBool::new(false));
             {
@@ -200,7 +208,7 @@ fn run_auto_connector(
                     non_live_since = now_ms();
                     continue;
                 }
-                if now_ms().saturating_sub(non_live_since) < 20_000 {
+                if now_ms().saturating_sub(non_live_since) < HANDOVER_MS {
                     continue;
                 }
                 let cfg = store.lock().unwrap().get().clone();
@@ -210,7 +218,7 @@ fn run_auto_connector(
                 if other != winner && a.max(b) >= 2 {
                     diag::diag(
                         "auto",
-                        &format!("handover: {} -> {} (source silent >20s)", name(winner), name(other)),
+                        &format!("handover: {} -> {} (source silent >{}s)", name(winner), name(other), HANDOVER_MS / 1000),
                     );
                     inner.store(true, std::sync::atomic::Ordering::SeqCst);
                     break;

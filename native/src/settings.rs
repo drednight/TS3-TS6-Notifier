@@ -1096,6 +1096,60 @@ fn draw_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &st
     }
 }
 
+/// Style tile: a live miniature of the overlay painted with the real style
+/// chrome (animated when «Анимации» is on), name underneath.
+#[allow(clippy::too_many_arguments)]
+fn draw_style_tile(
+    c: &Ctx,
+    buf: &mut SBuf,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    style: &str,
+    label: &str,
+    active: bool,
+    k: f32,
+    icons: &Icons,
+    now: f64,
+    anim: bool,
+) {
+    let bg = crate::theme::mix(c.pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05);
+    buf.round_rect(x, y, w, h, 12.0, bg);
+    crate::layout::draw_style_preview(
+        &mut buf.b,
+        (x + 8.0) * k,
+        (y + 8.0) * k,
+        (w - 16.0) * k,
+        (h - 32.0) * k,
+        style,
+        c.pal,
+        c.fonts,
+        icons,
+        k,
+        now,
+        anim,
+    );
+    let tw = c.fonts.measure(label, 11.5, active);
+    buf.text(
+        &c.fonts,
+        x + (w - tw) * 0.5,
+        y + h - 9.0,
+        label,
+        11.5,
+        active,
+        if active { c.pal.text } else { c.pal.muted },
+    );
+    if active {
+        let acc = parse_color(StyleKind::ACCENTS[StyleKind::parse(style) as usize]);
+        buf.stroke_round_rect(x, y, w, h, 12.0, acc, 2.0);
+        buf.stroke_round_rect(x - 2.5, y - 2.5, w + 5.0, h + 5.0, 14.5, acc.scale_a(70.0), 1.3);
+        buf.circle(x + w - 12.0, y + 12.0, 3.5, acc);
+    } else {
+        buf.stroke_round_rect(x, y, w, h, 12.0, c.pal.muted.scale_a(110.0), 1.1);
+    }
+}
+
 /// «Вид оверлея» chip: mini window diagram of the layout mockup.
 fn draw_layout_tile(c: &Ctx, buf: &mut SBuf, x: f32, y: f32, w: f32, h: f32, label: &str, kind: u8, active: bool) {
     let bg = crate::theme::mix(c.pal.panel_bg, Rgba::rgb(255, 255, 255), 0.05);
@@ -1793,24 +1847,46 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
             buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Стиль оформления", "Visual style"), 13.0, true, pal.text);
             y += 28.0;
             {
+                let per_row = 3usize;
                 let gap = 10.0;
-                let per_row = 5usize;
                 let cw = (pane_w - 8.0 - gap * (per_row as f32 - 1.0)) / per_row as f32;
-                for (i, st) in StyleKind::ALL.iter().enumerate() {
-                    let bx = pane_x + 4.0 + (i % per_row) as f32 * (cw + gap);
-                    let by = y + (i / per_row) as f32 * 62.0;
-                    let active = m.app.style == st.0;
-                    let label = tr(&m.lang, st.1, st.2);
-                    let acc = parse_color(StyleKind::ACCENTS[i]);
-                    let second = StyleKind::parse(st.0).second(acc);
-                    let light = crate::theme::mix(acc, Rgba::rgb(255, 255, 255), 0.45);
-                    draw_tile(&c, &mut buf, bx, by, cw, 52.0, &label, [acc, second, light], active);
-                    regions.push(Region {
-                        rect: crate::layout::Rect { x: bx, y: by, w: cw, h: 52.0 },
-                        ctrl: Ctrl::Style(i as u8),
-                    });
+                let th = 68.0;
+                let now = crate::model::now_ms() as f64;
+                for (gi, (ru, en)) in [("Спокойные", "Calm"), ("Анимированные", "Animated")]
+                    .iter()
+                    .enumerate()
+                {
+                    let start = if gi == 0 { 0 } else { StyleKind::CALM_COUNT };
+                    let end = if gi == 0 { StyleKind::CALM_COUNT } else { StyleKind::ALL.len() };
+                    if gi > 0 {
+                        y += 2.0;
+                    }
+                    buf.text(&c.fonts, pane_x + 4.0, y + 11.0, &tr(&m.lang, ru, en), 11.5, true, pal.muted);
+                    buf.fill_rect(pane_x + 4.0, y + 16.0, pane_w - 8.0, 1.0, pal.panel_border);
+                    y += 24.0;
+                    for i in start..end {
+                        let n = (i - start) as f32;
+                        let bx = pane_x + 4.0 + (n % per_row as f32) * (cw + gap);
+                        let by = y + (n / per_row as f32).floor() * (th + gap);
+                        let st = &StyleKind::ALL[i];
+                        let active = m.app.style == st.0;
+                        let label = tr(&m.lang, st.1, st.2);
+                        draw_style_tile(
+                            &c, &mut buf, bx, by, cw, th, st.0, &label, active, k, icons, now,
+                            m.app.animations,
+                        );
+                        regions.push(Region {
+                            rect: crate::layout::Rect { x: bx, y: by, w: cw, h: th },
+                            ctrl: Ctrl::Style(i as u8),
+                        });
+                    }
+                    let rows = ((end - start) as f32 / per_row as f32).ceil();
+                    y += rows * (th + gap);
                 }
-                y += 2.0 * 62.0 + 4.0;
+                // подпись под сеткой: что именно делает выбранный стиль
+                let hint = StyleKind::parse(&m.app.style).desc(m.lang == "ru");
+                buf.text(&c.fonts, pane_x + 4.0, y + 9.0, hint, 11.5, false, pal.muted);
+                y += 26.0;
             }
             buf.text(&c.fonts, pane_x + 4.0, y + 16.0, &tr(&m.lang, "Цветовые схемы", "Colour schemes"), 15.0, true, pal.text);
             y += 32.0;

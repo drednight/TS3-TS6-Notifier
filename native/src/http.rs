@@ -39,6 +39,20 @@ pub struct App {
     pub restart_connector: RestartFn,
 }
 
+/// v2.0.34 bug fixed in 2.1.0: with `source: "auto"` the gate used to map the
+/// setting to "mock" and dropped EVERY real ts3/ts6 state (the overlay stuck
+/// on «connecting» forever). In «auto» the supervisor owns the choice, so any
+/// factual ts3/ts6 state passes; demo stragglers are still dropped. For a
+/// pinned source only its own states pass.
+fn source_gate_pass(configured: &str, state_source: &str) -> bool {
+    match configured {
+        "auto" => state_source == "ts3" || state_source == "ts6",
+        "ts3" => state_source == "ts3",
+        "ts6" => state_source == "ts6",
+        _ => state_source == "mock",
+    }
+}
+
 impl App {
     pub fn broadcast(&self, message: &Json) {
         let raw = message.to_string();
@@ -49,15 +63,8 @@ impl App {
     pub fn push_state(&self, state: &OverlayState) {
         // after a data-source switch stragglers from the previous connector
         // (e.g. a queued mock frame) must not overwrite the new source's state
-        let want = {
-            let src = self.store.lock().unwrap().get().source.clone();
-            match src.as_str() {
-                "ts3" => "ts3",
-                "ts6" => "ts6",
-                _ => "mock",
-            }
-        };
-        if state.source != want {
+        let want = self.store.lock().unwrap().get().source.clone();
+        if !source_gate_pass(&want, state.source) {
             return;
         }
         *self.latest.write().unwrap() = state.clone();
@@ -258,9 +265,14 @@ pub(crate) fn diagnostics(app: &App) -> String {
     let mut report: Vec<String> = Vec::new();
     report.push(format!("TS3-TS6 Notifier diagnostics — {}", crate::diag::local_stamp()));
     report.push(format!("version: {}", app.version));
+    let active = if latest.source != cfg.source {
+        format!(", active: {}", latest.source)
+    } else {
+        String::new()
+    };
     report.push(format!(
-        "source: {} (ts3 {}:{}, ts6 {}:{})",
-        cfg.source, cfg.ts3.host, cfg.ts3.port, cfg.ts6.host, cfg.ts6.port
+        "source: {}{} (ts3 {}:{}, ts6 {}:{})",
+        cfg.source, active, cfg.ts3.host, cfg.ts3.port, cfg.ts6.host, cfg.ts6.port
     ));
     report.push(format!("last status: {} — {}", latest.status, latest.detail));
     report.push(format!(
@@ -566,4 +578,27 @@ fn handle_conn(app: Arc<App>, stream: TcpStream) {
         return;
     }
     serve_static(&mut stream, &path, &app.public_dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_gate_pass;
+
+    #[test]
+    fn auto_source_gate_passes_real_connectors_only() {
+        // v2.1.0 regression: «auto» не должен отбрасывать статы ts3/ts6
+        assert!(source_gate_pass("auto", "ts3"));
+        assert!(source_gate_pass("auto", "ts6"));
+        assert!(!source_gate_pass("auto", "mock"), "demo stragglers stay dropped");
+    }
+
+    #[test]
+    fn pinned_source_gate_is_strict() {
+        assert!(source_gate_pass("ts3", "ts3"));
+        assert!(!source_gate_pass("ts3", "ts6"));
+        assert!(!source_gate_pass("ts3", "mock"));
+        assert!(source_gate_pass("ts6", "ts6"));
+        assert!(source_gate_pass("mock", "mock"));
+        assert!(!source_gate_pass("mock", "ts3"));
+    }
 }

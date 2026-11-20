@@ -558,10 +558,7 @@ impl Overlay {
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
 
         // ---- dirty check: an unchanged frame skips render + present ----
-        let style_anim = matches!(
-            a.style.as_str(),
-            "plasma" | "radiance" | "glass" | "neon" | "hud" | "soft" | "minimal"
-        );
+        let style_anim = crate::theme::StyleKind::parse(&a.style).needs_tick();
         let anim_active =
             a.animations && (style_anim || rows.iter().any(|u| u.talking) || !whisperers.is_empty());
         let time_bucket = if anim_active {
@@ -1860,7 +1857,15 @@ pub(crate) mod win32 {
             "error" => (if ru { "Ошибка" } else { "Error" }, false),
             _ => (if ru { "Не подключено" } else { "Disconnected" }, false),
         };
-        let source = if state.source == "ts6" { "TS6" } else if state.source == "ts3" { "TS3" } else { "Mock" };
+        let source = if state.source == "ts6" {
+            "TS6"
+        } else if state.source == "ts3" {
+            "TS3"
+        } else if state.source == "auto" {
+            if ru { "Авто" } else { "Auto" }
+        } else {
+            "Mock"
+        };
         (format!("{} · {}", source, text), live)
     }
 
@@ -2047,11 +2052,11 @@ pub(crate) mod win32 {
         unsafe {
             let menu = CreatePopupMenu();
             let sub = CreatePopupMenu();
-            let sources = ["mock", "ts3", "ts6"];
-            let labels: [&str; 3] = if ru {
-                ["Mock (тестовый)", "TeamSpeak 3", "TeamSpeak 6"]
+            let sources = ["auto", "mock", "ts3", "ts6"];
+            let labels: [&str; 4] = if ru {
+                ["Авто", "Mock (тестовый)", "TeamSpeak 3", "TeamSpeak 6"]
             } else {
-                ["Mock (test)", "TeamSpeak 3", "TeamSpeak 6"]
+                ["Auto", "Mock (test)", "TeamSpeak 3", "TeamSpeak 6"]
             };
             for (i, src) in sources.iter().enumerate() {
                 let mut flags = MF_STRING;
@@ -2084,7 +2089,7 @@ pub(crate) mod win32 {
                 return;
             }
             let cmd = cmd as usize;
-            if (101..=103).contains(&cmd) {
+            if (101..=104).contains(&cmd) {
                 let src = sources[cmd - 101];
                 let patch = crate::json::obj(vec![("source", crate::json::Json::s(src))]);
                 app.store.lock().unwrap().update(&patch);
