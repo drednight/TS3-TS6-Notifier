@@ -246,6 +246,8 @@ pub struct PluginState {
     server_name: String,
     groups: Vec<ServerGroup>,
     whispers: Arc<crate::model::WhisperBook>,
+    /// Ростер требует починки (join потерялся) — попросить снимок у плагина.
+    want_roster_refresh: bool,
 }
 
 impl PluginState {
@@ -260,7 +262,13 @@ impl PluginState {
             server_name: String::new(),
             groups: Vec::new(),
             whispers: crate::model::WhisperBook::new(emit),
+            want_roster_refresh: false,
         }
+    }
+
+    /// Забрать флаг «нужен снимок» (сброс).
+    pub fn take_roster_refresh(&mut self) -> bool {
+        std::mem::take(&mut self.want_roster_refresh)
     }
 
     pub fn ingest(&mut self, msg: &Json) {
@@ -293,6 +301,17 @@ impl PluginState {
                         u.channel_id = cid;
                         u.is_self = id == self.own_id;
                         u.server_groups = raw.get("groups").map(|v| v.loose_str()).unwrap_or_default();
+                        if let Some(prev_u) = prev.get(&id) {
+                            // Рецензия 2026-11: гонка «снимок затирает события» —
+                            // говорящий/шепчущий, тронутый событиями ПОСЛЕ сборки
+                            // снимка, остаётся в живом состоянии.
+                            u.talking = prev_u.talking;
+                            u.whispering = prev_u.whispering;
+                        } else if let Some(t) = raw.get("t") {
+                            // Снимок плагина v1.2.3+ несёт флаг разговора —
+                            // говорящие до входа подсвечиваются сразу.
+                            u.talking = t.loose_i64() != 0;
+                        }
                         clients.insert(id, u);
                     }
                 }
@@ -424,6 +443,17 @@ impl PluginState {
                 if let Some(u) = self.clients.get_mut(&id) {
                     u.talking = s == 1 || whisper;
                     u.whispering = whisper;
+                    self.emit_state();
+                } else if s != 0 && id != 0 {
+                    // join потерялся — говорящий всё равно должен засветиться
+                    // сейчас; имя/группы долечит ближайший снимок.
+                    let mut u = UserState::new(id.to_string(), id.to_string());
+                    u.channel_id = self.own_cid;
+                    u.is_self = id == self.own_id;
+                    u.talking = s == 1 || whisper;
+                    u.whispering = whisper;
+                    self.clients.insert(id, u);
+                    self.want_roster_refresh = true;
                     self.emit_state();
                 }
                 // A whisper may come from another channel — note it even when
@@ -682,6 +712,11 @@ fn machine_loop(
     let mut using_plugin = false;
     let mut plugin_state: Option<PluginState> = None;
     let mut last_snapshot_req: u64 = 0;
+    // Диагностика потока: события/мин и длительность разбора снимков.
+    let mut flow_events: u64 = 0;
+    let mut flow_snapshots: u64 = 0;
+    let mut flow_snap_ms: u64 = 0;
+    let mut flow_diag_at = now_ms();
 
     while !stop.load(Ordering::SeqCst) {
         let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else { continue };
@@ -700,11 +735,38 @@ fn machine_loop(
             ConnEvent::Line(msg) => {
                 if using_plugin {
                     if let Some(ps) = plugin_state.as_mut() {
+                        flow_events += 1;
+                        let is_snapshot = msg.get("e").map(|v| v.loose_str()).as_deref() == Some("snapshot");
+                        let t0 = now_ms();
                         ps.ingest(&msg);
-                        // страховка: снимок потерян/не пришёл — переспрашиваем
-                        if ps.needs_snapshot() && now_ms().saturating_sub(last_snapshot_req) > 3000 {
+                        if is_snapshot {
+                            flow_snapshots += 1;
+                            flow_snap_ms += now_ms().saturating_sub(t0);
+                        }
+                        // страховка: снимок потерян/не пришёл или ростер
+                        // починить надо — переспрашиваем (не чаще раза в 3 с)
+                        if (ps.needs_snapshot() || ps.take_roster_refresh())
+                            && now_ms().saturating_sub(last_snapshot_req) > 3000
+                        {
                             last_snapshot_req = now_ms();
                             bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                        }
+                        // раз в минуту — строка потока в диагностике
+                        let now = now_ms();
+                        if now.saturating_sub(flow_diag_at) > 60_000 {
+                            if flow_events > 0 {
+                                diag(
+                                    "plugin",
+                                    &format!(
+                                        "flow: {flow_events} events/min, snapshots {flow_snapshots} ({} ms avg)",
+                                        if flow_snapshots > 0 { flow_snap_ms / flow_snapshots } else { 0 }
+                                    ),
+                                );
+                            }
+                            flow_events = 0;
+                            flow_snapshots = 0;
+                            flow_snap_ms = 0;
+                            flow_diag_at = now;
                         }
                     }
                 }
@@ -758,6 +820,44 @@ mod tests {
                 {"id":3,"name":"Дальний","cid":20,"groups":"","cname":"Другая"}]}"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn snapshot_keeps_live_talking_state_for_known_users() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_line());
+        let talk = format!("{{\"e\":\"talk\",\"clid\":101,\"s\":1,\"w\":0}}");
+        ps.ingest(&Json::parse(&talk).unwrap());
+        assert!(ps.clients[&101].talking);
+        // Снимок без флага t (старый плагин) не должен откатывать живое состояние.
+        ps.ingest(&snapshot_line());
+        assert!(ps.clients[&101].talking, "stale snapshot must not reset live talking");
+    }
+
+    #[test]
+    fn snapshot_talk_flag_marks_new_users_talking() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        let raw = format!(
+            "{{\"e\":\"snapshot\",\"server\":\"S\",\"own\":100,\"owncid\":7,\"owncname\":\"Home\",\"clients\":[{{\"id\":100,\"name\":\"Me\",\"cid\":7,\"groups\":\"\",\"cname\":\"Home\"}},{{\"id\":101,\"name\":\"A\",\"cid\":7,\"groups\":\"\",\"cname\":\"Home\",\"t\":1}}]}}"
+        );
+        ps.ingest(&Json::parse(&raw).unwrap());
+        assert!(ps.clients[&101].talking, "snapshot t-flag must light up users already talking at connect");
+        assert!(!ps.clients[&100].talking);
+    }
+
+    #[test]
+    fn talk_for_unknown_client_creates_placeholder() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_line());
+        let talk = format!("{{\"e\":\"talk\",\"clid\":777,\"s\":1,\"w\":0}}");
+        ps.ingest(&Json::parse(&talk).unwrap());
+        let u = ps.clients.get(&777).expect("placeholder user created");
+        assert!(u.talking);
+        assert!(ps.take_roster_refresh(), "lost join must request a snapshot repair");
+        assert!(!ps.take_roster_refresh(), "flag resets on take");
     }
 
     #[test]

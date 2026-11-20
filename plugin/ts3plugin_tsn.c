@@ -48,7 +48,7 @@
 #include "ts3_functions.h"
 
 #define TSN_PORT 48912
-#define TSN_VERSION "1.2.2"
+#define TSN_VERSION "1.2.3"
 #define TSN_SEND_BUF (256 * 1024)
 
 static struct TS3Functions ts3funcs;
@@ -263,9 +263,12 @@ static void send_snapshot(uint64 schid) {
             json_escape(name ? name : "", en, sizeof(en));
             json_escape(groups ? groups : "", eg, sizeof(eg));
             json_escape(cname, ec, sizeof(ec));
+            int talking = 0;
+            ts3funcs.getClientVariableAsInt(schid, ids[i], CLIENT_FLAG_TALKING, &talking);
             n += snprintf(buf + n, sizeof(buf) - n - 2,
-                          "%s{\"id\":%u,\"name\":\"%s\",\"cid\":%llu,\"groups\":\"%s\",\"cname\":\"%s\"}",
-                          i ? "," : "", (unsigned)ids[i], en, (unsigned long long)cid, eg, ec);
+                          "%s{\"id\":%u,\"name\":\"%s\",\"cid\":%llu,\"groups\":\"%s\",\"cname\":\"%s\"%s}",
+                          i ? "," : "", (unsigned)ids[i], en, (unsigned long long)cid, eg, ec,
+                          talking ? ",\"t\":1" : "");
             free(name);
             free(groups);
         }

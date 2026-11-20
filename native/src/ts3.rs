@@ -90,6 +90,11 @@ struct Ts3Session {
     refresh_fails: i32,
     talk_diag_skipped: i32,
     refresh_pending_at: u64,
+    refresh_first_at: u64,
+    refresh_stat_at: u64,
+    refresh_stat_calls: u32,
+    refresh_stat_ms: u64,
+    refresh_stat_max: u64,
     whispers: Arc<crate::model::WhisperBook>,
 }
 
@@ -181,6 +186,17 @@ impl Ts3Session {
                         user.whispering = whisper;
                         self.emit_state();
                     }
+                } else if talking && clid != 0 && clid != self.own_clid {
+                    // Рецензия 2026-11: talk для неизвестного клиента раньше
+                    // отбрасывался — говорящий не светился до следующего
+                    // refresh. Заглушка светится сейчас, имя долечит refresh.
+                    let mut u = UserState::new(clid.to_string(), clid.to_string());
+                    u.channel_id = self.own_cid;
+                    u.talking = true;
+                    u.whispering = whisper;
+                    self.clients.insert(clid, u);
+                    self.schedule_refresh();
+                    self.emit_state();
                 }
                 // A whisper may come from another channel — note it even when
                 // the speaker never appears on the roster.
@@ -378,8 +394,38 @@ impl Ts3Session {
         }
     }
 
+    /// Замер длительности full_refresh'ей + строка в диагностику раз в минуту.
+    fn note_refresh_stats(&mut self, dt: u64) {
+        self.refresh_stat_calls += 1;
+        self.refresh_stat_ms += dt;
+        self.refresh_stat_max = self.refresh_stat_max.max(dt);
+        let now = now_ms();
+        if now.saturating_sub(self.refresh_stat_at) > 60_000 {
+            if self.refresh_stat_calls > 0 {
+                diag(
+                    "ts3",
+                    &format!(
+                        "refresh: {} calls/min, total {} ms, max {} ms",
+                        self.refresh_stat_calls, self.refresh_stat_ms, self.refresh_stat_max
+                    ),
+                );
+            }
+            self.refresh_stat_at = now;
+            self.refresh_stat_calls = 0;
+            self.refresh_stat_ms = 0;
+            self.refresh_stat_max = 0;
+        }
+    }
+
     fn schedule_refresh(&mut self) {
-        self.refresh_pending_at = now_ms() + 600;
+        let now = now_ms();
+        if self.refresh_pending_at == 0 {
+            self.refresh_first_at = now;
+        }
+        // Рецензия 2026-11: старый дебаунс голодал — каждое событие сдвигало
+        // refresh на +600 мс, и при плотном потоке он не наступал никогда.
+        // Теперь: шаг 250 мс, но не позже 1.5 с от ПЕРВОГО события пачки.
+        self.refresh_pending_at = (now + 250).min(self.refresh_first_at + 1500);
     }
 }
 
@@ -533,7 +579,7 @@ impl Ts3Session {
     }
 
     fn find_active_handler(&mut self, link: &mut Link) {
-        let list = self.safe(link, "serverconnectionhandlerlist", 8000);
+        let list = self.safe(link, "serverconnectionhandlerlist", 2500);
         let mut ids: Vec<i64> = list.items.iter().map(|i| f_int(i, "schandlerid")).filter(|n| *n > 0).collect();
         if ids.is_empty() {
             ids.push(1);
@@ -541,11 +587,11 @@ impl Ts3Session {
         self.own_clid_by_handler.clear();
         let fallback = *ids.first().unwrap_or(&1);
         for hid in ids {
-            let use_res = self.safe(link, &format!("use schandlerid={hid}"), 8000);
+            let use_res = self.safe(link, &format!("use schandlerid={hid}"), 2500);
             if use_res.error_id != 0 {
                 continue;
             }
-            let who = self.safe(link, "whoami", 8000);
+            let who = self.safe(link, "whoami", 2500);
             if who.error_id != 0 || who.items.is_empty() {
                 continue;
             }
@@ -554,7 +600,7 @@ impl Ts3Session {
                 continue;
             }
             self.own_clid_by_handler.insert(hid, clid);
-            let hw = self.safe(link, &format!("clientvariable clid={clid} client_input_hardware"), 8000);
+            let hw = self.safe(link, &format!("clientvariable clid={clid} client_input_hardware"), 2500);
             if let Some(item) = hw.items.first() {
                 if f_bool(item, "client_input_hardware") {
                     self.active_schandler_id = hid;
@@ -563,25 +609,30 @@ impl Ts3Session {
             }
         }
         self.active_schandler_id = fallback;
-        self.safe(link, &format!("use schandlerid={fallback}"), 8000);
+        self.safe(link, &format!("use schandlerid={fallback}"), 2500);
     }
 
     fn full_refresh(&mut self, link: &mut Link) {
         if self.stop.load(Ordering::SeqCst) {
             return;
         }
-        self.safe(link, &format!("use schandlerid={}", self.active_schandler_id), 8000);
-        let mut who = self.safe(link, "whoami", 8000);
+        let t0 = now_ms();
+        self.safe(link, &format!("use schandlerid={}", self.active_schandler_id), 2500);
+        let mut who = self.safe(link, "whoami", 2500);
         if who.error_id != 0 || who.items.is_empty() {
             self.find_active_handler(link);
-            self.safe(link, &format!("use schandlerid={}", self.active_schandler_id), 8000);
-            who = self.safe(link, "whoami", 8000);
+            self.safe(link, &format!("use schandlerid={}", self.active_schandler_id), 2500);
+            who = self.safe(link, "whoami", 2500);
         }
         if who.error_id != 0 || who.items.is_empty() {
             self.clients.clear();
             self.own_clid = 0;
             self.own_cid = 0;
             self.publish("offline", "not connected to a TeamSpeak server");
+            // Рецензия 2026-11: раньше повтор случался только по событию или
+            // через 45 с — «offline» мог висеть минутами. Пробуем снова быстро.
+            self.schedule_refresh();
+            self.note_refresh_stats(now_ms().saturating_sub(t0));
             return;
         }
         let self_item = who.items[0].clone();
@@ -589,12 +640,12 @@ impl Ts3Session {
         self.own_cid = f_int(&self_item, "cid");
         self.own_clid_by_handler.insert(self.active_schandler_id, self.own_clid);
 
-        let server = self.safe(link, "servervariable virtualserver_name", 8000);
+        let server = self.safe(link, "servervariable virtualserver_name", 2500);
         if let Some(item) = server.items.first() {
             self.server_name = f_str(item, "virtualserver_name");
         }
 
-        let ch_res = self.safe(link, "channellist", 20000);
+        let ch_res = self.safe(link, "channellist", 3000);
         self.channels.clear();
         for item in &ch_res.items {
             let id = f_int(item, "cid");
@@ -604,9 +655,9 @@ impl Ts3Session {
             self.channels.insert(id, ChannelInfo { id, parent_id: f_int(item, "pid"), name: f_str(item, "channel_name") });
         }
 
-        let mut cl_res = self.safe(link, "clientlist -uid -away -voice -groups", 20000);
+        let mut cl_res = self.safe(link, "clientlist -uid -away -voice -groups", 3000);
         if cl_res.error_id != 0 {
-            cl_res = self.safe(link, "clientlist -uid -away -voice", 20000);
+            cl_res = self.safe(link, "clientlist -uid -away -voice", 3000);
         }
 
         let mut clients = HashMap::new();
@@ -632,6 +683,13 @@ impl Ts3Session {
             u.is_self = id == self.own_clid;
             u.is_query = f_int(item, "client_type") == 1;
             u.server_groups = f_str(item, "client_servergroups");
+            if let Some(prev_u) = self.clients.get(&id) {
+                // Рецензия 2026-11: гонка «снимок затирает события» — пока
+                // шёл clientlist/аватары, talk/mute-события уже обновили
+                // клиентов; старый снимок не должен их откатывать.
+                u.talking = prev_u.talking;
+                u.whispering = prev_u.whispering;
+            }
             clients.insert(id, u);
         }
 
@@ -666,7 +724,7 @@ impl Ts3Session {
         }
         self.clients = clients;
 
-        let gr_res = self.safe(link, "servergrouplist", 8000);
+        let gr_res = self.safe(link, "servergrouplist", 2500);
         if gr_res.error_id == 0 {
             self.groups = gr_res
                 .items
@@ -677,13 +735,14 @@ impl Ts3Session {
 
         self.refresh_fails = 0;
         self.publish("live", "");
+        self.note_refresh_stats(now_ms().saturating_sub(t0));
     }
 
     fn read_avatars(&mut self, link: &mut Link, clients: &mut HashMap<i64, UserState>) {
         let ids: Vec<i64> = clients.keys().copied().take(240).collect();
         for chunk in ids.chunks(40) {
             let blocks: Vec<String> = chunk.iter().map(|id| format!("clid={id} client_flag_avatar")).collect();
-            let res = self.safe(link, &format!("clientvariable {}", blocks.join("|")), 8000);
+            let res = self.safe(link, &format!("clientvariable {}", blocks.join("|")), 2500);
             for item in &res.items {
                 let id = f_int(item, "clid");
                 let hash = f_str(item, "client_flag_avatar");
@@ -745,7 +804,7 @@ impl Ts3Session {
             );
         }
 
-        self.command(link, "clientnotifyregister schandlerid=0 event=any", 8000)?;
+        self.command(link, "clientnotifyregister schandlerid=0 event=any", 2500)?;
         self.find_active_handler(link);
         self.full_refresh(link);
         self.refresh_fails = 0;
@@ -768,7 +827,7 @@ impl Ts3Session {
             }
             if now >= next_keepalive {
                 next_keepalive = now + 20_000;
-                self.safe(link, "version", 6000);
+                self.safe(link, "version", 2500);
             }
             match link.lines.recv_timeout(Duration::from_millis(100)) {
                 Ok(line) => {
@@ -819,6 +878,11 @@ impl Ts3Connector {
             refresh_fails: 0,
             talk_diag_skipped: 0,
             refresh_pending_at: 0,
+            refresh_first_at: 0,
+            refresh_stat_at: 0,
+            refresh_stat_calls: 0,
+            refresh_stat_ms: 0,
+            refresh_stat_max: 0,
         };
 
         let mut attempt = 0i32;
