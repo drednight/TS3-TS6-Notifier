@@ -92,6 +92,8 @@ struct Ts3Session {
     /// последнее talk-событие: (момент, talking, whispering) — свежее событие
     /// главнее данных снимка (гонка в обе стороны), дальше решает флаг снимка
     talk_event_at: HashMap<i64, (u64, bool, bool)>,
+    /// отложенные лёгкие refresh после подключения (~1.5 и ~4 с)
+    refresh_followups: Vec<u64>,
     refresh_pending_at: u64,
     refresh_heavy: bool,
     refresh_first_at: u64,
@@ -176,8 +178,12 @@ impl Ts3Session {
         match name {
             "notifytalkstatuschange" => {
                 let clid = f_int(&fields, "clid");
-                let talking = f_int(&fields, "status") == 1;
-                let whisper = talking && ((f_has(&fields, "targetmode") && f_int(&fields, "targetmode") != 0) || f_bool(&fields, "whisper"));
+                // Ревью 2026-11 (v2.0.32): status=1 «говорит», status=2 «говорит
+                // при выключенном микрофоне» (SDK) — НЕ шёпот. Шёпот — только
+                // isreceivedwhisper (поле notifytalkstatuschange по документации
+                // ClientQuery; старое имя whisper оставлено для совместимости).
+                let talking = f_int(&fields, "status") >= 1;
+                let whisper = talking && (f_bool(&fields, "isreceivedwhisper") || f_bool(&fields, "whisper"));
                 if !in_scope {
                     if talking && schandlerid > 0 && self.own_clid_by_handler.get(&schandlerid) == Some(&clid) {
                         self.active_schandler_id = schandlerid;
@@ -262,6 +268,18 @@ impl Ts3Session {
                 }
                 if f_has(&fields, "client_output_muted") {
                     u.output_muted = f_bool(&fields, "client_output_muted");
+                }
+                // Ревью 2026-11 (v2.0.32): устройства недоступны и «только
+                // вывод» — как в clientlist, складываем в mute-бейджи сразу,
+                // а не через лёгкий refresh.
+                if f_has(&fields, "client_input_hardware") && !f_bool(&fields, "client_input_hardware") {
+                    u.input_muted = true;
+                }
+                if f_has(&fields, "client_output_hardware") && !f_bool(&fields, "client_output_hardware") {
+                    u.output_muted = true;
+                }
+                if f_has(&fields, "client_outputonly_muted") && f_bool(&fields, "client_outputonly_muted") {
+                    u.output_muted = true;
                 }
                 if f_has(&fields, "client_away") {
                     u.away = f_bool(&fields, "client_away");
@@ -437,8 +455,18 @@ impl Ts3Session {
                     own: None,
                 });
             }
+            "notifyconnectstatuschange" => {
+                if in_scope {
+                    self.schedule_refresh(true);
+                    // Ревью 2026-11 (v2.0.32): список клиентов дозаполняется
+                    // после подключения — два лёгких догоняющих refresh.
+                    let now = now_ms();
+                    self.refresh_followups.push(now + 1500);
+                    self.refresh_followups.push(now + 4000);
+                }
+            }
             "notifychannelcreated" | "notifychanneledited" | "notifychanneldeleted" | "notifychannelmoved"
-            | "notifyserverupdated" | "notifyserveredited" | "notifyconnectstatuschange" => {
+            | "notifyserverupdated" | "notifyserveredited" => {
                 if in_scope {
                     self.schedule_refresh(true);
                 }
@@ -656,6 +684,16 @@ impl Ts3Session {
     }
 
     fn find_active_handler(&mut self, link: &mut Link) {
+        // Ревью 2026-11 (v2.0.32): один запрос currentschandlerid вместо
+        // обхода всех вкладок (по 3–4 запроса на каждую), как в референсе.
+        let cur = self.safe(link, "currentschandlerid", 2500);
+        if let Some(item) = cur.items.first() {
+            let hid = f_int(item, "schandlerid").max(f_int(item, "id"));
+            if hid > 0 {
+                self.active_schandler_id = hid;
+                return;
+            }
+        }
         let list = self.safe(link, "serverconnectionhandlerlist", 2500);
         let mut ids: Vec<i64> = list.items.iter().map(|i| f_int(i, "schandlerid")).filter(|n| *n > 0).collect();
         if ids.is_empty() {
@@ -717,9 +755,9 @@ impl Ts3Session {
             who = self.safe(link, "whoami", 2500);
         }
         if who.error_id != 0 || who.items.is_empty() {
-            self.clients.clear();
-            self.own_clid = 0;
-            self.own_cid = 0;
+            // Ревью 2026-11 (v2.0.32): НЕ стираем готовый ростер — при
+            // переподключении меняем только статус, без мигания «connecting»
+            // поверх пустого списка.
             self.publish("offline", "not connected to a TeamSpeak server");
             // Рецензия 2026-11: раньше повтор случался только по событию или
             // через 45 с — «offline» мог висеть минутами. Пробуем снова быстро.
@@ -859,7 +897,7 @@ impl Ts3Session {
         }
 
         self.refresh_fails = 0;
-        self.publish("live", "");
+        self.publish("live", "ClientQuery");
         self.note_refresh_stats(now_ms().saturating_sub(t0), heavy);
     }
 
@@ -934,7 +972,7 @@ impl Ts3Session {
         self.refresh_fails = 0;
 
         // event + timer loop
-        let mut next_refresh = now_ms() + 45_000; // лёгкая страховка
+        let mut next_refresh = now_ms() + 15_000; // лёгкая страховка (15 с)
         let mut next_heavy = now_ms() + 300_000; // полный набор раз в 5 мин
         let mut next_keepalive = now_ms() + 20_000;
         loop {
@@ -948,8 +986,20 @@ impl Ts3Session {
                 self.refresh_heavy = false;
                 self.refresh(link, heavy);
             }
+            if !self.refresh_followups.is_empty() {
+                let now = now_ms();
+                let mut i = 0;
+                while i < self.refresh_followups.len() {
+                    if now >= self.refresh_followups[i] {
+                        self.refresh_followups.remove(i);
+                        self.light_refresh(link);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
             if now >= next_refresh {
-                next_refresh = now + 45_000;
+                next_refresh = now + 15_000;
                 self.light_refresh(link);
             }
             if now >= next_heavy {
@@ -1009,6 +1059,7 @@ impl Ts3Connector {
             refresh_fails: 0,
             talk_diag_skipped: 0,
             talk_event_at: HashMap::new(),
+            refresh_followups: Vec::new(),
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1087,6 +1138,7 @@ mod tests {
             refresh_fails: 0,
             talk_diag_skipped: 0,
             talk_event_at: HashMap::new(),
+            refresh_followups: Vec::new(),
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1136,6 +1188,53 @@ mod tests {
         assert_eq!(s.refresh_pending_at, 0, "local leave must not queue a refresh");
     }
 
+
+
+    /// Ревью 2026-11: шёпот — только isreceivedwhisper; status=2 — говорит
+    /// при выключенном микрофоне (не шёпот).
+    #[test]
+    fn talk_status_semantics_per_sdk() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0");
+        // status=2 + isreceivedwhisper=0: говорящий, но не шёпот
+        s.handle_event("notifytalkstatuschange clid=5 status=2 isreceivedwhisper=0");
+        let u = s.clients.get(&5).unwrap();
+        assert!(u.talking, "status=2 means talking with muted mic");
+        assert!(!u.whispering, "status=2 must NOT be whisper");
+        // status=1 + isreceivedwhisper=1: шёпот
+        s.handle_event("notifytalkstatuschange clid=5 status=1 isreceivedwhisper=1");
+        let u = s.clients.get(&5).unwrap();
+        assert!(u.talking && u.whispering);
+        // status=0: тишина
+        s.handle_event("notifytalkstatuschange clid=5 status=0 isreceivedwhisper=0");
+        let u = s.clients.get(&5).unwrap();
+        assert!(!u.talking && !u.whispering);
+    }
+
+    /// Ревью 2026-11: notifyclientupdated разбирает hardware/outputonly_muted.
+    #[test]
+    fn clientupdated_folds_hardware_and_outputonly() {
+        let mut s = session_for_test();
+        s.own_cid = 3;
+        s.handle_event("notifycliententerview clid=5 ctid=3 client_nickname=Alfa client_type=0");
+        s.handle_event("notifyclientupdated clid=5 client_input_hardware=0");
+        assert!(s.clients.get(&5).unwrap().input_muted, "input hardware off = muted badge");
+        s.handle_event("notifyclientupdated clid=5 client_output_hardware=0");
+        assert!(s.clients.get(&5).unwrap().output_muted, "output hardware off = muted badge");
+        s.handle_event("notifyclientupdated clid=5 client_outputonly_muted=1");
+        assert!(s.clients.get(&5).unwrap().output_muted, "outputonly_muted = muted badge");
+    }
+
+    /// connectstatuschange планирует догоняющие лёгкие refresh (~1.5 и ~4 с).
+    #[test]
+    fn connect_event_schedules_followup_refreshes() {
+        let mut s = session_for_test();
+        assert!(s.refresh_followups.is_empty());
+        s.handle_event("notifyconnectstatuschange schandlerid=1 status=8");
+        assert_eq!(s.refresh_followups.len(), 2, "two followups expected");
+        assert!(s.refresh_pending_at > 0, "immediate heavy refresh queued too");
+    }
 
     /// v2.0.31: свежее talk-событие главнее снимка; иначе флаг снимка
     /// самовосстанавливает пропущенные события (говорение не «залипает»).

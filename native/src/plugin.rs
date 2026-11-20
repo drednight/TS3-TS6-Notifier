@@ -446,11 +446,12 @@ impl PluginState {
             "talk" => {
                 let id = msg.get("clid").map(|v| v.loose_i64()).unwrap_or(0);
                 let s = msg.get("s").map(|v| v.loose_i64()).unwrap_or(0);
-                // v2 plugin sends "w" (isReceivedWhisper); s==2 = whispering in
-                // the TS3 SDK — support both so the whisper section works.
-                let whisper = msg.get("w").map(|v| v.loose_i64()).unwrap_or(0) != 0 || s == 2;
+                // v2.0.32 (ревью): s==2 = «говорит при выключенном микрофоне»
+                // (SDK), а НЕ шёпот. Шёпот — только w (isReceivedWhisper).
+                let whisper = msg.get("w").map(|v| v.loose_i64()).unwrap_or(0) != 0;
+                let talking = s >= 1 || whisper;
                 if let Some(u) = self.clients.get_mut(&id) {
-                    u.talking = s == 1 || whisper;
+                    u.talking = talking;
                     u.whispering = whisper;
                     self.emit_state();
                 } else if s != 0 && id != 0 {
@@ -459,7 +460,7 @@ impl PluginState {
                     let mut u = UserState::new(id.to_string(), id.to_string());
                     u.channel_id = self.own_cid;
                     u.is_self = id == self.own_id;
-                    u.talking = s == 1 || whisper;
+                    u.talking = talking;
                     u.whispering = whisper;
                     self.clients.insert(id, u);
                     self.want_roster_refresh = true;

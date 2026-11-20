@@ -351,6 +351,13 @@ pub struct Overlay {
     /// Dirty tracking: skip render+present when nothing changed.
     last_key: Option<String>,
     last_present_ms: u64,
+    /// Замер задержки «событие → кадр» (ревью 2026-11): дельта от
+    /// updated_at состояния до отрисовки кадра, avg/max в диагностике.
+    latency_ts: u64,
+    latency_n: u64,
+    latency_sum: u64,
+    latency_max: u64,
+    latency_at: u64,
     /// Cached hit geometry for input between re-renders.
     last_hits: Vec<(crate::layout::Rect, crate::layout::Hit)>,
     last_geom: (f64, f64, f64, f64, f64), // px, py, pad, pw, ph
@@ -384,6 +391,11 @@ impl Overlay {
             scratch: None,
             last_key: None,
             last_present_ms: 0,
+            latency_ts: 0,
+            latency_n: 0,
+            latency_sum: 0,
+            latency_max: 0,
+            latency_at: 0,
             last_hits: Vec::new(),
             last_geom: (0.0, 0.0, 0.0, PANEL_W as f64, 200.0),
             last_origin: (0.0, 0.0),
@@ -608,6 +620,32 @@ impl Overlay {
             work_h: host.work_area().3 as f32,
         };
         let frame = render_frame(&inp);
+        // Замер «событие → кадр» (ревью 2026-11, цель < 30–50 мс): дельта от
+        // сборки состояния (момент приёма talk-строки) до отрисовки кадра.
+        if state.updated_at != self.latency_ts {
+            self.latency_ts = state.updated_at;
+            let d = now_ms.saturating_sub(state.updated_at);
+            self.latency_n += 1;
+            self.latency_sum += d;
+            self.latency_max = self.latency_max.max(d);
+            if now_ms.saturating_sub(self.latency_at) > 60_000 {
+                if self.latency_n > 0 {
+                    crate::diag::diag(
+                        "overlay",
+                        &format!(
+                            "latency: {} states/min, avg {} ms, max {} ms",
+                            self.latency_n,
+                            self.latency_sum / self.latency_n,
+                            self.latency_max
+                        ),
+                    );
+                }
+                self.latency_at = now_ms;
+                self.latency_n = 0;
+                self.latency_sum = 0;
+                self.latency_max = 0;
+            }
+        }
         // auto-follow the first talking row inside a capped panel
         self.roster_scroll = frame.scroll_to;
 

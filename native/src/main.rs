@@ -30,7 +30,7 @@ use config::ConfigStore;
 use http::App;
 use json::Json;
 use model::{now_ms, OverlayState};
-use plugin::{Emit, Ts3WithPluginConnector};
+use plugin::Emit;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::channel;
@@ -39,7 +39,9 @@ use std::thread;
 use std::time::Duration;
 
 enum Handle {
-    Ts3Plugin(Ts3WithPluginConnector),
+    /// v2.0.32: TS3 — только ClientQuery (Ts3Connector), как в референсе.
+    /// Плагин и мост 48912 выведены из рабочего пути (полное удаление — 2.1.0).
+    Ts3(Arc<AtomicBool>),
     Mock(mock::MockConnector),
     Ts6(Arc<AtomicBool>),
     Stub,
@@ -48,9 +50,10 @@ enum Handle {
 impl Handle {
     fn stop(&self) {
         match self {
-            Handle::Ts3Plugin(c) => c.stop(),
+            Handle::Ts3(stop) | Handle::Ts6(stop) => {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst)
+            }
             Handle::Mock(c) => c.stop(),
-            Handle::Ts6(stop) => stop.store(true, std::sync::atomic::Ordering::SeqCst),
             Handle::Stub => {}
         }
     }
@@ -74,8 +77,9 @@ fn throttled_sink(app: Arc<App>) -> Emit {
             }
             let Some(st) = pending.take() else { continue };
             let elapsed = now_ms() - last_sent;
-            if elapsed < 100 {
-                thread::sleep(Duration::from_millis(100 - elapsed));
+            // v2.0.32: 30 мс вместо 100 — цель «событие → кадр» < 30–50 мс
+            if elapsed < 30 {
+                thread::sleep(Duration::from_millis(30 - elapsed));
                 while let Ok(newer) = rx.try_recv() {
                     pending = Some(newer);
                 }
@@ -95,18 +99,19 @@ fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
     let emit = throttled_sink(app.clone());
     match cfg.source.as_str() {
         "ts3" => {
-            let conn = Ts3WithPluginConnector::start(
-                &cfg.ts3.host,
-                cfg.ts3.port,
-                &cfg.ts3.api_key,
-                48912,  // plugin bridge port
-                45000,  // plugin idle timeout
-                15000,  // ClientQuery safety-net delay (plugin head start)
-                emit,
-            );
-            app.plugin_active.store(conn.bridge_active(), std::sync::atomic::Ordering::SeqCst);
-            println!("[server] data source: ts3");
-            Handle::Ts3Plugin(conn)
+            let stop = Arc::new(AtomicBool::new(false));
+            {
+                let stop = stop.clone();
+                let host = cfg.ts3.host.clone();
+                let api_key = cfg.ts3.api_key.clone();
+                let port = cfg.ts3.port;
+                thread::spawn(move || {
+                    ts3::Ts3Connector::run(host, port, api_key, stop, move |st| emit(st));
+                });
+            }
+            app.plugin_active.store(false, std::sync::atomic::Ordering::SeqCst);
+            println!("[server] data source: ts3 (ClientQuery)");
+            Handle::Ts3(stop)
         }
         "ts6" => {
             let save_key: ts6::SaveKeyFn = {
