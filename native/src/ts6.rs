@@ -334,12 +334,12 @@ impl Ts6Session {
                 let client_id = payload.get("clientId").map(|v| v.loose_i64()).unwrap_or(0);
                 let status = payload.get("status").map(|v| v.loose_i64()).unwrap_or(0);
                 let talking = status >= 1;
+                // v2.0.34 (та же семантика, что в ts3.rs v2.0.32): status=2 —
+                // «говорит при выключенном микрофоне», НЕ шёпот; шёпот —
+                // только по явным флагам whisper/isWhisper.
                 let whisper = talking
-                    && (status >= 2
-                        || payload.get("whisper").map(|v| v.loose_bool()).unwrap_or(false)
-                        || payload.get("isWhisper").map(|v| v.loose_bool()).unwrap_or(false)
-                        || (payload.get("targetMode").is_some()
-                            && payload.get("targetMode").map(|v| v.loose_i64()).unwrap_or(0) != 0));
+                    && (payload.get("whisper").map(|v| v.loose_bool()).unwrap_or(false)
+                        || payload.get("isWhisper").map(|v| v.loose_bool()).unwrap_or(false));
                 if foreign {
                     if talking && client_id != 0 && self.own_client_id_for(conn_id) == client_id {
                         self.note_active_connection(conn_id, "self talk", writer);
@@ -384,10 +384,8 @@ impl Ts6Session {
                 let status = payload.get("status").map(|v| v.loose_i64()).unwrap_or(0);
                 if status == 0 {
                     if conn_id == self.connection_id || self.connection_id == 0 {
-                        self.clients.clear();
-                        self.channels.clear();
-                        self.own_client_id = 0;
-                        self.own_channel_id = 0;
+                        // v2.0.34: прежний ростер НЕ стираем — при
+                        // переподключении меняем только статус, без мигания.
                         self.connection_id = 0;
                         self.publish("offline", "not connected to a TeamSpeak server");
                     }

@@ -205,7 +205,7 @@ impl Default for AppConfig {
             map.push((id.to_string(), key.to_string()));
         }
         AppConfig {
-            source: "mock".into(),
+            source: "auto".into(),
             ts3: TsEndpoint { host: "127.0.0.1".into(), port: 25639, api_key: String::new() },
             ts6: TsEndpoint { host: "127.0.0.1".into(), port: 5899, api_key: String::new() },
             appearance: Appearance::default(),

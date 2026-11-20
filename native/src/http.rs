@@ -37,8 +37,6 @@ pub struct App {
     pub version: String,
     pub public_dir: PathBuf,
     pub restart_connector: RestartFn,
-    pub plugin_active: Arc<AtomicBool>,
-    pub plugin_dll: String,
 }
 
 impl App {
@@ -421,23 +419,6 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             }
             true
         }
-        ("/api/plugin/install", "POST") => {
-            let result = plugin_install(&app.plugin_dll);
-            json_response(stream, 200, &result);
-            true
-        }
-        ("/api/plugin/remove", "POST") => {
-            let result = plugin_remove();
-            json_response(stream, 200, &result);
-            true
-        }
-        ("/api/plugin/status", "GET") => {
-            json_response(stream, 200, &obj(vec![
-                ("active", Json::b(app.plugin_active.load(Ordering::SeqCst))),
-                ("dll", Json::b(!app.plugin_dll.is_empty() && Path::new(&app.plugin_dll).exists())),
-            ]));
-            true
-        }
         ("/api/diagnostics", "GET") => {
             let report = diagnostics(app);
             http_response(stream, 200, "text/plain; charset=utf-8", report.as_bytes(), "Cache-Control: no-store\r\n");
@@ -472,92 +453,6 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             true
         }
         _ => false,
-    }
-}
-
-/// Best-effort cleanup of leftover `ts3plugin_tsn_win64.dll.old-*` renames.
-fn plugin_cleanup_leftovers(dir: &str) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with("ts3plugin_tsn_win64.dll.old") {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-    }
-}
-
-/// Remove the TS3 plugin DLL from the client's plugin folder («Удалить плагин»).
-pub(crate) fn plugin_remove() -> Json {
-    if !cfg!(windows) {
-        return obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))]);
-    }
-    #[cfg(any(windows, tsn_win32))]
-    {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        let dst_dir = format!("{appdata}\\TS3Client\\plugins");
-        let dst = format!("{dst_dir}\\ts3plugin_tsn_win64.dll");
-        if !Path::new(&dst).exists() {
-            plugin_cleanup_leftovers(&dst_dir);
-            return obj(vec![("ok", Json::b(false)), ("error", Json::s("not-found"))]);
-        }
-        if std::fs::remove_file(&dst).is_ok() {
-            plugin_cleanup_leftovers(&dst_dir);
-            crate::diag::diag("plugin", &format!("removed {dst}"));
-            return obj(vec![("ok", Json::b(true)), ("deleted", Json::b(true)), ("path", Json::s(dst))]);
-        }
-        // файл занят (TS3 загрузил DLL) — отодвинуть в сторону: после
-        // перезапуска клиента под это имя уже ничего не загрузится
-        let old = format!("{dst}.old-{}", crate::model::now_ms());
-        if std::fs::rename(&dst, &old).is_err() {
-            return obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
-        }
-        let _ = std::fs::remove_file(&old); // если уже не загружен — удалится сразу
-        plugin_cleanup_leftovers(&dst_dir);
-        crate::diag::diag("plugin", &format!("moved aside {old}"));
-        obj(vec![("ok", Json::b(true)), ("moved", Json::b(true)), ("path", Json::s(dst))])
-    }
-    #[cfg(not(any(windows, tsn_win32)))]
-    {
-        obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))])
-    }
-}
-
-pub(crate) fn plugin_install(dll: &str) -> Json {
-    if !cfg!(windows) {
-        return obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))]);
-    }
-    if dll.is_empty() || !Path::new(dll).exists() {
-        return obj(vec![("ok", Json::b(false)), ("error", Json::s("dll-missing"))]);
-    }
-    #[cfg(any(windows, tsn_win32))]
-    {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        let dst_dir = format!("{appdata}\\TS3Client\\plugins");
-        let dst = format!("{dst_dir}\\ts3plugin_tsn_win64.dll");
-        let _ = std::fs::create_dir_all(&dst_dir);
-        // identical → nothing to do
-        if let (Ok(a), Ok(b)) = (std::fs::read(dll), std::fs::read(&dst)) {
-            if a == b {
-                return obj(vec![("ok", Json::b(true)), ("same", Json::b(true)), ("path", Json::s(dst))]);
-            }
-        }
-        // copy; on lock errors rename aside first (Windows maps the DLL)
-        if std::fs::copy(dll, &dst).is_err() {
-            let old = format!("{dst}.old-{}", crate::model::now_ms());
-            if std::fs::rename(&dst, &old).is_err() {
-                return obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
-            }
-            if std::fs::copy(dll, &dst).is_err() {
-                return obj(vec![("ok", Json::b(false)), ("error", Json::s("copy-failed"))]);
-            }
-        }
-        crate::diag::diag("plugin", &format!("installed to {dst}"));
-        obj(vec![("ok", Json::b(true)), ("path", Json::s(dst))])
-    }
-    #[cfg(not(any(windows, tsn_win32)))]
-    {
-        obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))])
     }
 }
 

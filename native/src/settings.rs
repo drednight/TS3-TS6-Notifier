@@ -95,10 +95,6 @@ pub enum Ctrl {
     OpenPanel,
     /// Text input field: (field id). Click focuses it for typing.
     Field(&'static str),
-    /// «Установить плагин» (TeamSpeak 3).
-    InstallPlugin,
-    /// «Удалить плагин» (TeamSpeak 3).
-    RemovePlugin,
     /// «Переподключить» — restart the active connector.
     Reconnect,
     /// «Проверить обновления».
@@ -159,8 +155,6 @@ fn class_ru(key: &str) -> &'static str {
 /// Actions that need `Arc<App>` — executed by run_loop after click().
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pending {
-    InstallPlugin,
-    RemovePlugin,
     Reconnect,
     CheckUpdate,
     /// Install a downloaded update and restart («Перезапустить сейчас»).
@@ -445,8 +439,6 @@ impl SettingsModel {
                 self.focus = Some(id);
                 self.select_all = true;
             }
-            Ctrl::InstallPlugin => self.pending = Some(Pending::InstallPlugin),
-            Ctrl::RemovePlugin => self.pending = Some(Pending::RemovePlugin),
             Ctrl::Reconnect => self.pending = Some(Pending::Reconnect),
             Ctrl::CheckUpdate => self.pending = Some(Pending::CheckUpdate),
             Ctrl::InstallUpdate => self.pending = Some(Pending::InstallUpdate),
@@ -475,7 +467,7 @@ impl SettingsModel {
                     return;
                 }
                 let v = match key {
-                    "source" => ["mock", "ts3", "ts6"].get(i as usize).copied().unwrap_or("mock"),
+                    "source" => ["auto", "ts3", "ts6", "mock"].get(i as usize).copied().unwrap_or("auto"),
                     "language" => ["auto", "ru", "en"].get(i as usize).copied().unwrap_or("auto"),
                     "eq_style" => ["bars", "ring", "dots", "none"].get(i as usize).copied().unwrap_or("bars"),
                     "overlay_layer" => ["panel", "screen", "fullscreen"].get(i as usize).copied().unwrap_or("screen"),
@@ -1317,9 +1309,10 @@ fn select_options(key: &str, lang: &str) -> Vec<(String, u8)> {
     }
     if key == "source" {
         return vec![
-            (tr(lang, "Демо-данные", "Mock data"), 0),
+            (tr(lang, "Авто", "Auto"), 0),
             ("TeamSpeak 3".into(), 1),
             ("TeamSpeak 6".into(), 2),
+            (tr(lang, "Демо-данные", "Mock data"), 3),
         ];
     }
     match key {
@@ -1360,9 +1353,10 @@ fn select_index(key: &str, m: &SettingsModel) -> u8 {
     }
     if key == "source" {
         return match m.source.as_str() {
+            "auto" => 0,
             "ts3" => 1,
             "ts6" => 2,
-            _ => 0,
+            _ => 3,
         };
     }
     let (app, desktop) = (&m.app, &m.desktop);
@@ -2208,24 +2202,6 @@ pub fn render(m: &SettingsModel, fonts: &Fonts, icons: &Icons, k: f32) -> (Buf, 
                     regions.push(Region { rect, ctrl: Ctrl::Field(id) });
                     y += 56.0;
                 }
-                {
-                    let label = tr(&m.lang, "Установить плагин", "Install plugin");
-                    draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
-                    regions.push(Region {
-                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
-                        ctrl: Ctrl::InstallPlugin,
-                    });
-                    y += 42.0;
-                }
-                {
-                    let label = tr(&m.lang, "Удалить плагин", "Remove plugin");
-                    draw_button(&c, &mut buf, pane_x + 4.0, y, pane_w - 8.0, 34.0, &label);
-                    regions.push(Region {
-                        rect: crate::layout::Rect { x: pane_x + 4.0, y, w: pane_w - 8.0, h: 34.0 },
-                        ctrl: Ctrl::RemovePlugin,
-                    });
-                    y += 42.0;
-                }
             } else {
                 {
                     buf.text(&c.fonts, pane_x + 4.0, y + 13.0, "TeamSpeak 6", 12.5, true, pal.text);
@@ -2651,48 +2627,6 @@ fn update_marker_path() -> std::path::PathBuf {
     std::env::temp_dir().join("tsn-update-pending.txt")
 }
 
-/// Human-readable result of «Установить плагин» (maps plugin_install errors).
-pub fn plugin_result_text(res: &crate::json::Json, lang: &str) -> String {
-    if !matches!(res.get("ok"), Some(crate::json::Json::Bool(true))) {
-        return match res.get("error").and_then(|e| e.as_str()) {
-            Some("dll-missing") => tr(
-                lang,
-                "Файл плагина не найден в папке приложения",
-                "Plugin file not found in the app folder",
-            ),
-            Some("not-found") => tr(lang, "Плагин не установлен", "Plugin is not installed"),
-            Some("locked") => tr(
-                lang,
-                "Файл занят — закройте TeamSpeak 3 и повторите",
-                "File is locked — close TeamSpeak 3 and try again",
-            ),
-            Some("windows-only") => tr(lang, "Установка доступна только в Windows", "Install is Windows-only"),
-            _ => tr(lang, "Не удалось установить плагин", "Plugin install failed"),
-        };
-    }
-    if matches!(res.get("deleted"), Some(crate::json::Json::Bool(true))) {
-        return tr(
-            lang,
-            "Плагин удалён ✓ — перезапустите TeamSpeak 3",
-            "Plugin removed ✓ — restart TeamSpeak 3",
-        );
-    }
-    if matches!(res.get("moved"), Some(crate::json::Json::Bool(true))) {
-        return tr(
-            lang,
-            "Плагин отключён ✓ — перезапустите TeamSpeak 3 (файл был занят)",
-            "Plugin disabled ✓ — restart TeamSpeak 3 (the file was locked)",
-        );
-    }
-    if matches!(res.get("same"), Some(crate::json::Json::Bool(true))) {
-        return tr(lang, "Плагин уже установлен ✓", "Plugin is already installed ✓");
-    }
-    tr(
-        lang,
-        "Плагин установлен ✓ — перезапустите TeamSpeak 3 и включите его в Add-ons",
-        "Plugin installed ✓ — restart TeamSpeak 3 and enable it in Add-ons",
-    )
-}
 
 /// Translate an update-check mailbox code into the «Ещё» status line.
 pub fn update_note_text(code: &str, lang: &str) -> String {
@@ -3006,14 +2940,6 @@ pub fn run_loop(m: &mut SettingsModel, app: &Arc<App>, fonts: &Fonts, icons: &Ic
         }
         if let Some(p) = m.pending.take() {
             match p {
-                Pending::InstallPlugin => {
-                    let res = crate::http::plugin_install(&app.plugin_dll);
-                    m.conn_note = plugin_result_text(&res, &m.lang);
-                }
-                Pending::RemovePlugin => {
-                    let res = crate::http::plugin_remove();
-                    m.conn_note = plugin_result_text(&res, &m.lang);
-                }
                 Pending::Reconnect => {
                     (app.restart_connector)();
                     m.conn_note = tr(&m.lang, "Переподключено ✓", "Reconnected ✓");
@@ -3196,33 +3122,8 @@ mod tests {
         let mut m = model();
         m.click(Ctrl::CheckUpdate, 0.0, 0.0);
         assert_eq!(m.pending, Some(Pending::CheckUpdate));
-        m.click(Ctrl::InstallPlugin, 0.0, 0.0);
-        assert_eq!(m.pending, Some(Pending::InstallPlugin));
-        m.click(Ctrl::RemovePlugin, 0.0, 0.0);
-        assert_eq!(m.pending, Some(Pending::RemovePlugin));
     }
 
-    #[test]
-    fn plugin_result_messages() {
-        use crate::json::{obj, Json};
-        let ok = obj(vec![("ok", Json::b(true)), ("path", Json::s("x"))]);
-        assert!(plugin_result_text(&ok, "ru").contains("установлен"));
-        let same = obj(vec![("ok", Json::b(true)), ("same", Json::b(true))]);
-        assert!(plugin_result_text(&same, "ru").contains("уже установлен"));
-        let miss = obj(vec![("ok", Json::b(false)), ("error", Json::s("dll-missing"))]);
-        assert!(plugin_result_text(&miss, "ru").contains("не найден"));
-        assert!(plugin_result_text(&miss, "en").contains("not found"));
-        let locked = obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
-        assert!(plugin_result_text(&locked, "ru").contains("закройте TeamSpeak"));
-        let other = obj(vec![("ok", Json::b(false)), ("error", Json::s("copy-failed"))]);
-        assert!(plugin_result_text(&other, "ru").contains("Не удалось"));
-        let gone = obj(vec![("ok", Json::b(true)), ("deleted", Json::b(true))]);
-        assert!(plugin_result_text(&gone, "ru").contains("удалён"));
-        let moved = obj(vec![("ok", Json::b(true)), ("moved", Json::b(true))]);
-        assert!(plugin_result_text(&moved, "ru").contains("перезапустите"));
-        let missing = obj(vec![("ok", Json::b(false)), ("error", Json::s("not-found"))]);
-        assert!(plugin_result_text(&missing, "ru").contains("не установлен"));
-    }
 
     #[test]
     fn group_rows_cover_all_ids() {

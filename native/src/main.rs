@@ -6,6 +6,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod assets;
+mod auto;
 mod chatlog;
 mod config;
 mod diag;
@@ -44,13 +45,16 @@ enum Handle {
     Ts3(Arc<AtomicBool>),
     Mock(mock::MockConnector),
     Ts6(Arc<AtomicBool>),
+    /// v2.0.34: супервисор автоопределения (внешний stop останавливает и
+    /// текущий коннектор внутри).
+    Auto(Arc<AtomicBool>),
     Stub,
 }
 
 impl Handle {
     fn stop(&self) {
         match self {
-            Handle::Ts3(stop) | Handle::Ts6(stop) => {
+            Handle::Ts3(stop) | Handle::Ts6(stop) | Handle::Auto(stop) => {
                 stop.store(true, std::sync::atomic::Ordering::SeqCst)
             }
             Handle::Mock(c) => c.stop(),
@@ -59,12 +63,41 @@ impl Handle {
     }
 }
 
-/// Coalesce state bursts into at most ~10 broadcasts/second (same as the TS
-/// connectors' emitState throttle).
-fn throttled_sink(app: Arc<App>) -> Emit {
+/// v2.0.34: «connecting/offline/waiting-auth» с пустым списком наследует
+/// прежний ростер — при переподключении и смене источника меняется только
+/// статус, список людей не мигает (правило v2.0.32, обобщённое на app-уровень).
+fn inherit_roster(prev: Option<&OverlayState>, st: &mut OverlayState) {
+    let bare = matches!(st.status, "connecting" | "offline" | "waiting-auth") && st.users.is_empty();
+    if !bare {
+        return;
+    }
+    let Some(p) = prev else { return };
+    if p.users.is_empty() {
+        return;
+    }
+    st.users = p.users.clone();
+    st.whisperers = p.whisperers.clone();
+    st.chat = p.chat.clone();
+    st.groups = p.groups.clone();
+    if st.server_name.is_empty() {
+        st.server_name = p.server_name.clone();
+    }
+    if st.channel_name.is_empty() {
+        st.channel_name = p.channel_name.clone();
+    }
+    if st.channel_id.is_empty() {
+        st.channel_id = p.channel_id.clone();
+    }
+}
+
+/// Coalesce state bursts into at most ~30 broadcasts/second (same as the TS
+/// connectors' emitState throttle). `live` — 1, пока источник отдаёт статус
+/// «live» (супервисор автоопределения решает, нужен ли handover).
+fn throttled_sink(app: Arc<App>, live: Arc<std::sync::atomic::AtomicU8>) -> Emit {
     let (tx, rx) = channel::<OverlayState>();
     thread::spawn(move || {
         let mut pending: Option<OverlayState> = None;
+        let mut prev: Option<OverlayState> = None;
         let mut last_sent = 0u64;
         loop {
             match rx.recv_timeout(Duration::from_millis(50)) {
@@ -84,7 +117,13 @@ fn throttled_sink(app: Arc<App>) -> Emit {
                     pending = Some(newer);
                 }
             }
-            let st = pending.take().unwrap_or(st);
+            let mut st = pending.take().unwrap_or(st);
+            inherit_roster(prev.as_ref(), &mut st);
+            live.store(
+                if st.status == "live" { 1 } else { 0 },
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            prev = Some(st.clone());
             last_sent = now_ms();
             app.push_state(&st);
         }
@@ -94,10 +133,105 @@ fn throttled_sink(app: Arc<App>) -> Emit {
     })
 }
 
+/// v2.0.34: супервисор автоопределения источника.
+/// Пробуем TS3/TS6, запускаем победителя; если источник долго «не live»
+/// (≥20 с) и другой доступен — плавно переключаемся (handover).
+fn run_auto_connector(
+    store: Arc<Mutex<ConfigStore>>,
+    emit: Emit,
+    live: Arc<std::sync::atomic::AtomicU8>,
+    stop: Arc<AtomicBool>,
+) {
+    thread::spawn(move || {
+        loop {
+            if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let cfg = store.lock().unwrap().get().clone();
+            let s3 = auto::probe_ts3(&cfg.ts3.host, cfg.ts3.port);
+            let s6 = auto::probe_ts6(&cfg.ts6.host, cfg.ts6.port);
+            let winner = auto::pick_source(s3, s6);
+            let name = |src: auto::Source| match src {
+                auto::Source::Ts3 => "ts3",
+                auto::Source::Ts6 => "ts6",
+            };
+            diag::diag("auto", &format!("probe ts3={s3} ts6={s6} -> {}", name(winner)));
+
+            let inner = Arc::new(AtomicBool::new(false));
+            {
+                let inner2 = inner.clone();
+                let emit2 = emit.clone();
+                let store2 = store.clone();
+                thread::spawn(move || match winner {
+                    auto::Source::Ts3 => {
+                        let c = store2.lock().unwrap().get().clone();
+                        ts3::Ts3Connector::run(c.ts3.host, c.ts3.port, c.ts3.api_key, inner2, move |st| {
+                            emit2(st)
+                        });
+                    }
+                    auto::Source::Ts6 => {
+                        let c = store2.lock().unwrap().get().clone();
+                        let save_key: ts6::SaveKeyFn = {
+                            let store = store2.clone();
+                            Arc::new(move |key: String| {
+                                let patch = crate::json::obj(vec![(
+                                    "ts6",
+                                    crate::json::obj(vec![("apiKey", Json::s(key))]),
+                                )]);
+                                let _ = store.lock().unwrap().update(&patch);
+                            })
+                        };
+                        ts6::run(c.ts6.host, c.ts6.port, c.ts6.api_key, save_key, inner2, move |st| {
+                            emit2(st)
+                        });
+                    }
+                });
+            }
+
+            // наблюдение: долго не live — пробуем другой источник
+            let mut non_live_since = now_ms();
+            loop {
+                thread::sleep(Duration::from_millis(500));
+                if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    inner.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
+                if live.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                    non_live_since = now_ms();
+                    continue;
+                }
+                if now_ms().saturating_sub(non_live_since) < 20_000 {
+                    continue;
+                }
+                let cfg = store.lock().unwrap().get().clone();
+                let a = auto::probe_ts3(&cfg.ts3.host, cfg.ts3.port);
+                let b = auto::probe_ts6(&cfg.ts6.host, cfg.ts6.port);
+                let other = auto::pick_source(a, b);
+                if other != winner && a.max(b) >= 2 {
+                    diag::diag(
+                        "auto",
+                        &format!("handover: {} -> {} (source silent >20s)", name(winner), name(other)),
+                    );
+                    inner.store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                non_live_since = now_ms();
+            }
+        }
+    });
+}
+
 fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
     let cfg = store.lock().unwrap().get().clone();
-    let emit = throttled_sink(app.clone());
+    let live = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let emit = throttled_sink(app.clone(), live.clone());
     match cfg.source.as_str() {
+        "auto" => {
+            let stop = Arc::new(AtomicBool::new(false));
+            run_auto_connector(store.clone(), emit, live, stop.clone());
+            println!("[server] data source: auto (ts3/ts6 probe)");
+            Handle::Auto(stop)
+        }
         "ts3" => {
             let stop = Arc::new(AtomicBool::new(false));
             {
@@ -109,7 +243,6 @@ fn start_connector(store: &Arc<Mutex<ConfigStore>>, app: &Arc<App>) -> Handle {
                     ts3::Ts3Connector::run(host, port, api_key, stop, move |st| emit(st));
                 });
             }
-            app.plugin_active.store(false, std::sync::atomic::Ordering::SeqCst);
             println!("[server] data source: ts3 (ClientQuery)");
             Handle::Ts3(stop)
         }
@@ -188,19 +321,13 @@ fn main() {
 
     let handle_slot: Arc<Mutex<Handle>> = Arc::new(Mutex::new(Handle::Stub));
 
-    let plugin_dll = root.join("dist").join("ts3plugin_tsn_win64.dll");
-    let plugin_dll = if plugin_dll.exists() {
-        plugin_dll.to_string_lossy().into_owned()
-    } else {
-        String::new()
-    };
-
     let initial_state = {
         let source = store.lock().unwrap().get().source.clone();
         // 'static strs for the model — map once here
         let source: &'static str = match source.as_str() {
             "ts3" => "ts3",
             "ts6" => "ts6",
+            "auto" => "auto",
             _ => "mock",
         };
         OverlayState::empty(source, "connecting", "")
@@ -215,8 +342,6 @@ fn main() {
         panel_size: Mutex::new(None),
         version: env!("CARGO_PKG_VERSION").to_string(),
         public_dir: public_dir.clone(),
-        plugin_active: Arc::new(AtomicBool::new(false)),
-        plugin_dll: plugin_dll.clone(),
         restart_connector: Arc::new({
             let weak = weak.clone();
             let slot = handle_slot.clone();
@@ -290,5 +415,63 @@ fn main() {
     }
     loop {
         thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ChatKind, ChatMessage, UserState};
+
+    fn msg(text: &str) -> ChatMessage {
+        ChatMessage {
+            id: "m1".into(),
+            user_id: "u1".into(),
+            nickname: "N".into(),
+            text: text.into(),
+            kind: ChatKind::Channel,
+            at: 0,
+            event: None,
+            detail: None,
+            own: None,
+        }
+    }
+
+    #[test]
+    fn bare_connecting_inherits_prev_roster() {
+        let mut prev = OverlayState::empty("ts3", "live", "");
+        prev.users = vec![UserState::new("5", "Лиса")];
+        prev.chat = vec![msg("x")];
+        prev.server_name = "S".into();
+
+        let mut st = OverlayState::empty("ts6", "connecting", "");
+        inherit_roster(Some(&prev), &mut st);
+        assert_eq!(st.users.len(), 1);
+        assert_eq!(st.users[0].nickname, "Лиса");
+        assert_eq!(st.chat.len(), 1);
+        assert_eq!(st.server_name, "S");
+        // меняется только статус — список людей не мигает
+        assert_eq!(st.status, "connecting");
+    }
+
+    #[test]
+    fn live_state_is_never_overridden() {
+        let mut prev = OverlayState::empty("ts3", "live", "");
+        prev.users = vec![UserState::new("5", "A")];
+        prev.chat = vec![msg("x")];
+
+        let mut st = OverlayState::empty("ts3", "live", "");
+        st.users = vec![UserState::new("6", "B")];
+        inherit_roster(Some(&prev), &mut st);
+        assert_eq!(st.users.len(), 1);
+        assert_eq!(st.users[0].nickname, "B");
+        assert!(st.chat.is_empty());
+    }
+
+    #[test]
+    fn first_bare_state_stays_empty() {
+        let mut st = OverlayState::empty("ts3", "connecting", "");
+        inherit_roster(None, &mut st);
+        assert!(st.users.is_empty());
     }
 }
