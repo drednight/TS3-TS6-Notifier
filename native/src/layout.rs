@@ -299,30 +299,96 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                     buf.fill_rect(sx, sy, c.s(2.2), c.s(2.2), Rgba::rgb(255, 255, 255).scale_a(a2 as f64));
                 }
             }
+            // анимация «скользящий блик»: мягкий световой штрих обходит контур
+            if c.anim {
+                let per = 2.0 * (w + h);
+                let head = (((c.now / 4200.0) % 1.0) as f32) * per;
+                for tail in 0..8 {
+                    let mut p = (head - tail as f32 * c.s(6.0)) % per;
+                    if p < 0.0 {
+                        p += per;
+                    }
+                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let fade = (1.0 - tail as f64 / 8.0).powf(1.6);
+                    buf.fill_rect(
+                        sx - c.s(1.6),
+                        sy - c.s(1.6),
+                        c.s(3.2),
+                        c.s(3.2),
+                        mix(Rgba::rgb(255, 255, 255), acc, 0.18).scale_a(16.0 + 92.0 * fade),
+                    );
+                }
+            }
         }
         StyleKind::Neon => {
-            // glowing double frame
-            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(150.0), 2.0);
-            buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, acc.scale_a(42.0), 1.0);
+            // glowing double frame + анимация «дыхание неона»: рамка пульсирует,
+            // изредка (раз в ~7 с) лампа коротко «моргает»
+            let mut glow = 1.0f64;
+            let mut inner = 1.0f64;
+            if c.anim {
+                let ph = ((c.now / 1500.0) % 1.0) as f32;
+                let tri = if ph < 0.5 { ph * 2.0 } else { (1.0 - ph) * 2.0 };
+                let flick = if ((c.now / 7000.0) % 1.0) < 0.022 { 0.48 } else { 1.0 };
+                glow = (0.62 + 0.38 * tri as f64) * flick;
+                inner = (1.34 - 0.34 * tri as f64) * flick;
+            }
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(150.0 * glow), 2.0);
+            buf.stroke_round_rect(
+                x + c.s(3.0),
+                y + c.s(3.0),
+                w - c.s(6.0),
+                h - c.s(6.0),
+                r,
+                acc.scale_a((42.0 * inner).min(78.0)),
+                1.0,
+            );
         }
         StyleKind::Hud => {
-            // тактический трафарет: пунктирный контур + асимметричные скобки TL/BR
+            // тактический трафарет: пунктирный контур + асимметричные скобки TL/BR.
+            // Анимация «скан»: по периметру бежит световая шапка, подсвечивая
+            // ближайшие штрихи пунктира.
             {
                 let t = c.s(1.6);
-                let a = acc.scale_a(150.0);
                 let dash = c.s(8.0);
                 let gap = c.s(5.0);
+                let per = 2.0 * (w + h);
+                let scan = if c.anim { (((c.now / 3000.0) % 1.0) as f32) * per } else { -1.0e9 };
+                let boost_r = c.s(30.0);
+                let mut dash_alpha = |pd: f32| -> f64 {
+                    if scan < -1.0e8 {
+                        return 150.0;
+                    }
+                    let d = (pd - scan).abs().min(per - (pd - scan).abs());
+                    let k = (1.0 - d / boost_r).clamp(0.0, 1.0);
+                    132.0 + 100.0 * k as f64
+                };
                 let mut px2 = x;
                 while px2 < x + w - dash {
-                    buf.fill_rect(px2, y, dash, t, a);
-                    buf.fill_rect(px2, y + h - t, dash, t, a);
+                    buf.fill_rect(px2, y, dash, t, acc.scale_a(dash_alpha(px2 - x)));
+                    buf.fill_rect(
+                        px2,
+                        y + h - t,
+                        dash,
+                        t,
+                        acc.scale_a(dash_alpha(w + h + (x + w - px2))),
+                    );
                     px2 += dash + gap;
                 }
                 let mut py2 = y;
                 while py2 < y + h - dash {
-                    buf.fill_rect(x, py2, t, dash, a);
-                    buf.fill_rect(x + w - t, py2, t, dash, a);
+                    buf.fill_rect(x, py2, t, dash, acc.scale_a(dash_alpha(w + (py2 - y))));
+                    buf.fill_rect(
+                        x + w - t,
+                        py2,
+                        t,
+                        dash,
+                        acc.scale_a(dash_alpha(per - (py2 - y))),
+                    );
                     py2 += dash + gap;
+                }
+                if c.anim {
+                    let (sx, sy) = perimeter_point(x, y, w, h, scan);
+                    buf.fill_rect(sx - c.s(2.2), sy - c.s(2.2), c.s(4.4), c.s(4.4), mix(acc, Rgba::rgb(255, 255, 255), 0.45).scale_a(210.0));
                 }
             }
             let t2 = c.s(2.2);
@@ -334,8 +400,28 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             buf.line(x + w, y + h - arm, x + w, y + h, t2, a2);
         }
         StyleKind::Soft => {
-            // no hard border — soft light rim only
-            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(28.0), 1.0);
+            // no hard border — soft light rim only; анимация «дыхание»:
+            // кромка плавно светлеет и гаснет (3.2 с), внутренняя — в противофазе
+            let mut rim = 28.0f64;
+            let mut rim_in = 1.0f64;
+            if c.anim {
+                let ph = ((c.now / 3200.0) % 1.0) as f32;
+                let s = 0.5 + 0.5 * (ph * std::f32::consts::TAU).sin();
+                rim = 20.0 + 15.0 * s as f64;
+                rim_in = 0.55 + 0.45 * (1.0 - s as f64);
+            }
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(rim), 1.0);
+            if c.anim {
+                buf.stroke_round_rect(
+                    x + c.s(2.5),
+                    y + c.s(2.5),
+                    w - c.s(5.0),
+                    h - c.s(5.0),
+                    r,
+                    Rgba::rgb(255, 255, 255).scale_a(8.0 * rim_in),
+                    1.0,
+                );
+            }
         }
         StyleKind::Plasma => {
             // энергетическая рамка: свечение + орбитальные «кометы»
@@ -361,6 +447,27 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
         }
         StyleKind::Minimal => {
             buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+            // анимация «тихий огонёк»: маленькая акцентная точка медленно
+            // обходит контур — минимально и не отвлекает
+            if c.anim {
+                let per = 2.0 * (w + h);
+                let head = (((c.now / 6000.0) % 1.0) as f32) * per;
+                for tail in 0..3 {
+                    let mut p = (head - tail as f32 * c.s(7.0)) % per;
+                    if p < 0.0 {
+                        p += per;
+                    }
+                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let fade = 1.0 - tail as f64 / 3.0;
+                    buf.fill_rect(
+                        sx - c.s(1.1),
+                        sy - c.s(1.1),
+                        c.s(2.2),
+                        c.s(2.2),
+                        acc.scale_a(30.0 + 105.0 * fade),
+                    );
+                }
+            }
         }
         StyleKind::Cyber => {
             // notched corners: border of 8 segments with corner cuts + top dashes
@@ -1675,6 +1782,40 @@ mod tests {
         assert_eq!(frame.panel_w, PANEL_W * 1.25);
         assert!(frame.hits.is_empty());
     }
+    /// Анимации старых стилей: при выключенных animations кадр статичен
+    /// (пиксель-в-пиксель), при включённых — зависит от времени.
+    #[test]
+    fn old_style_frame_anim_is_gated() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        for style in ["glass", "neon", "hud", "soft", "minimal"] {
+            // статика: два разных времени дают одинаковый кадр
+            let mut a = Appearance::default();
+            a.style = style.to_string();
+            a.animations = false;
+            let pal = Palette::from_appearance(&a);
+            let mut inp = size_inp(&a, &pal, &fonts, &icons);
+            // без talking: рисуем ТОЛЬКО хром рамки, эффект стиля изолирован
+            inp.users.iter_mut().for_each(|u| u.talking = false);
+            inp.now_ms = 1000;
+            let f1 = render_frame(&inp);
+            inp.now_ms = 2600;
+            let f2 = render_frame(&inp);
+            assert_eq!(f1.buf.px, f2.buf.px, "{style}: static frame must not depend on time");
+            // анимация: кадр меняется со временем
+            let mut a2 = Appearance::default();
+            a2.style = style.to_string();
+            a2.animations = true;
+            let pal2 = Palette::from_appearance(&a2);
+            let mut inp2 = size_inp(&a2, &pal2, &fonts, &icons);
+            inp2.users.iter_mut().for_each(|u| u.talking = false);
+            inp2.now_ms = 1000;
+            let f3 = render_frame(&inp2);
+            inp2.now_ms = 2600;
+            let f4 = render_frame(&inp2);
+            assert_ne!(f3.buf.px, f4.buf.px, "{style}: animated frame must tick with time");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1948,6 +2089,67 @@ mod qa {
             };
             let fr = render_frame(&inp3);
             write_png(&format!("{dir}/style-{st_id}.png"), &fr.buf).unwrap();
+        }
+    }
+
+    /// Лента из трёх кадров для каждого старого стиля (анимация включена) —
+    /// видно, как эффект движется: qa/anim-{style}.png (t = 0.6 / 1.9 / 3.3 c).
+    #[test]
+    fn qa_dump_old_style_anim() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
+        std::fs::create_dir_all(dir).unwrap();
+        for style in ["glass", "neon", "hud", "soft", "minimal"] {
+            let mut a = Appearance::default();
+            a.style = style.to_string();
+            a.animations = true;
+            let pal = Palette::from_appearance(&a);
+            let mut frames: Vec<Frame> = Vec::new();
+            for t in [600u64, 1900, 3300] {
+                let mut alice = UserState::new("100", "Alice");
+                alice.talking = true;
+                let inp = FrameInput {
+                    appearance: &a,
+                    pal: &pal,
+                    fonts: &fonts,
+                    icons: &icons,
+                    status: "live",
+                    server_name: "Eternals",
+                    channel_name: "Генеральный штаб",
+                    user_count: 2,
+                    users: vec![alice, UserState::new("1", "Я")],
+                    talk_alphas: vec![],
+                    class_keys: vec![Some("archer".into()), None],
+                    whisper_keys: vec![],
+                    whisperers: vec![],
+                    feed: vec![],
+                    lang: "ru",
+                    move_mode: false,
+                    now_ms: t,
+                    work_h: 1080.0,
+                    roster_scroll: 0.0,
+                };
+                frames.push(render_frame(&inp));
+            }
+            // склейка кадров горизонтально с зазором
+            let gap = 10i32;
+            let fw = frames[0].buf.w;
+            let h = frames[0].buf.h;
+            let total_w = fw * frames.len() as i32 + gap * (frames.len() as i32 - 1);
+            let mut px = vec![24u8; (total_w * h * 4) as usize];
+            for (i, f) in frames.iter().enumerate() {
+                let ox = i as i32 * (fw + gap);
+                for row in 0..h {
+                    let src = (row * f.buf.w * 4) as usize;
+                    let dst = ((row * total_w + ox) * 4) as usize;
+                    let n = (f.buf.w * 4) as usize;
+                    px[dst..dst + n].copy_from_slice(&f.buf.px[src..src + n]);
+                }
+            }
+            let mut stitched = Buf::new(total_w, h);
+            stitched.px = px;
+            write_png(&format!("{dir}/anim-{style}.png"), &stitched).unwrap();
         }
     }
 }

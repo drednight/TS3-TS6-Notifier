@@ -546,7 +546,10 @@ impl Overlay {
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
 
         // ---- dirty check: an unchanged frame skips render + present ----
-        let style_anim = a.style == "plasma" || a.style == "radiance";
+        let style_anim = matches!(
+            a.style.as_str(),
+            "plasma" | "radiance" | "glass" | "neon" | "hud" | "soft" | "minimal"
+        );
         let anim_active =
             a.animations && (style_anim || rows.iter().any(|u| u.talking) || !whisperers.is_empty());
         let time_bucket = if anim_active {
