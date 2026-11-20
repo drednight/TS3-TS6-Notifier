@@ -49,6 +49,8 @@ pub fn parse_color(s: &str) -> Rgba {
 /// «анимированные» (CALM_COUNT.., drive their own clock-based effects).
 /// `matrix` is now the digital rain; the old circuit-board paint lives on as
 /// `chip`, so saved configs keep their look.
+/// v2.1.1: + «Плоский» и «Классика» — два полностью неанимированных
+/// стандартных стиля (спокойная половина каталога пополнилась).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleKind {
     Glass,
@@ -57,6 +59,8 @@ pub enum StyleKind {
     Cyber,
     Chip,
     Draft,
+    Flat,
+    Classic,
     Neon,
     Hud,
     Plasma,
@@ -67,14 +71,16 @@ pub enum StyleKind {
 
 impl StyleKind {
     /// Number of leading «спокойные» styles in `ALL` (picker grouping).
-    pub const CALM_COUNT: usize = 6;
-    pub const ALL: [(&str, &str, &str); 12] = [
+    pub const CALM_COUNT: usize = 8;
+    pub const ALL: [(&str, &str, &str); 14] = [
         ("glass", "Стекло", "Glass"),
         ("soft", "Мягкий", "Soft"),
         ("minimal", "Минимал", "Minimal"),
         ("cyber", "Кибер", "Cyber"),
         ("chip", "Плата", "Circuit"),
         ("draft", "Чертёж", "Draft"),
+        ("flat", "Плоский", "Flat"),
+        ("classic", "Классика", "Classic"),
         ("neon", "Неон", "Neon"),
         ("hud", "Тактический", "Tactical"),
         ("plasma", "Плазма", "Plasma"),
@@ -83,8 +89,9 @@ impl StyleKind {
         ("radar", "Радар", "Radar"),
     ];
     /// Signature accent per style (applied when the style tile is clicked).
-    pub const ACCENTS: [&str; 12] = [
+    pub const ACCENTS: [&str; 14] = [
         "#7c6cff", "#c084fc", "#e5e7eb", "#ff2fd6", "#38bdf8", "#93c5fd",
+        "#cbd5e1", "#94a3b8",
         "#22d3ee", "#f59e0b", "#8b5cf6", "#ffd166", "#4ade80", "#34d399",
     ];
 
@@ -96,6 +103,8 @@ impl StyleKind {
             "minimal" => StyleKind::Minimal,
             "cyber" => StyleKind::Cyber,
             "chip" => StyleKind::Chip,
+            "flat" => StyleKind::Flat,
+            "classic" => StyleKind::Classic,
             "plasma" => StyleKind::Plasma,
             "draft" => StyleKind::Draft,
             "matrix" => StyleKind::Matrix,
@@ -141,6 +150,10 @@ impl StyleKind {
             (StyleKind::Chip, false) => "circuit board with pads",
             (StyleKind::Draft, true) => "чертёж с миллиметровкой",
             (StyleKind::Draft, false) => "blueprint with graph paper",
+            (StyleKind::Flat, true) => "плоская панель, без эффектов",
+            (StyleKind::Flat, false) => "flat panel, no effects",
+            (StyleKind::Classic, true) => "классическая рамка, статика",
+            (StyleKind::Classic, false) => "classic frame, static",
             (StyleKind::Neon, true) => "неон, пульс и редкое мерцание",
             (StyleKind::Neon, false) => "neon pulse with a rare flicker",
             (StyleKind::Hud, true) => "тактический трафарет и скан",
@@ -442,7 +455,10 @@ mod tests {
             let sk = StyleKind::parse(id);
             if i >= StyleKind::CALM_COUNT {
                 assert!(sk.needs_tick(), "{id}: animated group must tick");
-            } else if matches!(sk, StyleKind::Cyber | StyleKind::Chip | StyleKind::Draft) {
+            } else if matches!(
+                sk,
+                StyleKind::Cyber | StyleKind::Chip | StyleKind::Draft | StyleKind::Flat | StyleKind::Classic
+            ) {
                 assert!(!sk.needs_tick(), "{id}: static calm style must not tick");
             }
             assert!(!sk.desc(true).is_empty() && !sk.desc(false).is_empty(), "{id}");
