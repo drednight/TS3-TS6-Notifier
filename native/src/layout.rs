@@ -230,10 +230,17 @@ impl<'a> Ctx<'a> {
     /// Style-aware corner radius (from a base px radius).
     fn rad(&self, base: f32) -> f32 {
         match self.sk {
-            StyleKind::Glass => base,
+            StyleKind::Glass | StyleKind::Classic | StyleKind::Aurora => base,
             StyleKind::Neon | StyleKind::Hud => (base * 0.3).clamp(self.s(1.5), self.s(6.0)),
             StyleKind::Soft => base * 1.5,
-            StyleKind::Minimal | StyleKind::Cyber | StyleKind::Matrix => (base * 0.2).clamp(self.s(1.5), self.s(6.0)),
+            StyleKind::Minimal
+            | StyleKind::Cyber
+            | StyleKind::Chip
+            | StyleKind::Matrix
+            | StyleKind::Radar
+            | StyleKind::Flat => {
+                (base * 0.2).clamp(self.s(1.5), self.s(6.0))
+            }
             StyleKind::Plasma => base * 0.9,
             StyleKind::Draft => 0.0,
             StyleKind::Radiance => base * 1.1,
@@ -247,10 +254,15 @@ impl<'a> Ctx<'a> {
             StyleKind::Hud => mix(base, Rgba::rgb(6, 8, 10), 0.24),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.10),
             StyleKind::Minimal => mix(base, Rgba::rgb(0, 0, 0), 0.10),
+            StyleKind::Flat => mix(base, Rgba::rgb(0, 0, 0), 0.06),
+            StyleKind::Classic => mix(base, Rgba::rgb(0, 0, 0), 0.12),
+            StyleKind::Aurora => mix(base, Rgba::rgb(4, 12, 22), 0.42),
             StyleKind::Cyber => mix(base, Rgba::rgb(12, 0, 22), 0.45),
+            StyleKind::Chip => mix(base, Rgba::rgb(2, 14, 6), 0.32),
             StyleKind::Plasma => mix(base, Rgba::rgb(20, 4, 30), 0.32),
             StyleKind::Draft => mix(base, Rgba::rgb(8, 16, 28), 0.30),
-            StyleKind::Matrix => mix(base, Rgba::rgb(2, 14, 6), 0.32),
+            StyleKind::Matrix => mix(base, Rgba::rgb(0, 8, 4), 0.52),
+            StyleKind::Radar => mix(base, Rgba::rgb(2, 12, 14), 0.46),
             StyleKind::Radiance => mix(base, Rgba::rgb(30, 24, 10), 0.22),
         }
     }
@@ -262,10 +274,15 @@ impl<'a> Ctx<'a> {
             StyleKind::Hud => mix(base, self.pal.accent, 0.35),
             StyleKind::Soft => mix(base, Rgba::rgb(255, 255, 255), 0.22),
             StyleKind::Minimal => base.scale_a(160.0),
+            StyleKind::Flat => base.scale_a(140.0),
+            StyleKind::Classic => base,
+            StyleKind::Aurora => mix(base, self.pal.accent, 0.35),
             StyleKind::Cyber => self.pal.accent.scale_a(140.0),
+            StyleKind::Chip => self.pal.accent.scale_a(140.0),
             StyleKind::Plasma => self.pal.accent.scale_a(160.0),
             StyleKind::Draft => mix(base, self.pal.accent, 0.45),
-            StyleKind::Matrix => self.pal.accent.scale_a(140.0),
+            StyleKind::Matrix => self.pal.accent.scale_a(120.0),
+            StyleKind::Radar => self.pal.accent.scale_a(130.0),
             StyleKind::Radiance => mix(base, Rgba::rgb(255, 255, 255), 0.30),
         }
     }
@@ -280,49 +297,101 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
     let b = c.border(c.pal.panel_border);
     let acc = c.pal.accent;
     match c.sk {
+        StyleKind::Flat => {
+            // стандартный плоский: совсем без декора
+        }
+        StyleKind::Classic => {
+            // стандартный классический: простая статичная рамка
+            buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+        }
+        StyleKind::Aurora => {
+            // тонкий мятный контур + мягкое внутреннее свечение
+            buf.stroke_round_rect(x, y, w, h, r, mix(b, Rgba::rgb(45, 212, 191), 0.45), 1.1);
+            buf.stroke_round_rect(
+                x + c.s(2.5),
+                y + c.s(2.5),
+                w - c.s(5.0),
+                h - c.s(5.0),
+                r,
+                Rgba::rgb(45, 212, 191).scale_a(22.0),
+                1.0,
+            );
+        }
         StyleKind::Glass => {
-            // слоистое стекло: двойной контур + диагональный блик
+            // слоистое стекло: двойной контур; диагональный блик — поверх
+            // содержимого (draw_glass_sheen), как отражение света на стекле
             buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(48.0), 1.1);
             buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, Rgba::rgb(255, 255, 255).scale_a(16.0), 1.0);
-            // диагональный блик «///» в правом верхнем углу
-            for k in 0..3 {
-                let base_x = x + w - c.s(58.0) + k as f32 * c.s(9.0);
-                let base_y = y + c.s(4.0) + k as f32 * c.s(3.5);
-                for i in 0..6 {
-                    let t = i as f32 / 6.0;
-                    let sx = base_x + c.s(13.0) * t;
-                    let sy = base_y + c.s(8.5) * t;
-                    let a2 = (48.0 * (1.0 - t * 0.7)) as u8;
-                    if a2 == 0 {
-                        continue;
-                    }
-                    buf.fill_rect(sx, sy, c.s(2.2), c.s(2.2), Rgba::rgb(255, 255, 255).scale_a(a2 as f64));
-                }
-            }
         }
         StyleKind::Neon => {
-            // glowing double frame
-            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(150.0), 2.0);
-            buf.stroke_round_rect(x + c.s(3.0), y + c.s(3.0), w - c.s(6.0), h - c.s(6.0), r, acc.scale_a(42.0), 1.0);
+            // glowing double frame + анимация «дыхание неона»: рамка пульсирует,
+            // изредка (раз в ~7 с) лампа коротко «моргает»
+            let mut glow = 1.0f64;
+            let mut inner = 1.0f64;
+            if c.anim {
+                let ph = ((c.now / 1500.0) % 1.0) as f32;
+                let tri = if ph < 0.5 { ph * 2.0 } else { (1.0 - ph) * 2.0 };
+                let flick = if ((c.now / 7000.0) % 1.0) < 0.022 { 0.48 } else { 1.0 };
+                glow = (0.62 + 0.38 * tri as f64) * flick;
+                inner = (1.34 - 0.34 * tri as f64) * flick;
+            }
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(150.0 * glow), 2.0);
+            buf.stroke_round_rect(
+                x + c.s(3.0),
+                y + c.s(3.0),
+                w - c.s(6.0),
+                h - c.s(6.0),
+                r,
+                acc.scale_a((42.0 * inner).min(78.0)),
+                1.0,
+            );
         }
         StyleKind::Hud => {
-            // тактический трафарет: пунктирный контур + асимметричные скобки TL/BR
+            // тактический трафарет: пунктирный контур + асимметричные скобки TL/BR.
+            // Анимация «скан»: по периметру бежит световая шапка, подсвечивая
+            // ближайшие штрихи пунктира.
             {
                 let t = c.s(1.6);
-                let a = acc.scale_a(150.0);
                 let dash = c.s(8.0);
                 let gap = c.s(5.0);
+                let per = rounded_perimeter(w, h, r);
+                let scan = if c.anim { (((c.now / 3000.0) % 1.0) as f32) * per } else { -1.0e9 };
+                let boost_r = c.s(30.0);
+                let mut dash_alpha = |pd: f32| -> f64 {
+                    if scan < -1.0e8 {
+                        return 150.0;
+                    }
+                    let d = (pd - scan).abs().min(per - (pd - scan).abs());
+                    let k = (1.0 - d / boost_r).clamp(0.0, 1.0);
+                    132.0 + 100.0 * k as f64
+                };
                 let mut px2 = x;
                 while px2 < x + w - dash {
-                    buf.fill_rect(px2, y, dash, t, a);
-                    buf.fill_rect(px2, y + h - t, dash, t, a);
+                    buf.fill_rect(px2, y, dash, t, acc.scale_a(dash_alpha(px2 - x)));
+                    buf.fill_rect(
+                        px2,
+                        y + h - t,
+                        dash,
+                        t,
+                        acc.scale_a(dash_alpha(w + h + (x + w - px2))),
+                    );
                     px2 += dash + gap;
                 }
                 let mut py2 = y;
                 while py2 < y + h - dash {
-                    buf.fill_rect(x, py2, t, dash, a);
-                    buf.fill_rect(x + w - t, py2, t, dash, a);
+                    buf.fill_rect(x, py2, t, dash, acc.scale_a(dash_alpha(w + (py2 - y))));
+                    buf.fill_rect(
+                        x + w - t,
+                        py2,
+                        t,
+                        dash,
+                        acc.scale_a(dash_alpha(per - (py2 - y))),
+                    );
                     py2 += dash + gap;
+                }
+                if c.anim {
+                    let (sx, sy) = perimeter_point_r(x, y, w, h, r, scan);
+                    buf.fill_rect(sx - c.s(2.2), sy - c.s(2.2), c.s(4.4), c.s(4.4), mix(acc, Rgba::rgb(255, 255, 255), 0.45).scale_a(210.0));
                 }
             }
             let t2 = c.s(2.2);
@@ -334,14 +403,34 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
             buf.line(x + w, y + h - arm, x + w, y + h, t2, a2);
         }
         StyleKind::Soft => {
-            // no hard border — soft light rim only
-            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(28.0), 1.0);
+            // no hard border — soft light rim only; анимация «дыхание»:
+            // кромка плавно светлеет и гаснет (3.2 с), внутренняя — в противофазе
+            let mut rim = 28.0f64;
+            let mut rim_in = 1.0f64;
+            if c.anim {
+                let ph = ((c.now / 3200.0) % 1.0) as f32;
+                let s = 0.5 + 0.5 * (ph * std::f32::consts::TAU).sin();
+                rim = 20.0 + 15.0 * s as f64;
+                rim_in = 0.55 + 0.45 * (1.0 - s as f64);
+            }
+            buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(rim), 1.0);
+            if c.anim {
+                buf.stroke_round_rect(
+                    x + c.s(2.5),
+                    y + c.s(2.5),
+                    w - c.s(5.0),
+                    h - c.s(5.0),
+                    r,
+                    Rgba::rgb(255, 255, 255).scale_a(8.0 * rim_in),
+                    1.0,
+                );
+            }
         }
         StyleKind::Plasma => {
             // энергетическая рамка: свечение + орбитальные «кометы»
             buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(110.0), 1.8);
             buf.stroke_round_rect(x + c.s(2.0), y + c.s(2.0), w - c.s(4.0), h - c.s(4.0), r, acc.scale_a(40.0), 1.0);
-            let per = 2.0 * (w + h);
+            let per = rounded_perimeter(w, h, r);
             for k in 0..2 {
                 let head = if c.anim {
                     ((((c.now / 1800.0) + k as f64 * 0.5) % 1.0) * per as f64) as f32
@@ -353,7 +442,7 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                     if p < 0.0 {
                         p += per;
                     }
-                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let (sx, sy) = perimeter_point_r(x, y, w, h, r, p);
                     let a2 = ((170.0 - tail as f64 * 22.0).max(20.0)) as f64;
                     buf.fill_rect(sx - c.s(1.2), sy - c.s(1.2), c.s(2.4), c.s(2.4), mix(acc, Rgba::rgb(255, 255, 255), 0.35).scale_a(a2));
                 }
@@ -361,6 +450,27 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
         }
         StyleKind::Minimal => {
             buf.stroke_round_rect(x, y, w, h, r, b, 1.0);
+            // анимация «тихий огонёк»: маленькая акцентная точка медленно
+            // обходит контур — минимально и не отвлекает
+            if c.anim {
+                let per = rounded_perimeter(w, h, r);
+                let head = (((c.now / 6000.0) % 1.0) as f32) * per;
+                for tail in 0..3 {
+                    let mut p = (head - tail as f32 * c.s(7.0)) % per;
+                    if p < 0.0 {
+                        p += per;
+                    }
+                    let (sx, sy) = perimeter_point_r(x, y, w, h, r, p);
+                    let fade = 1.0 - tail as f64 / 3.0;
+                    buf.fill_rect(
+                        sx - c.s(1.1),
+                        sy - c.s(1.1),
+                        c.s(2.2),
+                        c.s(2.2),
+                        acc.scale_a(30.0 + 105.0 * fade),
+                    );
+                }
+            }
         }
         StyleKind::Cyber => {
             // notched corners: border of 8 segments with corner cuts + top dashes
@@ -410,7 +520,7 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                 buf.fill_rect(cx0, cy0 - c.s(3.5), 1.2, c.s(7.0), acc.scale_a(150.0));
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // печатная плата: сплошная трасса, узлы-квадраты по углам, пады по кромкам
             let t = c.s(1.2);
             let a = acc.scale_a(130.0);
@@ -431,22 +541,73 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                 buf.round_rect(nx, ny, c.s(5.0), c.s(5.0), c.s(1.0), acc.scale_a(190.0));
             }
         }
+        StyleKind::Matrix => {
+            // терминал: тонкая рамка, угловые скобки и «бегущая строка» из цифр
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(95.0), 1.1);
+            let arm = c.s(14.0);
+            let t = c.s(2.0);
+            let a = acc.scale_a(200.0);
+            buf.line(x, y, x + arm, y, t, a);
+            buf.line(x, y, x, y + arm, t, a);
+            buf.line(x + w - arm, y, x + w, y, t, a);
+            buf.line(x + w, y, x + w, y + arm, t, a);
+            buf.line(x, y + h - arm, x, y + h, t, a);
+            buf.line(x, y + h, x + arm, y + h, t, a);
+            buf.line(x + w - arm, y + h, x + w, y + h, t, a);
+            buf.line(x + w, y + h - arm, x + w, y + h, t, a);
+            // «01»-засечки у верхней кромки
+            let step = c.s(7.0);
+            let mut dx = x + arm + c.s(8.0);
+            while dx < x + w - arm - c.s(8.0) {
+                buf.fill_rect(dx, y + c.s(1.6), c.s(3.0), c.s(1.4), acc.scale_a(70.0));
+                dx += step;
+            }
+        }
+        StyleKind::Radar => {
+            // радар: тонкая рамка, угловые засечки-кресты и шкала дальности
+            buf.stroke_round_rect(x, y, w, h, r, acc.scale_a(105.0), 1.1);
+            let t = c.s(1.4);
+            let a = acc.scale_a(185.0);
+            for (cx0, cy0) in [
+                (x + c.s(8.0), y + c.s(8.0)),
+                (x + w - c.s(8.0), y + c.s(8.0)),
+                (x + c.s(8.0), y + h - c.s(8.0)),
+                (x + w - c.s(8.0), y + h - c.s(8.0)),
+            ] {
+                buf.fill_rect(cx0 - c.s(4.5), cy0 - t * 0.5, c.s(9.0), t, a);
+                buf.fill_rect(cx0 - t * 0.5, cy0 - c.s(4.5), t, c.s(9.0), a);
+            }
+            // развёртка — в фоне (draw_scope); рамка только с делениями
+        }
         StyleKind::Radiance => {
-            // сияющий контур + бегущая волна света по верхней кромке
+            // сияющий контур + волна света обходит контур рамки
             buf.stroke_round_rect(x, y, w, h, r, Rgba::rgb(255, 255, 255).scale_a(55.0), 1.2);
             buf.stroke_round_rect(x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0), r, acc.scale_a(38.0), 1.0);
-            let segs = ((w / c.s(2.0)).ceil() as i32).clamp(24, 170);
-            let seg_w = w / segs as f32;
-            let pos = if c.anim { ((c.now / 2300.0) % 1.0) as f32 } else { 0.5 };
+            let (ix, iy, iw, ih) = (x + c.s(2.5), y + c.s(2.5), w - c.s(5.0), h - c.s(5.0));
+            let per = rounded_perimeter(iw, ih, r);
+            let head = if c.anim {
+                (((c.now / 2600.0) % 1.0) as f32) * per
+            } else {
+                per * 0.08
+            };
+            let segs = 24i32;
+            let strip = per * 0.34;
             for i in 0..segs {
-                let t = (i as f32 + 0.5) / segs as f32;
-                let d = (t - pos).abs().min(1.0 - (t - pos).abs());
-                let glow = (1.0 - d * 4.2).clamp(0.0, 1.0);
-                if glow <= 0.0 {
-                    continue;
+                let mut p = head - (i as f32 / segs as f32) * strip;
+                p %= per;
+                if p < 0.0 {
+                    p += per;
                 }
-                let col = mix(acc, Rgba::rgb(255, 255, 255), (0.45 * glow) as f64);
-                buf.fill_rect(x + seg_w * i as f32, y, seg_w + 1.0, c.s(2.4), col.scale_a(40.0 + 150.0 * glow as f64));
+                let (sx, sy) = perimeter_point_r(ix, iy, iw, ih, r, p);
+                let fade = (1.0 - i as f32 / segs as f32).powf(1.5);
+                let th = c.s(3.4);
+                buf.fill_rect(
+                    sx - th * 0.5,
+                    sy - th * 0.5,
+                    th,
+                    th,
+                    mix(acc, Rgba::rgb(255, 255, 255), 0.32).scale_a((28.0 + 150.0 * fade) as f64),
+                );
             }
         }
     }
@@ -489,7 +650,7 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
                 dx += c.s(7.0);
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // точечный «паяльный» шов с узлами
             let mut dx = x;
             let mut k = 0;
@@ -500,22 +661,402 @@ fn draw_row_grid(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32) {
                 k += 1;
             }
         }
+        StyleKind::Matrix => {
+            // редкая пунктирная строка терминала
+            let mut dx = x;
+            while dx < x + w {
+                let seg = c.s(3.0).min(x + w - dx);
+                if seg <= 0.0 {
+                    break;
+                }
+                buf.fill_rect(dx, y, seg, 1.0, c.pal.accent.scale_a(40.0));
+                dx += c.s(7.0);
+            }
+        }
+        StyleKind::Radar => {
+            // прицел: редкие деления и точка в середине
+            let mid = x + w * 0.5;
+            buf.fill_rect(mid - 1.0, y - 0.5, 2.0, 2.0, c.pal.accent.scale_a(60.0));
+            for f in [0.25f32, 0.75] {
+                buf.fill_rect(x + w * f - 0.5, y, 1.0, 1.0, c.pal.muted.scale_a(55.0));
+            }
+        }
         _ => {}
     }
 }
 
+/// Длина пути скруглённого прямоугольника (совпадает с perimeter_point_r).
+fn rounded_perimeter(w: f32, h: f32, r: f32) -> f32 {
+    let r = r.max(0.0).min(w * 0.5).min(h * 0.5);
+    2.0 * (w - 2.0 * r).max(0.0) + 2.0 * (h - 2.0 * r).max(0.0) + std::f32::consts::TAU * r
+}
+
 /// Point along a rect perimeter (clockwise from the top-left corner).
-fn perimeter_point(x: f32, y: f32, w: f32, h: f32, p: f32) -> (f32, f32) {
-    let per = 2.0 * (w + h);
-    let p = ((p % per) + per) % per;
-    if p < w {
-        (x + p, y)
-    } else if p < w + h {
-        (x + w, y + (p - w))
-    } else if p < 2.0 * w + h {
-        (x + w - (p - w - h), y + h)
+/// Point at arc-length `p` along the ROUNDED-rect path (radius `r`).
+/// v2.1.1: все контурные анимации ходят по внутренней закруглённой форме,
+/// а не по квадрату.
+fn perimeter_point_r(x: f32, y: f32, w: f32, h: f32, r: f32, p: f32) -> (f32, f32) {
+    let r = r.max(0.0).min(w * 0.5).min(h * 0.5);
+    let straight_w = (w - 2.0 * r).max(0.0);
+    let straight_h = (h - 2.0 * r).max(0.0);
+    let arc = std::f32::consts::FRAC_PI_2 * r;
+    let total = 2.0 * straight_w + 2.0 * straight_h + 4.0 * arc;
+    if total <= 0.0 {
+        return (x + w * 0.5, y);
+    }
+    let mut p = p % total;
+    if p < 0.0 {
+        p += total;
+    }
+    // 1. верхняя грань → 2. дуга TL→TR угол → 3. правая грань → …
+    if p < straight_w {
+        return (x + r + p, y);
+    }
+    p -= straight_w;
+    if p < arc {
+        let a = -std::f32::consts::FRAC_PI_2 + p / r;
+        return (x + w - r + a.cos() * r, y + r + a.sin() * r);
+    }
+    p -= arc;
+    if p < straight_h {
+        return (x + w, y + r + p);
+    }
+    p -= straight_h;
+    if p < arc {
+        let a = p / r;
+        return (x + w - r + a.cos() * r, y + h - r + a.sin() * r);
+    }
+    p -= arc;
+    if p < straight_w {
+        return (x + w - r - p, y + h);
+    }
+    p -= straight_w;
+    if p < arc {
+        let a = std::f32::consts::FRAC_PI_2 + p / r;
+        return (x + r + a.cos() * r, y + h - r + a.sin() * r);
+    }
+    p -= arc;
+    if p < straight_h {
+        return (x, y + h - r - p);
+    }
+    p -= straight_h;
+    let a = std::f32::consts::PI + p / r;
+    (x + r + a.cos() * r, y + r + a.sin() * r)
+}
+
+/// Horizontal extent of the rounded body at height `yy` — линии, ползущие
+/// поперёк панели (скан-линия матрицы), не вылезают за скруглённые углы.
+fn rounded_chord_x(x: f32, y: f32, w: f32, h: f32, r: f32, yy: f32) -> (f32, f32) {
+    let r = r.max(0.0).min(w * 0.5).min(h * 0.5);
+    let inset_top = if r > 0.0 && yy < y + r {
+        let dy = (y + r) - yy;
+        r - (r * r - dy * dy).max(0.0).sqrt()
     } else {
-        (x, y + h - (p - 2.0 * w - h))
+        0.0
+    };
+    let inset_bot = if r > 0.0 && yy > y + h - r {
+        let dy = yy - (y + h - r);
+        r - (r * r - dy * dy).max(0.0).sqrt()
+    } else {
+        0.0
+    };
+    let inset = inset_top.max(inset_bot);
+    (x + inset, x + w - inset)
+}
+
+
+/// Stable 64-bit mix — rain columns and radar blips need deterministic
+/// pseudo-randomness without an RNG dependency.
+fn hash_u64(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    x ^ (x >> 33)
+}
+
+/// Matrix digital rain (v2.1.1): цифры ПАДАЮТ и МЕНЯЮТСЯ со временем в
+/// псевдослучайных точках окна — плотное поле, как в классической «Матрице».
+/// `strength` масштабирует яркость (панель ≈ 1, миниатюра ≈ 2.5).
+/// При `anim` off всё замирает на t=0 — статичные кадры воспроизводимы.
+fn draw_rain(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64) {
+    const GLYPHS: [char; 10] = ['0', '1', '7', '4', '9', '2', '5', '8', '3', '6'];
+    let size = c.s(9.0);
+    let step = size * 1.35;
+    let col_w = c.s(11.0);
+    if w < c.s(8.0) || h < step {
+        return;
+    }
+    let t = if c.anim { c.now / 1000.0 } else { 0.0 } as f32;
+    // смена глифов: новый «тик» каждые ~260 мс (при anim off — тик 0)
+    let tick = if c.anim { (c.now / 260.0) as u64 } else { 0 };
+    let acc = c.pal.accent;
+    let cols = ((w / col_w).floor() as i32 + 1).max(1);
+
+    // слой 1: падающие хвосты — две капли на колонну, случайные x/фаза/скорость
+    for i in 0..cols {
+        for d in 0..2 {
+            let hsh = hash_u64(i as u64 * 0x9e37_79b9 + d as u64 * 0x5164_2f2a + 0x1234_5678);
+            let speed = 16.0 + (hsh % 34) as f32; // px/s
+            let phase = ((hsh >> 12) % 1000) as f32;
+            let tail = 3 + ((hsh >> 24) % 4) as i32; // 3..6 глифов в хвосте
+            let span = h + tail as f32 * step + c.s(24.0);
+            let head = (t * speed + phase) % span - tail as f32 * step;
+            let jitter = ((hsh >> 30) % 60) as f32 / 100.0 * col_w;
+            let gx = x + col_w * i as f32 + jitter;
+            for ri in 0..tail {
+                let gy = head - ri as f32 * step;
+                if gy < -step || gy > h - step * 0.6 {
+                    continue;
+                }
+                if !in_round_rect(x, y, w, h, r, gx + size * 0.5, y + gy + size * 0.5) {
+                    continue;
+                }
+                let fade = 1.0 - ri as f32 / tail as f32;
+                let alpha = (58.0 * fade as f64 * strength).min(210.0);
+                // глиф зависит от координат И времени — цифры меняются
+                let ch = GLYPHS[(hash_u64(
+                    ((i as u64) << 40) | ((d as u64) << 36) | ((ri as u64) << 8) | (tick & 0xff),
+                ) as usize)
+                    % GLYPHS.len()];
+                let col = if ri == 0 {
+                    mix(acc, Rgba::rgb(255, 255, 255), 0.6)
+                } else {
+                    acc
+                };
+                let mut utf = [0u8; 4];
+                c.fonts
+                    .draw(buf, gx, y + gy + size, ch.encode_utf8(&mut utf), size, false, col.scale_a(alpha));
+            }
+        }
+    }
+
+    // слой 2: рассыпанные по всему окну мерцающие цифры — в случайных точках
+    let cell_w = c.s(15.0);
+    let cell_h = c.s(14.0);
+    let gcols = ((w / cell_w).floor() as i32 + 1).max(1) as u64;
+    let grows = ((h / cell_h).floor() as i32 + 1).max(1) as u64;
+    for gyy in 0..grows {
+        for gxx in 0..gcols {
+            let hsh = hash_u64(gxx * 0x27d4_eb2d + gyy * 0x1656_67b1 + tick.wrapping_mul(0x9e37));
+            if hsh % 100 < 62 {
+                continue; // поле «дышит»: часть клеток пуста
+            }
+            let gx = x + gxx as f32 * cell_w + ((hsh >> 8) % 50) as f32 * 0.02 * cell_w;
+            let gy = y + gyy as f32 * cell_h + ((hsh >> 16) % 50) as f32 * 0.02 * cell_h;
+            if !in_round_rect(x, y, w, h, r, gx + size * 0.5, gy + size * 0.5) {
+                continue;
+            }
+            let ch = GLYPHS[((hsh >> 24) as usize) % GLYPHS.len()];
+            let alpha = (10.0 + (hsh % 26) as f64) * strength * 0.9;
+            let mut utf = [0u8; 4];
+            c.fonts
+                .draw(buf, gx, gy + size * 0.9, ch.encode_utf8(&mut utf), size, false, acc.scale_a(alpha));
+        }
+    }
+}
+
+/// Принадлежит ли точка скруглённому прямоугольнику (для полей текстуры).
+fn in_round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, px: f32, py: f32) -> bool {
+    if px < x || px > x + w || py < y || py > y + h {
+        return false;
+    }
+    let r = r.max(0.0).min(w * 0.5).min(h * 0.5);
+    let dl = px - x;
+    let dr = x + w - px;
+    let dt = py - y;
+    let db = y + h - py;
+    if dl < r && dt < r {
+        return (px - (x + r)).powi(2) + (py - (y + r)).powi(2) <= r * r;
+    }
+    if dr < r && dt < r {
+        return (px - (x + w - r)).powi(2) + (py - (y + r)).powi(2) <= r * r;
+    }
+    if dr < r && db < r {
+        return (px - (x + w - r)).powi(2) + (py - (y + h - r)).powi(2) <= r * r;
+    }
+    if dl < r && db < r {
+        return (px - (x + r)).powi(2) + (py - (y + h - r)).powi(2) <= r * r;
+    }
+    true
+}
+
+/// Radar scope: range rings, crosshair, a rotating sweep with a fading trail
+/// and a few blips.
+fn draw_scope(c: &Ctx, buf: &mut Buf, cx: f32, cy: f32, r: f32, strength: f64) {
+    let acc = c.pal.accent;
+    for i in 1..=3 {
+        buf.stroke_circle(cx, cy, r * i as f32 / 3.0, acc.scale_a(20.0 * strength), 1.0);
+    }
+    buf.fill_rect(cx - r, cy - 0.5, r * 2.0, 1.0, acc.scale_a(12.0 * strength));
+    buf.fill_rect(cx - 0.5, cy - r, 1.0, r * 2.0, acc.scale_a(12.0 * strength));
+    // луч развёртки как на классическом радаре: светящийся сектор
+    // с плавно затухающим шлейфом позади головки
+    let ang = if c.anim {
+        (c.now / 4200.0 * std::f64::consts::TAU) as f32
+    } else {
+        -0.9
+    };
+    let trail = 1.25f32;
+    let steps = 44i32;
+    for i in 0..steps {
+        let f = (i as f32 + 0.5) / steps as f32;
+        let a2 = ang - trail * f;
+        let fade = (1.0 - f).powf(1.8);
+        let aa = (42.0 * fade) as f64 * strength;
+        if aa < 1.0 {
+            continue;
+        }
+        let mut rr = c.s(4.0);
+        while rr < r {
+            buf.fill_rect(
+                cx + a2.cos() * rr - 1.0,
+                cy + a2.sin() * rr - 1.0,
+                2.0,
+                2.0,
+                acc.scale_a(aa.min(205.0)),
+            );
+            rr += c.s(2.2);
+        }
+    }
+    // яркая кромка луча
+    for step in 0..=20 {
+        let rr = r * step as f32 / 20.0;
+        buf.fill_rect(
+            cx + ang.cos() * rr - 1.0,
+            cy + ang.sin() * rr - 1.0,
+            2.0,
+            2.0,
+            acc.scale_a((135.0 * strength).min(235.0)),
+        );
+    }
+    for i in 0..3u64 {
+        let hsh = hash_u64(i + 17);
+        let a = (hsh % 360) as f32 * std::f32::consts::PI / 180.0;
+        let rr = r * (0.25 + ((hsh >> 9) % 60) as f32 / 100.0);
+        buf.circle(cx + a.cos() * rr, cy + a.sin() * rr, c.s(1.7), acc.scale_a(95.0 * strength));
+    }
+}
+
+/// «Аврора»: пологие светящиеся ленты сияния плывут по фону панели.
+fn draw_aurora(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64) {
+    let cols = [
+        Rgba::rgb(46, 224, 168),
+        Rgba::rgb(64, 140, 255),
+        Rgba::rgb(150, 92, 255),
+    ];
+    for band in 0..3i32 {
+        let ph = if c.anim {
+            ((c.now as f64 / (5200.0 + band as f64 * 1900.0)) % 1.0) as f32
+        } else {
+            0.18 + 0.27 * band as f32
+        };
+        let col = cols[band as usize];
+        let base_y = y + h * (0.16 + 0.27 * band as f32) + (ph * 2.0 - 1.0) * h * 0.09;
+        let thick = (h * (0.13 + 0.045 * band as f32)).max(c.s(10.0));
+        for xi in 0..(w as i32) {
+            let t = xi as f32 / w.max(1.0);
+            let wave = (t * 2.6 + ph * 6.28318 + band as f32 * 1.9).sin() * h * 0.075
+                + (t * 6.1 - ph * 4.2 + band as f32).sin() * h * 0.028;
+            let cyv = base_y + wave;
+            let y_lo = (cyv - thick * 0.5).max(0.0);
+            let y_hi = (cyv + thick * 0.5).min(h);
+            let mut yv = y_lo;
+            while yv < y_hi {
+                let fy = ((yv + 0.5) - (cyv - thick * 0.5)) / thick.max(1.0);
+                let edge = 1.0 - (fy * 2.0 - 1.0).abs();
+                let a = (30.0 * edge * edge) as f64 * strength;
+                if a >= 0.8 && in_round_rect(x, y, w, h, r, x + xi as f32 + 1.0, y + yv + 1.0) {
+                    buf.blend_px((x + xi as f32) as i32, (y + yv) as i32, col.scale_a(a));
+                }
+                yv += 1.0;
+            }
+        }
+    }
+}
+
+/// Стеклянный блик: широкая диагональная световая полоса мягко проходит
+/// поверх содержимого панели — как отражение света на стекле.
+fn draw_glass_sheen(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32) {
+    let span = w + h;
+    let t = if c.anim {
+        ((c.now / 5200.0) % 1.0) as f32
+    } else {
+        0.32
+    };
+    let pos = t * (span + c.s(150.0)) - c.s(75.0);
+    let bw = c.s(64.0).min(h);
+    for xi in 0..(w as i32) {
+        let yb = pos - xi as f32;
+        let y_start = (yb - bw).max(0.0);
+        let y_end = yb.min(h);
+        let mut yv = y_start;
+        while yv < y_end {
+            if in_round_rect(x, y, w, h, r, x + xi as f32 + 1.0, y + yv + 1.0) {
+                let edge = 1.0 - ((yb - yv) / bw.max(1.0));
+                let a = 9.0 + 26.0 * edge * edge;
+                buf.blend_px((x + xi as f32) as i32, (y + yv) as i32, Rgba::rgb(255, 255, 255).scale_a(a as f64));
+            }
+            yv += 1.0;
+        }
+    }
+}
+
+/// Panel-wide paint for styles with a background texture. Drawn right after
+/// the panel body, so rows/feed stay readable on top.
+fn draw_panel_tex(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64) {
+    match c.sk {
+        StyleKind::Matrix => draw_rain(c, buf, x, y, w, h, r, strength),
+        StyleKind::Aurora => draw_aurora(c, buf, x, y, w, h, r, strength),
+        StyleKind::Radar => {
+            let r = (w.min(h) * 0.46).max(c.s(18.0));
+            draw_scope(c, buf, x + w * 0.5, y + h * 0.40, r, strength)
+        }
+        _ => {}
+    }
+}
+
+/// Picker thumbnail: a miniature panel painted by the real style chrome.
+/// (`k` and the rect are PHYSICAL px — the settings window calls this with
+/// coords already multiplied by its UI scale.)
+#[allow(clippy::too_many_arguments)]
+pub fn draw_style_preview(
+    buf: &mut Buf,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    style: &str,
+    pal: &Palette,
+    fonts: &Fonts,
+    icons: &Icons,
+    k: f32,
+    now_ms: f64,
+    anim: bool,
+) {
+    let c = Ctx {
+        pal,
+        fonts,
+        icons,
+        k,
+        fs: 13.0 * k,
+        now: now_ms,
+        anim,
+        sk: StyleKind::parse(style),
+        borderless: false,
+    };
+    let r = c.rad(c.s(7.0));
+    buf.round_rect(x, y, w, h, r, c.bg(pal.panel_bg));
+    draw_panel_tex(&c, buf, x, y, w, h, r, 2.6);
+    // «говорящая» мини-строка + две обычные
+    let bar_h = c.s(7.0);
+    let inset = c.s(5.0);
+    buf.round_rect(x + inset, y + c.s(5.0), w - inset * 2.0, bar_h, c.rad(c.s(3.0)), pal.accent.scale_a(80.0));
+    buf.fill_rect(x + inset, y + c.s(5.0) + bar_h + c.s(3.0), (w - inset * 2.0) * 0.62, c.s(2.6), pal.muted.scale_a(110.0));
+    buf.fill_rect(x + inset, y + c.s(5.0) + bar_h + c.s(8.0), (w - inset * 2.0) * 0.42, c.s(2.6), pal.muted.scale_a(80.0));
+    draw_frame_chrome(&c, buf, x, y, w, h, r);
+    if matches!(c.sk, StyleKind::Glass) {
+        draw_glass_sheen(&c, buf, x, y, w, h, r);
     }
 }
 
@@ -746,11 +1287,42 @@ fn draw_user_row(
         let bg = if c.borderless { Rgba([0, 0, 0, 0]) } else { tpal.talking_bg };
         let ac = tpal.accent;
         match c.sk {
+            StyleKind::Aurora => {
+                // лента сияния пульсирует вдоль низа строки говорящего
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.5));
+                let segs = 16;
+                let seg_w = w / segs as f32;
+                let ph = if c.anim { (c.now / 1600.0) as f32 } else { 0.0 };
+                for i in 0..segs {
+                    let t = (i as f32 + 0.5) / segs as f32;
+                    let glow = (t * 6.28318 + ph * 6.28318).sin() * 0.5 + 0.5;
+                    let glow = glow * glow;
+                    buf.fill_rect(
+                        x + seg_w * i as f32,
+                        y + h - c.s(3.0),
+                        seg_w + 1.0,
+                        c.s(3.0),
+                        mix(tpal.talk_outline, Rgba::rgb(45, 212, 191), 0.5)
+                            .scale_a(((40.0 + 120.0 * glow as f64) * talk_alpha as f64) as f64),
+                    );
+                }
+            }
             StyleKind::Glass => {
                 // стеклянная плита: чистая обводка + блик сверху
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.5));
                 buf.fill_rect(x + c.s(10.0), y + c.s(1.5), w * 0.38, c.s(1.8), Rgba::rgb(255, 255, 255).scale_a(75.0 * talk_alpha as f64));
+            }
+            StyleKind::Flat => {
+                // стандартный плоский: фон + подчёркивание снизу, без эффектов
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x + c.s(6.0), y + h - c.s(2.5), w - c.s(12.0), c.s(2.0), tpal.talk_outline.scale_a(150.0 * talk_alpha as f64));
+            }
+            StyleKind::Classic => {
+                // стандартный классический: аккуратная обводка строки
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.5));
             }
             StyleKind::Neon => {
                 // неон: гало-обводка + яркая полоса снизу
@@ -796,7 +1368,7 @@ fn draw_user_row(
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x - c.s(2.0), y - c.s(2.0), w + c.s(4.0), h + c.s(4.0), radius, ac.scale_a(50.0 * talk_alpha as f64), 1.2);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline, c.s(1.8));
-                let per = 2.0 * (w + h);
+                let per = rounded_perimeter(w, h, radius);
                 let head = if c.anim {
                     (((c.now / 1100.0) % 1.0) * per as f64) as f32
                 } else {
@@ -807,7 +1379,7 @@ fn draw_user_row(
                     if p < 0.0 {
                         p += per;
                     }
-                    let (sx, sy) = perimeter_point(x, y, w, h, p);
+                    let (sx, sy) = perimeter_point_r(x, y, w, h, radius, p);
                     let a2 = ((160.0 - tail as f64 * 28.0).max(30.0)) * talk_alpha as f64;
                     buf.fill_rect(sx - c.s(1.1), sy - c.s(1.1), c.s(2.2), c.s(2.2), mix(tpal.talk_outline, Rgba::rgb(255, 255, 255), 0.4).scale_a(a2));
                 }
@@ -852,7 +1424,7 @@ fn draw_user_row(
                 buf.fill_rect(x + c.s(5.0), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
                 buf.fill_rect(x + w - c.s(6.1), ly - c.s(2.2), 1.1, c.s(5.4), ac.scale_a(170.0 * talk_alpha as f64));
             }
-            StyleKind::Matrix => {
+            StyleKind::Chip => {
                 // блочная подсветка данных: заглушки по краям + ступенчатая рамка + такты
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.fill_rect(x, y + c.s(3.0), c.s(3.5), h - c.s(6.0), ac.scale_a(160.0 * talk_alpha as f64));
@@ -871,22 +1443,70 @@ fn draw_user_row(
                     bx += c.s(5.0);
                 }
             }
+            StyleKind::Matrix => {
+                // цифровой дождь в строке говорящего: слабые цифры за ником
+                buf.round_rect(x, y, w, h, radius, bg);
+                let rain = Ctx {
+                    pal: &tpal,
+                    fonts: c.fonts,
+                    icons: c.icons,
+                    k: c.k,
+                    fs: c.fs,
+                    now: c.now,
+                    anim: c.anim,
+                    sk: c.sk,
+                    borderless: c.borderless,
+                };
+                buf.set_clip(x + w * 0.34, y, w * 0.66, h);
+                draw_rain(&rain, buf, x + w * 0.34, y, w * 0.66, h, radius, 1.5 * talk_alpha as f64);
+                buf.clear_clip();
+                buf.fill_rect(x, y + c.s(2.0), c.s(2.5), h - c.s(4.0), ac.scale_a(200.0 * talk_alpha as f64));
+                let t = c.s(1.2);
+                let a2 = tpal.talk_outline.scale_a(150.0 * talk_alpha as f64);
+                buf.stroke_round_rect(x, y, w, h, radius, a2, t);
+            }
+            StyleKind::Radar => {
+                // радарный «пинг» вокруг аватара + засечка слева
+                buf.round_rect(x, y, w, h, radius, bg);
+                buf.fill_rect(x, y + c.s(3.0), c.s(2.5), h - c.s(6.0), ac.scale_a(190.0 * talk_alpha as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(135.0 * talk_alpha as f64), 1.2);
+                let (pcx, pcy) = (x + c.s(23.0), y + h * 0.5);
+                let phase = if c.anim { (c.now / 1400.0) % 1.0 } else { 0.35 };
+                for k2 in 0..2 {
+                    let t2 = ((phase + k2 as f64 * 0.5) % 1.0) as f32;
+                    let rr = c.s(12.0) + t2 * c.s(13.0);
+                    let a2 = (1.0 - t2) * 150.0 * talk_alpha as f32;
+                    buf.stroke_circle(pcx, pcy, rr, tpal.accent.scale_a(a2 as f64), 1.2);
+                }
+            }
             StyleKind::Radiance => {
-                // сияющая подсветка: мягкое свечение + бегущая волна снизу
+                // сияющая подсветка: мягкое свечение + волна обходит контур строки
                 buf.round_rect(x, y, w, h, radius, bg);
                 buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(130.0 * talk_alpha as f64), 1.4);
                 buf.stroke_round_rect(x - c.s(1.5), y - c.s(1.5), w + c.s(3.0), h + c.s(3.0), radius, tpal.talk_outline.scale_a(35.0 * talk_alpha as f64), 1.0);
-                let segs = ((w / c.s(2.0)).ceil() as i32).clamp(20, 170);
-                let seg_w = w / segs as f32;
-                let pos = if c.anim { ((c.now / 1800.0) % 1.0) as f32 } else { 0.5 };
+                let per = rounded_perimeter(w, h, radius);
+                let head = if c.anim {
+                    (((c.now / 1800.0) % 1.0) as f32) * per
+                } else {
+                    per * 0.5
+                };
+                let segs = 12i32;
                 for i in 0..segs {
-                    let t = (i as f32 + 0.5) / segs as f32;
-                    let d = (t - pos).abs().min(1.0 - (t - pos).abs());
-                    let glow = (1.0 - d * 4.6).clamp(0.0, 1.0);
-                    if glow <= 0.0 {
-                        continue;
+                    let mut p = head - (i as f32 / segs as f32) * per * 0.32;
+                    p %= per;
+                    if p < 0.0 {
+                        p += per;
                     }
-                    buf.fill_rect(x + seg_w * i as f32, y + h - c.s(3.2), seg_w + 1.0, c.s(3.2), mix(tpal.talk_outline, Rgba::rgb(255, 255, 255), (0.4 * glow) as f64).scale_a(((60.0 + 150.0 * glow as f64) * talk_alpha as f64) as f64));
+                    let (sx, sy) = perimeter_point_r(x, y, w, h, radius, p);
+                    let fade = (1.0 - i as f32 / segs as f32).powf(1.5);
+                    let th = c.s(3.0);
+                    buf.fill_rect(
+                        sx - th * 0.5,
+                        sy - th * 0.5,
+                        th,
+                        th,
+                        mix(tpal.talk_outline, Rgba::rgb(255, 255, 255), 0.35).scale_a(((35.0 + 140.0 * fade as f64) * talk_alpha as f64) as f64),
+                    );
                 }
             }
         }
@@ -1091,11 +1711,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     let row_h = (if a.compact { c.s(31.0) } else { c.s(42.0) }) * row_mul;
     let row_gap = c.s((2.0 + gap_add).max(0.5));
     let list_pad = if a.compact { c.s(4.0) } else { c.s(6.0) };
+    // v2.1.1: воздух между хедером и первым рядом — свечение говорящего
+    // (у радара/неона оно выходит на ~4 px выше строки) не уходит под хедер
+    let top_gap = if a.compact { c.s(6.0) } else { c.s(8.0) };
     let whisper_head_h = if inp.whisperers.is_empty() { 0.0 } else { c.s(20.0) };
     let feed_row_h = c.s(26.0);
     let feed_gap = c.s(4.0);
 
-    let mut y = handle_h + header_h + list_pad;
+    let mut y = handle_h + header_h + list_pad + top_gap;
     let rows_top = y;
     for _ in &inp.users {
         y += row_h + row_gap;
@@ -1142,7 +1765,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     let blur_px = ((inp.appearance.blur as f32) * c.k).clamp(3.0, 44.0);
     if !c.borderless {
         buf.shadow_round_rect(px, py, panel_w, panel_h, pr, blur_px, inp.pal.shadow);
-        buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
+        if c.sk == StyleKind::Cyber {
+            // v2.1.1: форма заливки = форма внешней рамки (срезанные углы)
+            let cut = c.s(12.0);
+            buf.chamfer_rect4(px, py, panel_w, panel_h, cut, cut, cut, cut, c.bg(inp.pal.panel_bg));
+        } else {
+            buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
+        }
+        draw_panel_tex(&c, &mut buf, px, py, panel_w, panel_h, pr, 1.0);
         draw_frame_chrome(&c, &mut buf, px, py, panel_w, panel_h, pr);
     }
 
@@ -1192,24 +1822,66 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                     if a_alpha == 0 {
                         continue;
                     }
-                    buf.fill_rect(
-                        px + panel_w * t,
-                        cy,
-                        panel_w / 14.0 + 1.0,
-                        header_h,
-                        inp.pal.accent.scale_a(a_alpha as f64),
-                    );
+                    let sx = px + panel_w * t;
+                    let sw = panel_w / 14.0 + 1.0;
+                    let tint = inp.pal.accent.scale_a(a_alpha as f64);
+                    // v2.1.1: угловые полосы повторяют скругление рамки —
+                    // верхняя полоска больше не выходит за её пределы
+                    if i == 0 {
+                        buf.round_rect4(sx, cy, sw, header_h, pr, 0.0, 0.0, 0.0, tint);
+                    } else if i == 13 {
+                        buf.round_rect4(sx, cy, sw, header_h, 0.0, pr, 0.0, 0.0, tint);
+                    } else {
+                        buf.fill_rect(sx, cy, sw, header_h, tint);
+                    }
                 }
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
-            StyleKind::Neon | StyleKind::Cyber | StyleKind::Plasma | StyleKind::Matrix => {
-                buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(2, 3, 8).scale_a(90.0));
+            StyleKind::Aurora => {
+                // мятная шапка с мягким градиентом сияния
+                for i in 0..14 {
+                    let t = i as f32 / 14.0;
+                    let a_alpha = (26.0 * (1.0 - t) * (1.0 - t)) as u8;
+                    if a_alpha == 0 {
+                        continue;
+                    }
+                    let sx = px + panel_w * t;
+                    let sw = panel_w / 14.0 + 1.0;
+                    let tint = Rgba::rgb(45, 212, 191).scale_a(a_alpha as f64);
+                    if i == 0 {
+                        buf.round_rect4(sx, cy, sw, header_h, pr, 0.0, 0.0, 0.0, tint);
+                    } else if i == 13 {
+                        buf.round_rect4(sx, cy, sw, header_h, 0.0, pr, 0.0, 0.0, tint);
+                    } else {
+                        buf.fill_rect(sx, cy, sw, header_h, tint);
+                    }
+                }
+                buf.fill_rect(
+                    px,
+                    cy + header_h - 1.0,
+                    panel_w,
+                    1.0,
+                    mix(c.border(inp.pal.panel_border), Rgba::rgb(45, 212, 191), 0.35),
+                );
+            }
+            StyleKind::Neon | StyleKind::Cyber | StyleKind::Chip | StyleKind::Plasma | StyleKind::Matrix => {
+                // v2.1.1: заливка хедера повторяет форму рамки (срез/скругление)
+                if c.sk == StyleKind::Cyber {
+                    let cut = c.s(12.0);
+                    buf.chamfer_rect4(px, cy, panel_w, header_h, cut, cut, 0.0, 0.0, Rgba::rgb(2, 3, 8).scale_a(90.0));
+                } else {
+                    buf.round_rect4(px, cy, panel_w, header_h, pr, pr, 0.0, 0.0, Rgba::rgb(2, 3, 8).scale_a(90.0));
+                }
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(150.0));
             }
-            StyleKind::Hud | StyleKind::Minimal | StyleKind::Draft => {
-                buf.fill_rect(px, cy, panel_w, header_h, Rgba::rgb(0, 0, 0).scale_a(30.0));
+            StyleKind::Hud | StyleKind::Minimal | StyleKind::Draft | StyleKind::Radar => {
+                buf.round_rect4(px, cy, panel_w, header_h, pr, pr, 0.0, 0.0, Rgba::rgb(0, 0, 0).scale_a(30.0));
                 buf.fill_rect(px, cy + header_h - 2.0, panel_w, 1.0, c.border(inp.pal.panel_border));
                 buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, inp.pal.accent.scale_a(90.0));
+            }
+            StyleKind::Flat | StyleKind::Classic => {
+                // стандартные неанимированные стили: только разделитель
+                buf.fill_rect(px, cy + header_h - 1.0, panel_w, 1.0, c.border(inp.pal.panel_border));
             }
         }
         }
@@ -1225,7 +1897,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         if dot_glow {
             buf.stroke_circle(dot_x, dot_y, c.s(4.5) + c.s(2.0), dot_c.scale_a(120.0), c.s(3.0));
         }
-        if c.sk == StyleKind::Hud || c.sk == StyleKind::Matrix {
+        if c.sk == StyleKind::Hud || c.sk == StyleKind::Chip {
             buf.round_rect(dot_x - c.s(4.0), dot_y - c.s(4.0), c.s(8.0), c.s(8.0), c.s(1.0), dot_c);
         } else {
             buf.circle(dot_x, dot_y, c.s(4.5), dot_c);
@@ -1258,7 +1930,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
     }
 
     // ---- user rows ----
-    cy += list_pad;
+    cy += list_pad + top_gap;
     // content viewport: roster/whispers/feed scroll inside a capped panel
     let content_top = cy;
     let content_h_total = (py + panel_h) - content_top;
@@ -1266,7 +1938,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         + (if inp.whisperers.is_empty() { 0.0 } else { whisper_head_h + c.s(2.0) + inp.whisperers.len() as f32 * (row_h + row_gap) + c.s(4.0) })
         + (if inp.feed.is_empty() { 0.0 } else { c.s(4.0) + feed_geo.iter().map(|g| g.row_h + feed_gap).sum::<f32>() + c.s(2.0) })
         + (if inp.users.is_empty() && !a.hide_empty && inp.whisperers.is_empty() { c.s(118.0) } else { 0.0 })
-        + list_pad * 2.0;
+        + list_pad;
     scroll_max = (content_total - content_h_total).max(0.0);
     scroll = inp.roster_scroll.clamp(0.0, scroll_max);
     let scroll_on = scroll_max > 0.5;
@@ -1414,7 +2086,7 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                 gy += step;
             }
         }
-        StyleKind::Matrix => {
+        StyleKind::Chip => {
             // редкие узлы-точки (микросхема)
             let step = c.s(30.0);
             let mut gx = px + step;
@@ -1425,6 +2097,27 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
                     gy += step;
                 }
                 gx += step;
+            }
+        }
+        StyleKind::Matrix => {
+            // скан-линия терминала: одиночная тусклая полоса медленно ползёт вниз
+            let y0 = if c.anim {
+                let hh = panel_h.max(1.0);
+                py + ((c.now / 40.0) as f32 % hh)
+            } else {
+                py + panel_h * 0.5
+            };
+            // v2.1.1: линия идёт по хорде внутренней формы — не вылезает из углов
+            let (cx0, cx1) = rounded_chord_x(px, py, panel_w, panel_h, pr, y0);
+            buf.fill_rect(cx0 + 2.0, y0, (cx1 - cx0) - 4.0, 1.0, inp.pal.accent.scale_a(26.0));
+        }
+        StyleKind::Radar => {
+            // развёртка уже в фоне; сверху только лёгкая «сетка дальности»
+            let step = c.s(26.0);
+            let mut gy = py + step;
+            while gy < py + panel_h - 2.0 {
+                buf.fill_rect(px + c.s(6.0), gy, panel_w - c.s(12.0), 1.0, inp.pal.accent.scale_a(7.0));
+                gy += step;
             }
         }
         StyleKind::Hud => {
@@ -1456,8 +2149,14 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             // inner glow frame
             buf.stroke_round_rect(px + 1.5, py + 1.5, panel_w - 3.0, panel_h - 3.0, pr - 1.0, inp.pal.accent.scale_a(55.0), 1.0);
         }
-        StyleKind::Glass | StyleKind::Soft | StyleKind::Minimal | StyleKind::Radiance => {}
-    }
+        StyleKind::Glass => {
+            // скользящий диагональный блик поверх содержимого — свет на стекле
+            buf.clear_clip();
+            draw_glass_sheen(&c, &mut buf, px, py, panel_w, panel_h, pr);
+        }
+        StyleKind::Soft | StyleKind::Radiance => {}
+            _ => {}
+        }
     }
 
     // keep the first talking row visible (auto-follow for capped panels)
@@ -1675,6 +2374,45 @@ mod tests {
         assert_eq!(frame.panel_w, PANEL_W * 1.25);
         assert!(frame.hits.is_empty());
     }
+    /// Анимации стилей: при выключенных animations кадр статичен
+    /// (пиксель-в-пиксель), а стили с `needs_tick()` при включённых зависят
+    /// от времени. Проверяем весь каталог — новый стиль не сможет тихо
+    /// проскочить мимо гейта оверлея.
+    #[test]
+    fn style_frame_anim_is_gated() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        for (id, _, _) in StyleKind::ALL.iter() {
+            // статика: два разных времени дают одинаковый кадр
+            let mut a = Appearance::default();
+            a.style = id.to_string();
+            a.animations = false;
+            let pal = Palette::from_appearance(&a);
+            let mut inp = size_inp(&a, &pal, &fonts, &icons);
+            // без talking: рисуем ТОЛЬКО хром рамки, эффект стиля изолирован
+            inp.users.iter_mut().for_each(|u| u.talking = false);
+            inp.now_ms = 1000;
+            let f1 = render_frame(&inp);
+            inp.now_ms = 2600;
+            let f2 = render_frame(&inp);
+            assert_eq!(f1.buf.px, f2.buf.px, "{id}: static frame must not depend on time");
+            if !StyleKind::parse(id).needs_tick() {
+                continue;
+            }
+            // анимация: кадр меняется со временем
+            let mut a2 = Appearance::default();
+            a2.style = id.to_string();
+            a2.animations = true;
+            let pal2 = Palette::from_appearance(&a2);
+            let mut inp2 = size_inp(&a2, &pal2, &fonts, &icons);
+            inp2.users.iter_mut().for_each(|u| u.talking = false);
+            inp2.now_ms = 1000;
+            let f3 = render_frame(&inp2);
+            inp2.now_ms = 2600;
+            let f4 = render_frame(&inp2);
+            assert_ne!(f3.buf.px, f4.buf.px, "{id}: animated frame must tick with time");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1825,6 +2563,48 @@ mod qa {
             }
         }
 
+        // мультиязычные ники (греческий, латиница с диакритикой, кириллица+, символы)
+        {
+            let mut a3 = Appearance::default();
+            a3.show_events = true;
+            let pal3 = Palette::from_appearance(&a3);
+            let mk = |id: &str, nick: &str, talk: bool, self_: bool| {
+                let mut u = UserState::new(id, nick);
+                u.talking = talk;
+                u.is_self = self_;
+                u
+            };
+            let inp = FrameInput {
+                appearance: &a3,
+                pal: &pal3,
+                fonts: &fonts,
+                icons: &icons,
+                status: "live",
+                server_name: "Eternals Ω",
+                channel_name: "Генеральный штаб",
+                user_count: 5,
+                users: vec![
+                    mk("100", "Σκuλλα", true, false),
+                    mk("101", "ŁukaszŠimon", false, false),
+                    mk("1", "Игрок", false, true),
+                    mk("102", "Әли Ғафур", false, false),
+                    mk("103", "Émile", false, false),
+                ],
+                talk_alphas: vec![],
+                class_keys: vec![None, None, None, None, None],
+                whisper_keys: vec![],
+                whisperers: vec![mk("104", "Nørbäk", true, false)],
+                feed: vec![FeedItem { nickname: "Жанна".into(), text: "Ново€ сообщение — GL HF!".into(), kind: 1, alpha: 1.0 }],
+                lang: "ru",
+                move_mode: false,
+                now_ms: 1500,
+                work_h: 1080.0,
+                roster_scroll: 0.0,
+            };
+            let frame = render_frame(&inp);
+            write_png(&format!("{dir}/frame-langs.png"), &frame.buf).unwrap();
+        }
+
         let mut a2 = Appearance::default();
         a2.theme = "frost".into();
         a2.compact = true;
@@ -1907,5 +2687,163 @@ mod qa {
             let fr = render_frame(&inp3);
             write_png(&format!("{dir}/style-{st_id}.png"), &fr.buf).unwrap();
         }
+    }
+
+    /// Лента из трёх кадров для каждого старого стиля (анимация включена) —
+    /// видно, как эффект движется: qa/anim-{style}.png (t = 0.6 / 1.9 / 3.3 c).
+    #[test]
+    fn qa_dump_old_style_anim() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/qa");
+        std::fs::create_dir_all(dir).unwrap();
+        for style in ["glass", "neon", "hud", "soft", "minimal"] {
+            let mut a = Appearance::default();
+            a.style = style.to_string();
+            a.animations = true;
+            let pal = Palette::from_appearance(&a);
+            let mut frames: Vec<Frame> = Vec::new();
+            for t in [600u64, 1900, 3300] {
+                let mut alice = UserState::new("100", "Alice");
+                alice.talking = true;
+                let inp = FrameInput {
+                    appearance: &a,
+                    pal: &pal,
+                    fonts: &fonts,
+                    icons: &icons,
+                    status: "live",
+                    server_name: "Eternals",
+                    channel_name: "Генеральный штаб",
+                    user_count: 2,
+                    users: vec![alice, UserState::new("1", "Я")],
+                    talk_alphas: vec![],
+                    class_keys: vec![Some("archer".into()), None],
+                    whisper_keys: vec![],
+                    whisperers: vec![],
+                    feed: vec![],
+                    lang: "ru",
+                    move_mode: false,
+                    now_ms: t,
+                    work_h: 1080.0,
+                    roster_scroll: 0.0,
+                };
+                frames.push(render_frame(&inp));
+            }
+            // склейка кадров горизонтально с зазором
+            let gap = 10i32;
+            let fw = frames[0].buf.w;
+            let h = frames[0].buf.h;
+            let total_w = fw * frames.len() as i32 + gap * (frames.len() as i32 - 1);
+            let mut px = vec![24u8; (total_w * h * 4) as usize];
+            for (i, f) in frames.iter().enumerate() {
+                let ox = i as i32 * (fw + gap);
+                for row in 0..h {
+                    let src = (row * f.buf.w * 4) as usize;
+                    let dst = ((row * total_w + ox) * 4) as usize;
+                    let n = (f.buf.w * 4) as usize;
+                    px[dst..dst + n].copy_from_slice(&f.buf.px[src..src + n]);
+                }
+            }
+            let mut stitched = Buf::new(total_w, h);
+            stitched.px = px;
+            write_png(&format!("{dir}/anim-{style}.png"), &stitched).unwrap();
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    #[test]
+    fn perimeter_walk_stays_on_the_rounded_path() {
+        // v2.1.1: обходчик идёт по скруглённому контуру, а не по квадрату
+        let (x, y, w, h, r) = (10.0f32, 20.0f32, 200.0f32, 80.0f32, 12.0f32);
+        let per = 2.0 * (w - 2.0 * r) + 2.0 * (h - 2.0 * r) + std::f32::consts::TAU * r;
+        for i in 0..400 {
+            let p = per * i as f32 / 400.0;
+            let (px, py) = perimeter_point_r(x, y, w, h, r, p);
+            // точка лежит на границе скруглённого прямоугольника (|d| < 0.75)
+            let cx = x + w * 0.5;
+            let cy = y + h * 0.5;
+            let qx = (px - cx).abs() - (w * 0.5 - r);
+            let qy = (py - cy).abs() - (h * 0.5 - r);
+            let d = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r;
+            assert!(d.abs() < 0.75, "point ({px},{py}) off the rounded path: d={d}");
+            // и не вылетает за квадрат обхода
+            assert!(px >= x - 0.01 && px <= x + w + 0.01 && py >= y - 0.01 && py <= y + h + 0.01);
+        }
+    }
+
+    #[test]
+    fn top_round_fill_matches_frame_shape() {
+        // заливка хедера повторяет скругление рамки: углы сверху пустые
+        let mut buf = crate::render::Buf::new(60, 40);
+        buf.round_rect4(5.0, 5.0, 50.0, 16.0, 10.0, 10.0, 0.0, 0.0, Rgba([255, 0, 0, 200]));
+        let alpha_at = |x: i32, y: i32| buf.px[(((y * buf.w) + x) * 4 + 3) as usize];
+        assert_eq!(alpha_at(5, 5), 0, "top-left corner must stay clear (rounded)");
+        assert_eq!(alpha_at(54, 5), 0, "top-right corner must stay clear (rounded)");
+        assert!(alpha_at(30, 10) > 180, "centre filled");
+        assert!(alpha_at(6, 20) > 180, "bottom-left is square (filled)");
+    }
+
+    #[test]
+    fn chamfer_fill_matches_notched_frame() {
+        // заливка кибера повторяет срезы: углы сверху пустые по диагонали
+        let mut buf = crate::render::Buf::new(60, 40);
+        buf.chamfer_rect4(5.0, 5.0, 50.0, 16.0, 10.0, 10.0, 0.0, 0.0, Rgba([255, 0, 0, 200]));
+        let alpha_at = |x: i32, y: i32| buf.px[(((y * buf.w) + x) * 4 + 3) as usize];
+        assert_eq!(alpha_at(5, 5), 0, "cut corner must stay clear");
+        assert!(alpha_at(16, 5) > 180, "top edge after the cut is filled");
+        assert!(alpha_at(5, 16) > 180, "left edge after the cut is filled");
+    }
+}
+
+
+#[cfg(test)]
+mod scroll_fit_tests {
+    use super::*;
+    use crate::assets::Icons;
+    use crate::config::Appearance;
+    use crate::font::Fonts;
+    use crate::theme::Palette;
+
+    /// v2.1.2: если контент помещается — phantom-скролла быть не должно:
+    /// раньше content_total дважды считал верхние отступы, первая строка
+    /// уезжала под клип и выглядела «накрытой плашкой».
+    #[test]
+    fn fitting_roster_must_not_scroll() {
+        let fonts = Fonts::load();
+        let icons = Icons::load();
+        let mut a = Appearance::default();
+        a.animations = true;
+        let pal = Palette::from_appearance(&a);
+        let inp = FrameInput {
+            appearance: &a,
+            pal: &pal,
+            fonts: &fonts,
+            icons: &icons,
+            status: "live",
+            server_name: "S",
+            channel_name: "C",
+            user_count: 2,
+            users: vec![
+                crate::model::UserState::new("1", "A"),
+                crate::model::UserState::new("2", "B"),
+            ],
+            talk_alphas: vec![],
+            class_keys: vec![None, None],
+            whisper_keys: vec![],
+            whisperers: vec![],
+            feed: vec![],
+            lang: "ru",
+            move_mode: false,
+            now_ms: 1000,
+            roster_scroll: 0.0,
+            work_h: 1080.0,
+        };
+        let f = render_frame(&inp);
+        assert_eq!(f.scroll_to, 0.0, "content fits: no scroll needed");
     }
 }

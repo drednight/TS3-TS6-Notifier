@@ -334,12 +334,12 @@ impl Ts6Session {
                 let client_id = payload.get("clientId").map(|v| v.loose_i64()).unwrap_or(0);
                 let status = payload.get("status").map(|v| v.loose_i64()).unwrap_or(0);
                 let talking = status >= 1;
+                // v2.0.34 (та же семантика, что в ts3.rs v2.0.32): status=2 —
+                // «говорит при выключенном микрофоне», НЕ шёпот; шёпот —
+                // только по явным флагам whisper/isWhisper.
                 let whisper = talking
-                    && (status >= 2
-                        || payload.get("whisper").map(|v| v.loose_bool()).unwrap_or(false)
-                        || payload.get("isWhisper").map(|v| v.loose_bool()).unwrap_or(false)
-                        || (payload.get("targetMode").is_some()
-                            && payload.get("targetMode").map(|v| v.loose_i64()).unwrap_or(0) != 0));
+                    && (payload.get("whisper").map(|v| v.loose_bool()).unwrap_or(false)
+                        || payload.get("isWhisper").map(|v| v.loose_bool()).unwrap_or(false));
                 if foreign {
                     if talking && client_id != 0 && self.own_client_id_for(conn_id) == client_id {
                         self.note_active_connection(conn_id, "self talk", writer);
@@ -384,10 +384,8 @@ impl Ts6Session {
                 let status = payload.get("status").map(|v| v.loose_i64()).unwrap_or(0);
                 if status == 0 {
                     if conn_id == self.connection_id || self.connection_id == 0 {
-                        self.clients.clear();
-                        self.channels.clear();
-                        self.own_client_id = 0;
-                        self.own_channel_id = 0;
+                        // v2.0.34: прежний ростер НЕ стираем — при
+                        // переподключении меняем только статус, без мигания.
                         self.connection_id = 0;
                         self.publish("offline", "not connected to a TeamSpeak server");
                     }
@@ -1070,24 +1068,45 @@ impl Ts6Session {
 
         let opened_at = now_ms();
         let mut auth_timeout_sent = false;
+        // v2.1.0: heartbeat + dead-link watchdog. A TCP link that dies without
+        // a FIN (sleep/resume, TS6 crash) used to leave the overlay «live»
+        // forever; now an unanswered ping tears the session down and the
+        // reconnect loop re-establishes it.
+        const PING_MS: u64 = 10_000;
+        const DEAD_MS: u64 = 45_000;
+        let mut last_rx = now_ms();
+        let mut last_ping = now_ms();
         loop {
             if self.stop.load(Ordering::SeqCst) {
                 return SessionEnd::Closed;
             }
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(SessionEvent::Frame(Frame::Text(raw))) => {
+                    last_rx = now_ms();
                     self.handle_message(&raw, writer);
                     if self.resync_requested {
                         return SessionEnd::Resync;
                     }
                 }
                 Ok(SessionEvent::Frame(Frame::Ping(p))) => {
+                    last_rx = now_ms();
                     let _ = write_frame(&mut *writer.lock().unwrap(), &Frame::Pong(p), true);
                 }
-                Ok(SessionEvent::Frame(_)) => {}
+                Ok(SessionEvent::Frame(_)) => last_rx = now_ms(),
                 Ok(SessionEvent::Disconnected) => return SessionEnd::Closed,
                 Err(RecvTimeoutError::Timeout) => {
-                    if !auth_timeout_sent && self.api_key.is_empty() && !self.authenticated && now_ms() - opened_at > 3000 {
+                    let now = now_ms();
+                    if self.authenticated && now.saturating_sub(last_rx) > DEAD_MS {
+                        self.publish("connecting", "TeamSpeak 6 stopped responding — reconnecting");
+                        return SessionEnd::Closed;
+                    }
+                    if now.saturating_sub(last_ping) > PING_MS {
+                        last_ping = now;
+                        if write_frame(&mut *writer.lock().unwrap(), &Frame::Ping(Vec::new()), true).is_err() {
+                            return SessionEnd::Closed;
+                        }
+                    }
+                    if !auth_timeout_sent && self.api_key.is_empty() && !self.authenticated && now - opened_at > 3000 {
                         auth_timeout_sent = true;
                         self.publish("waiting-auth", "confirm the permission request in TeamSpeak 6 → Settings → Remote Apps");
                     }

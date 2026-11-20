@@ -31,17 +31,39 @@ CLASS_ICONS = [
     ('mage', 'mag.webp'), ('reaper', 'kosa.webp'), ('ghost', 'gost.webp'),
 ]
 
-# glyphs: printable ASCII + Russian + common UI marks
+# glyphs: ASCII + Latin-1 + Latin Ext-A + Greek + Cyrillic(+ext) + symbols
+# (ники пользователей на разных языках: «Σκuλλα», «Łukasz», «Әли», «İlhamə»)
 CHARS = []
-for cp in range(0x20, 0x7F):
+for cp in range(0x20, 0x7F):            # ASCII
     CHARS.append(chr(cp))
-for cp in range(0x410, 0x450):  # А-я
+for cp in range(0xA0, 0x100):           # Latin-1 (é ü ñ ç × ÷ ° © …)
     CHARS.append(chr(cp))
-CHARS += list('Ёё«»—–…·×°•±≈→←✓✗☰⚙★☾⚡')
-CHARS = list(dict.fromkeys(CHARS))  # unique, stable order
+for cp in range(0x100, 0x180):          # Latin Ext-A (ł š č ı ş ă ő ž …)
+    CHARS.append(chr(cp))
+for cp in range(0x384, 0x3A2):          # Greek: ΄΅ΆΈ-Ρ (включая тонусы)
+    CHARS.append(chr(cp))
+for cp in range(0x3A3, 0x3D0):          # Greek: Σ-ώ (включая ς)
+    CHARS.append(chr(cp))
+for cp in range(0x400, 0x460):          # Cyrillic Ѐ-џ (Ё, є і ї ў …)
+    CHARS.append(chr(cp))
+for cp in range(0x490, 0x4C0):          # Ґґ Ғғ Ққ Ңң Үү Ұұ Ҳҳ Һһ Җҗ …
+    CHARS.append(chr(cp))
+for cp in range(0x4D0, 0x500):          # Ӓӓ Ӗӗ Әә Ӣӣ Өө Ӱӱ Ӹӹ …
+    CHARS.append(chr(cp))
+CHARS += list('‐‑‒–—―‖‘’‚‛“”„‟†‡‣․…‰′″‴‹›‼‽⁄')          # пунктуация
+for cp in range(0x20A0, 0x20C0):        # валюты (₽ € £ ¥ ₩ …)
+    CHARS.append(chr(cp))
+CHARS += list('Əə')                                     # азербайджанская ə
+CHARS += list('№™℃℉⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞')                              # буквы/дроби
+CHARS += list('←↑→↓↔↕⇒⇔∞≈≠≡≤≥≪≫±×÷⋅°∙√∑∏∂∅∆∇∈∉∋∩∪∧∨∫∴∵⊕⊗⊥')  # математика
+CHARS += list('■□▢▣▪▫▬▭▮▰▱▲△▼▽◀▷◆◇◈◉○◌●◐◑◒◓◔◕')            # геометрия
+CHARS += list('☀☁☂☃☄★☆☇☈☉☎☑☒☓☕☘☠☡☢☣☪☭☺☻☼♠♣♥♦♪♫♬♭♮♯⚡⚪⚫')  # символы
+CHARS += list('✂✈✉✌✍✎✏✓✔✕✖✗✘✜✝✦✧✨✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿❀❁❂❃❄❅❆❇❈❉❊❋❌❍❓❔❕❖❗❛❜❝❞')  # дингбаты
+CHARS += list('〈〉《》「」『』【】〔〕〜・')                        # CJK-пунктуация
+CHARS = sorted(dict.fromkeys(CHARS))  # unique + sorted by cp (binary search)
 
 ICON_SIZE = 64
-SIZES = list(range(8, 31))
+SIZES = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 26, 28, 30]
 PAD = 2
 
 

@@ -351,6 +351,13 @@ pub struct Overlay {
     /// Dirty tracking: skip render+present when nothing changed.
     last_key: Option<String>,
     last_present_ms: u64,
+    /// Замер задержки «событие → кадр» (ревью 2026-11): дельта от
+    /// updated_at состояния до отрисовки кадра, avg/max в диагностике.
+    latency_ts: u64,
+    latency_n: u64,
+    latency_sum: u64,
+    latency_max: u64,
+    latency_at: u64,
     /// Cached hit geometry for input between re-renders.
     last_hits: Vec<(crate::layout::Rect, crate::layout::Hit)>,
     last_geom: (f64, f64, f64, f64, f64), // px, py, pad, pw, ph
@@ -384,6 +391,11 @@ impl Overlay {
             scratch: None,
             last_key: None,
             last_present_ms: 0,
+            latency_ts: 0,
+            latency_n: 0,
+            latency_sum: 0,
+            latency_max: 0,
+            latency_at: 0,
             last_hits: Vec::new(),
             last_geom: (0.0, 0.0, 0.0, PANEL_W as f64, 200.0),
             last_origin: (0.0, 0.0),
@@ -546,7 +558,7 @@ impl Overlay {
         let move_mode = self.app.move_mode.load(Ordering::SeqCst);
 
         // ---- dirty check: an unchanged frame skips render + present ----
-        let style_anim = a.style == "plasma" || a.style == "radiance";
+        let style_anim = crate::theme::StyleKind::parse(&a.style).needs_tick();
         let anim_active =
             a.animations && (style_anim || rows.iter().any(|u| u.talking) || !whisperers.is_empty());
         let time_bucket = if anim_active {
@@ -574,7 +586,9 @@ impl Overlay {
         );
         let interactive_wanted = move_mode || self.dragging || !cfg.desktop.click_through;
         let min_gap: u64 = 15; // up to ~60fps (dirty-check + 2s force keep idle cheap)
-        let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap;
+        // `|| now_ms < self.last_present_ms` — страховка от любых скачков
+        // часов назад: кадр обязан перерисоваться, а не ждать force-таймера
+        let due = now_ms.saturating_sub(self.last_present_ms) >= min_gap || now_ms < self.last_present_ms;
         let force = now_ms.saturating_sub(self.last_present_ms) >= 2000;
         let dirty = force || (due && self.last_key.as_deref() != Some(key.as_str()));
 
@@ -603,6 +617,32 @@ impl Overlay {
             work_h: host.work_area().3 as f32,
         };
         let frame = render_frame(&inp);
+        // Замер «событие → кадр» (ревью 2026-11, цель < 30–50 мс): дельта от
+        // сборки состояния (момент приёма talk-строки) до отрисовки кадра.
+        if state.updated_at != self.latency_ts {
+            self.latency_ts = state.updated_at;
+            let d = now_ms.saturating_sub(state.updated_at);
+            self.latency_n += 1;
+            self.latency_sum += d;
+            self.latency_max = self.latency_max.max(d);
+            if now_ms.saturating_sub(self.latency_at) > 60_000 {
+                if self.latency_n > 0 {
+                    crate::diag::diag(
+                        "overlay",
+                        &format!(
+                            "latency: {} states/min, avg {} ms, max {} ms",
+                            self.latency_n,
+                            self.latency_sum / self.latency_n,
+                            self.latency_max
+                        ),
+                    );
+                }
+                self.latency_at = now_ms;
+                self.latency_n = 0;
+                self.latency_sum = 0;
+                self.latency_max = 0;
+            }
+        }
         // auto-follow the first talking row inside a capped panel
         self.roster_scroll = frame.scroll_to;
 
@@ -1258,11 +1298,10 @@ pub(crate) mod win32 {
     static KEYS: std::sync::Mutex<Vec<Ev>> = std::sync::Mutex::new(Vec::new());
     const WHEEL_TTL_MS: u64 = 1500;
 
+    /// Монотонное время (как now_ms во всём приложении): скачок системных
+    /// часов не должен ни выбрасывать, ни «залипать» события колеса.
     fn wheel_now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
+        crate::model::now_ms()
     }
 
     unsafe extern "system" fn mouse_ll_proc(code: i32, w: usize, l: isize) -> isize {
@@ -1818,7 +1857,15 @@ pub(crate) mod win32 {
             "error" => (if ru { "Ошибка" } else { "Error" }, false),
             _ => (if ru { "Не подключено" } else { "Disconnected" }, false),
         };
-        let source = if state.source == "ts6" { "TS6" } else if state.source == "ts3" { "TS3" } else { "Mock" };
+        let source = if state.source == "ts6" {
+            "TS6"
+        } else if state.source == "ts3" {
+            "TS3"
+        } else if state.source == "auto" {
+            if ru { "Авто" } else { "Auto" }
+        } else {
+            "Mock"
+        };
         (format!("{} · {}", source, text), live)
     }
 
@@ -2005,11 +2052,11 @@ pub(crate) mod win32 {
         unsafe {
             let menu = CreatePopupMenu();
             let sub = CreatePopupMenu();
-            let sources = ["mock", "ts3", "ts6"];
-            let labels: [&str; 3] = if ru {
-                ["Mock (тестовый)", "TeamSpeak 3", "TeamSpeak 6"]
+            let sources = ["auto", "mock", "ts3", "ts6"];
+            let labels: [&str; 4] = if ru {
+                ["Авто", "Mock (тестовый)", "TeamSpeak 3", "TeamSpeak 6"]
             } else {
-                ["Mock (test)", "TeamSpeak 3", "TeamSpeak 6"]
+                ["Auto", "Mock (test)", "TeamSpeak 3", "TeamSpeak 6"]
             };
             for (i, src) in sources.iter().enumerate() {
                 let mut flags = MF_STRING;
@@ -2042,7 +2089,7 @@ pub(crate) mod win32 {
                 return;
             }
             let cmd = cmd as usize;
-            if (101..=103).contains(&cmd) {
+            if (101..=104).contains(&cmd) {
                 let src = sources[cmd - 101];
                 let patch = crate::json::obj(vec![("source", crate::json::Json::s(src))]);
                 app.store.lock().unwrap().update(&patch);

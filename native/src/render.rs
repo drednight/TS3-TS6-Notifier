@@ -108,6 +108,85 @@ impl Buf {
         }
     }
 
+    /// Fill with per-corner radii (0 = square corner). AA via SDF coverage.
+    /// Used to make inner fills (header bars) follow the outer frame shape.
+    pub fn round_rect4(&mut self, x: f32, y: f32, w: f32, h: f32, rtl: f32, rtr: f32, rbr: f32, rbl: f32, c: Rgba) {
+        if c.0[3] == 0 || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let clamp_r = |r: f32| r.min(w * 0.5).min(h * 0.5).max(0.0);
+        let (rtl, rtr, rbr, rbl) = (clamp_r(rtl), clamp_r(rtr), clamp_r(rbr), clamp_r(rbl));
+        let x0 = x.floor().max(0.0) as i32;
+        let y0 = y.floor().max(0.0) as i32;
+        let x1 = (x + w).ceil().min(self.w as f32) as i32;
+        let y1 = (y + h).ceil().min(self.h as f32) as i32;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let px = xx as f32 + 0.5;
+                let py = yy as f32 + 0.5;
+                let dl = px - x;
+                let dr = x + w - px;
+                let dt = py - y;
+                let db = y + h - py;
+                let d = if dl < rtl && dt < rtl {
+                    ((px - (x + rtl)).powi(2) + (py - (y + rtl)).powi(2)).sqrt() - rtl
+                } else if dr < rtr && dt < rtr {
+                    ((px - (x + w - rtr)).powi(2) + (py - (y + rtr)).powi(2)).sqrt() - rtr
+                } else if dr < rbr && db < rbr {
+                    ((px - (x + w - rbr)).powi(2) + (py - (y + h - rbr)).powi(2)).sqrt() - rbr
+                } else if dl < rbl && db < rbl {
+                    ((px - (x + rbl)).powi(2) + (py - (y + h - rbl)).powi(2)).sqrt() - rbl
+                } else {
+                    -dl.min(dr).min(dt).min(db)
+                };
+                let cov = (0.5 - d).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.blend_px(xx, yy, c.with_a((c.0[3] as f32 * cov) as u8));
+                }
+            }
+        }
+    }
+
+    /// Fill with per-corner diagonal cuts (chamfer, 0 = square corner). AA via
+    /// SDF coverage. Matches the notched «Кибер» outer frame.
+    pub fn chamfer_rect4(&mut self, x: f32, y: f32, w: f32, h: f32, ctl: f32, ctr: f32, cbr: f32, cbl: f32, c: Rgba) {
+        if c.0[3] == 0 || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let clamp_c = |v: f32| v.min(w * 0.5).min(h * 0.5).max(0.0);
+        let (ctl, ctr, cbr, cbl) = (clamp_c(ctl), clamp_c(ctr), clamp_c(cbr), clamp_c(cbl));
+        let x0 = x.floor().max(0.0) as i32;
+        let y0 = y.floor().max(0.0) as i32;
+        let x1 = (x + w).ceil().min(self.w as f32) as i32;
+        let y1 = (y + h).ceil().min(self.h as f32) as i32;
+        const INV_SQRT2: f32 = 0.707_106_77;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let px = xx as f32 + 0.5;
+                let py = yy as f32 + 0.5;
+                let dl = px - x;
+                let dr = x + w - px;
+                let dt = py - y;
+                let db = y + h - py;
+                let d = if ctl > 0.0 && dl < ctl && dt < ctl {
+                    (ctl - dl - dt) * INV_SQRT2
+                } else if ctr > 0.0 && dr < ctr && dt < ctr {
+                    (ctr - dr - dt) * INV_SQRT2
+                } else if cbr > 0.0 && dr < cbr && db < cbr {
+                    (cbr - dr - db) * INV_SQRT2
+                } else if cbl > 0.0 && dl < cbl && db < cbl {
+                    (cbl - dl - db) * INV_SQRT2
+                } else {
+                    -dl.min(dr).min(dt).min(db)
+                };
+                let cov = (0.5 - d).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.blend_px(xx, yy, c.with_a((c.0[3] as f32 * cov) as u8));
+                }
+            }
+        }
+    }
+
     /// Rounded-rect outline (AA both edges).
     pub fn stroke_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, c: Rgba, thickness: f32) {
         if c.0[3] == 0 || thickness <= 0.0 {

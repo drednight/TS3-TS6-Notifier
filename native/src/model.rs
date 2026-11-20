@@ -4,8 +4,25 @@ use crate::json::{obj, Json};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Монотонные миллисекунды, привязанные к эпохе при первом вызове.
+///
+/// Настенные часы (SystemTime) сбиваются при NTP-коррекции системного
+/// времени: dirty-check оверлея замирал (now < last_present) и рисовал
+/// только по force-таймеру раз в 2 секунды — «огромная задержка» говорящих
+/// и шёпота. Монотонные часы не идут назад; значения остаются «эпохоподобными»,
+/// поэтому межсессионные сравнения (таймеры обновлений и т.п.) не ломаются.
 pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static BASE: OnceLock<(Instant, u64)> = OnceLock::new();
+    let (start, wall) = BASE.get_or_init(|| {
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        (Instant::now(), wall)
+    });
+    wall.wrapping_add(start.elapsed().as_millis() as u64)
 }
 
 pub type SourceKind = &'static str; // "mock" | "ts3" | "ts6"
@@ -340,5 +357,20 @@ impl OverlayState {
             ("chat", Json::Arr(self.chat.iter().map(|c| c.to_json()).collect())),
             ("updatedAt", Json::i(self.updated_at as i64)),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn now_ms_is_monotonic_and_epoch_anchored() {
+        let a = now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let b = now_ms();
+        assert!(b >= a + 20, "must advance monotonically: {a} -> {b}");
+        // «эпохоподобные» значения — межсессионные таймеры остаются валидными
+        assert!(a > 1_700_000_000_000, "epoch-anchored: {a}");
     }
 }

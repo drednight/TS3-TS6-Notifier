@@ -43,6 +43,18 @@ jobs:
             tail -40 test.log | sed 's/^/::error::/'
             exit 1
           }
+      - name: Set up MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build TS3 plugin DLL
+        shell: cmd
+        run: |
+          cd plugin
+          if not exist dist mkdir dist
+          cl /nologo /LD /O2 /MD /W3 /I include ts3plugin_tsn.c /Fe:dist\ts3plugin_tsn_win64.dll /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          dir dist
       - name: package
         shell: bash
         run: |
@@ -103,6 +115,6 @@ jobs:
           $tag = "v$ver"
           $exists = gh release view $tag --json tagName -q .tagName 2>$null
           if (-not $exists) { echo "no release $tag — nothing to attach"; exit 0 }
-          gh release upload $tag dist-win/TS3-TS6-Notifier-Setup.exe dist-win/tsn-native-win64.zip --clobber
+          gh release upload $tag dist-win/TS3-TS6-Notifier-Setup.exe dist-win/tsn-native-win64.zip plugin/dist/ts3plugin_tsn_win64.dll --clobber
           if ($LASTEXITCODE -ne 0) { exit 1 }
           echo "assets attached to $tag"

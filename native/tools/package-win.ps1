@@ -1,7 +1,7 @@
 # Stage a distributable folder + zip for Windows.
 #   pwsh native/tools/package-win.ps1 [-OutDir dist-win]
 # Expects native/target/release/TS3-TS6-Notifier-Overlay.exe (cargo build --release).
-# The plugin DLL is included when dist/ts3plugin_tsn_win64.dll exists (prebuilt).
+# The TS3 plugin DLL is REQUIRED (built by CI: plugin/ts3plugin_tsn.c).
 
 param([string]$OutDir = "dist-win")
 
@@ -22,12 +22,15 @@ Copy-Item $exe $stage/
 Copy-Item -Recurse (Join-Path $repo "public") (Join-Path $stage "public")
 Copy-Item (Join-Path $native "README.md") $stage/
 
-# plugin DLL (prebuilt — see plugin/README.md)
+# plugin DLL (see plugin/README.md) — fail loudly if absent: shipping without
+# it breaks «Установить плагин» (the button copies exactly this file).
 $dll = Join-Path $repo "dist/ts3plugin_tsn_win64.dll"
-if (Test-Path $dll) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $stage "dist") | Out-Null
-    Copy-Item $dll (Join-Path $stage "dist/")
+if (-not (Test-Path $dll)) { $dll = Join-Path $repo "plugin/dist/ts3plugin_tsn_win64.dll" }
+if (-not (Test-Path $dll)) {
+    Write-Error "ts3plugin_tsn_win64.dll not found — build plugin\ts3plugin_tsn.c first (see plugin/build.bat)"
 }
+New-Item -ItemType Directory -Force -Path (Join-Path $stage "dist") | Out-Null
+Copy-Item $dll (Join-Path $stage "dist/")
 
 # data folder with the live config when present (otherwise the app writes defaults)
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "data") | Out-Null

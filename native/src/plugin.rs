@@ -6,15 +6,15 @@ use crate::chatlog::{sys_row, ChatLog};
 use crate::diag::diag;
 use crate::json::{obj, Json};
 use crate::model::{now_ms, ChatKind, ChatMessage, OverlayState, ServerGroup, UserState};
-use crate::ts3::Ts3Connector;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use crate::ts3::Ts3Connector;
 
 pub type Emit = crate::model::Emit;
 
@@ -26,6 +26,8 @@ struct BridgeShared {
     sockets: Mutex<Vec<Arc<Mutex<TcpStream>>>>,
     last_seen: Mutex<u64>,
     was_active: AtomicBool,
+    /// сколько heartbeat-пингов видел мост (диагностика: жив ли канал)
+    hb: AtomicU64,
 }
 
 pub struct PluginBridge {
@@ -50,6 +52,7 @@ impl PluginBridge {
             sockets: Mutex::new(Vec::new()),
             last_seen: Mutex::new(0),
             was_active: AtomicBool::new(false),
+            hb: AtomicU64::new(0),
         });
         // «Переподключить»/source switch stops the old bridge just before the
         // new one starts — retry briefly while the old socket is released.
@@ -172,6 +175,10 @@ impl PluginBridge {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    pub fn hb_count(&self) -> u64 {
+        self.shared.hb.load(Ordering::SeqCst)
+    }
 }
 
 fn handle_plugin_conn(
@@ -182,7 +189,16 @@ fn handle_plugin_conn(
     stop: Arc<AtomicBool>,
 ) {
     let writer = Arc::new(Mutex::new(socket.try_clone().expect("clone socket")));
-    shared.sockets.lock().unwrap().push(writer);
+    shared.sockets.lock().unwrap().push(writer.clone());
+    // Каждое НОВОЕ соединение плагина сразу запрашивает полный снимок канала.
+    // Без этого после тихого переподключения плагина (события идут, hello — нет)
+    // own_cid оставался 0 и ростер был пустым навсегда.
+    {
+        let line = format!("{}\n", obj(vec![("cmd", Json::s("snapshot"))]).to_string());
+        if let Ok(mut g) = writer.lock() {
+            let _ = g.write_all(line.as_bytes());
+        }
+    }
     let reader = BufReader::new(socket);
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -202,13 +218,14 @@ fn handle_plugin_conn(
             let _ = active_tx.send(());
         }
         let Ok(msg) = Json::parse(trimmed) else {
-            diag("plugin", &format!("bad line: {}", &trimmed[..trimmed.len().min(120)]));
+            diag("plugin", &format!("bad line: {}", crate::diag::snip(trimmed, 120)));
             continue;
         };
         if msg.get("e").map(|v| v.loose_str()).as_deref() == Some("ping") {
+            shared.hb.fetch_add(1, Ordering::SeqCst);
             continue;
         }
-        diag("plugin", &trimmed[..trimmed.len().min(240)]);
+        diag("plugin", crate::diag::snip(trimmed, 240));
         if line_tx.send(msg).is_err() {
             break;
         }
@@ -238,6 +255,8 @@ pub struct PluginState {
     server_name: String,
     groups: Vec<ServerGroup>,
     whispers: Arc<crate::model::WhisperBook>,
+    /// Ростер требует починки (join потерялся) — попросить снимок у плагина.
+    want_roster_refresh: bool,
 }
 
 impl PluginState {
@@ -252,7 +271,13 @@ impl PluginState {
             server_name: String::new(),
             groups: Vec::new(),
             whispers: crate::model::WhisperBook::new(emit),
+            want_roster_refresh: false,
         }
+    }
+
+    /// Забрать флаг «нужен снимок» (сброс).
+    pub fn take_roster_refresh(&mut self) -> bool {
+        std::mem::take(&mut self.want_roster_refresh)
     }
 
     pub fn ingest(&mut self, msg: &Json) {
@@ -285,6 +310,17 @@ impl PluginState {
                         u.channel_id = cid;
                         u.is_self = id == self.own_id;
                         u.server_groups = raw.get("groups").map(|v| v.loose_str()).unwrap_or_default();
+                        if let Some(prev_u) = prev.get(&id) {
+                            // Рецензия 2026-11: гонка «снимок затирает события» —
+                            // говорящий/шепчущий, тронутый событиями ПОСЛЕ сборки
+                            // снимка, остаётся в живом состоянии.
+                            u.talking = prev_u.talking;
+                            u.whispering = prev_u.whispering;
+                        } else if let Some(t) = raw.get("t") {
+                            // Снимок плагина v1.2.3+ несёт флаг разговора —
+                            // говорящие до входа подсвечиваются сразу.
+                            u.talking = t.loose_i64() != 0;
+                        }
                         clients.insert(id, u);
                     }
                 }
@@ -410,12 +446,24 @@ impl PluginState {
             "talk" => {
                 let id = msg.get("clid").map(|v| v.loose_i64()).unwrap_or(0);
                 let s = msg.get("s").map(|v| v.loose_i64()).unwrap_or(0);
-                // v2 plugin sends "w" (isReceivedWhisper); s==2 = whispering in
-                // the TS3 SDK — support both so the whisper section works.
-                let whisper = msg.get("w").map(|v| v.loose_i64()).unwrap_or(0) != 0 || s == 2;
+                // v2.0.32 (ревью): s==2 = «говорит при выключенном микрофоне»
+                // (SDK), а НЕ шёпот. Шёпот — только w (isReceivedWhisper).
+                let whisper = msg.get("w").map(|v| v.loose_i64()).unwrap_or(0) != 0;
+                let talking = s >= 1 || whisper;
                 if let Some(u) = self.clients.get_mut(&id) {
-                    u.talking = s == 1 || whisper;
+                    u.talking = talking;
                     u.whispering = whisper;
+                    self.emit_state();
+                } else if s != 0 && id != 0 {
+                    // join потерялся — говорящий всё равно должен засветиться
+                    // сейчас; имя/группы долечит ближайший снимок.
+                    let mut u = UserState::new(id.to_string(), id.to_string());
+                    u.channel_id = self.own_cid;
+                    u.is_self = id == self.own_id;
+                    u.talking = talking;
+                    u.whispering = whisper;
+                    self.clients.insert(id, u);
+                    self.want_roster_refresh = true;
                     self.emit_state();
                 }
                 // A whisper may come from another channel — note it even when
@@ -502,6 +550,11 @@ impl PluginState {
             }
             _ => {} // hello / pong
         }
+    }
+
+    /// No snapshot yet (own channel unknown) — roster cannot be built.
+    pub fn needs_snapshot(&self) -> bool {
+        self.own_cid == 0
     }
 
     fn push_event(&mut self, nick: &str, uid: &str, event: &'static str, own: bool, detail: &str) {
@@ -652,6 +705,8 @@ fn forward<T: Send + 'static>(
     });
 }
 
+/// Резервный ClientQuery-коннектор (страховка). Запускается ТОЛЬКО когда
+/// плагин молчит: источник данных всегда плагин, query — последний рубеж.
 fn ensure_query(
     query_stop: &mut Option<Arc<AtomicBool>>,
     evt_tx: &Sender<ConnEvent>,
@@ -688,30 +743,101 @@ fn machine_loop(
     plugin_active: Arc<AtomicBool>,
 ) {
     let mut using_plugin = false;
-    let mut plugin_state: Option<PluginState> = None;
-    let mut hold_until: u64 = 0;
-    let mut query_live = false;
     let mut query_stop: Option<Arc<AtomicBool>> = None;
+    let mut plugin_state: Option<PluginState> = None;
+    let mut last_snapshot_req: u64 = 0;
+    // v2.0.31: keepalive app→plugin: пинг каждые 10 с; pong плагина держит
+    // связь «живой» даже в полной тишине (один на канале и не говоришь).
+    let mut last_ping_sent: u64 = 0;
+    let mut last_hb_seen: u64 = 0;
+    // Диагностика потока: события/мин и длительность разбора снимков.
+    let mut flow_events: u64 = 0;
+    let mut flow_snapshots: u64 = 0;
+    let mut flow_snap_ms: u64 = 0;
+    let mut flow_diag_at = now_ms();
 
     while !stop.load(Ordering::SeqCst) {
-        let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else { continue };
+        let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else {
+            // тик для keepalive даже без событий
+            let now = now_ms();
+            if now.saturating_sub(last_ping_sent) > 10_000 {
+                last_ping_sent = now;
+                bridge.send(&obj(vec![("cmd", Json::s("ping"))]));
+            }
+            continue;
+        };
         match ev {
             ConnEvent::Active => {
                 if !using_plugin {
                     using_plugin = true;
                     plugin_active.store(true, Ordering::SeqCst);
-                    if let Some(s) = query_stop.take() {
-                        s.store(true, Ordering::SeqCst);
+                    if let Some(q) = query_stop.take() {
+                        q.store(true, Ordering::SeqCst);
                     }
                     plugin_state = Some(PluginState::new(emit.clone()));
-                    println!("[ts3] plugin bridge active — ClientQuery connector paused");
+                    println!("[ts3] plugin bridge active");
+                    diag("plugin", "plugin link active");
                     bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                    last_snapshot_req = now_ms();
                 }
             }
             ConnEvent::Line(msg) => {
-                if using_plugin {
+                if !using_plugin {
+                    // v2.0.31: ЛЮБОЙ трафик плагина (hello/событие/pong на наш
+                    // keepalive) возвращает его в строй — плагин всегда первый,
+                    // ClientQuery работает только пока плагин молчит.
+                    using_plugin = true;
+                    plugin_active.store(true, Ordering::SeqCst);
+                    if let Some(q) = query_stop.take() {
+                        q.store(true, Ordering::SeqCst);
+                    }
+                    plugin_state = Some(PluginState::new(emit.clone()));
+                    println!("[ts3] plugin link recovered — back to plugin");
+                    diag("plugin", "plugin traffic recovered — plugin back as primary source");
+                    bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                    last_snapshot_req = now_ms();
+                }
+                {
                     if let Some(ps) = plugin_state.as_mut() {
+                        let ev_name = msg.get("e").map(|v| v.loose_str());
+                        if ev_name.as_deref() != Some("pong") && ev_name.as_deref() != Some("hello") {
+                            flow_events += 1;
+                        }
+                        let is_snapshot = msg.get("e").map(|v| v.loose_str()).as_deref() == Some("snapshot");
+                        let t0 = now_ms();
                         ps.ingest(&msg);
+                        if is_snapshot {
+                            flow_snapshots += 1;
+                            flow_snap_ms += now_ms().saturating_sub(t0);
+                        }
+                        // страховка: снимок потерян/не пришёл или ростер
+                        // починить надо — переспрашиваем (не чаще раза в 3 с)
+                        if (ps.needs_snapshot() || ps.take_roster_refresh())
+                            && now_ms().saturating_sub(last_snapshot_req) > 3000
+                        {
+                            last_snapshot_req = now_ms();
+                            bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                        }
+                        // раз в минуту — строка потока в диагностике
+                        let now = now_ms();
+                        if now.saturating_sub(flow_diag_at) > 60_000 {
+                            let hb = bridge.hb_count();
+                            let hb_delta = hb.saturating_sub(last_hb_seen);
+                            last_hb_seen = hb;
+                            if flow_events > 0 || hb_delta > 0 {
+                                diag(
+                                    "plugin",
+                                    &format!(
+                                        "flow: {flow_events} events/min, snapshots {flow_snapshots} ({} ms avg), hb {hb_delta}/min",
+                                        if flow_snapshots > 0 { flow_snap_ms / flow_snapshots } else { 0 }
+                                    ),
+                                );
+                            }
+                            flow_events = 0;
+                            flow_snapshots = 0;
+                            flow_snap_ms = 0;
+                            flow_diag_at = now;
+                        }
                     }
                 }
             }
@@ -719,46 +845,40 @@ fn machine_loop(
                 if using_plugin {
                     using_plugin = false;
                     plugin_active.store(false, Ordering::SeqCst);
-                    hold_until = now_ms() + 6000;
-                    query_live = false;
-                    println!("[ts3] plugin bridge idle — falling back to ClientQuery");
+                    println!("[ts3] plugin link idle — резерв: ClientQuery");
+                    diag("plugin", "plugin link idle — ClientQuery safety net engaged");
                 }
                 ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
             }
             ConnEvent::FallbackTimer => {
+                // Плагин так и не появился (не установлен/отключён) — страховка.
                 if !using_plugin {
+                    diag("plugin", "no plugin link — ClientQuery safety net engaged");
                     ensure_query(&mut query_stop, &evt_tx, &host, port, &api_key, &stop);
                 }
             }
-            ConnEvent::QueryState(st) => {
+            ConnEvent::QueryState(mut st) => {
                 if using_plugin {
                     continue;
                 }
-                if st.status == "live" {
-                    query_live = true;
-                }
-                if !query_live {
-                    if let Some(ps) = plugin_state.as_ref() {
-                        if now_ms() < hold_until {
-                            emit(ps.build_state());
-                            continue;
-                        }
-                    }
-                }
+                // Помечаем источник: резерв должен быть виден и в оверлее,
+                // и в диагностике («плагин всегда первый»).
+                st.detail = "ClientQuery (резерв)".to_string();
                 plugin_state = None;
                 emit(*st);
             }
         }
     }
     bridge.stop();
-    if let Some(s) = query_stop.take() {
-        s.store(true, Ordering::SeqCst);
+    if let Some(q) = query_stop.take() {
+        q.store(true, Ordering::SeqCst);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::sync::Mutex;
 
     fn capture() -> (Emit, Arc<Mutex<Vec<OverlayState>>>) {
@@ -784,6 +904,44 @@ mod tests {
                 {"id":3,"name":"Дальний","cid":20,"groups":"","cname":"Другая"}]}"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn snapshot_keeps_live_talking_state_for_known_users() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_line());
+        let talk = format!("{{\"e\":\"talk\",\"clid\":101,\"s\":1,\"w\":0}}");
+        ps.ingest(&Json::parse(&talk).unwrap());
+        assert!(ps.clients[&101].talking);
+        // Снимок без флага t (старый плагин) не должен откатывать живое состояние.
+        ps.ingest(&snapshot_line());
+        assert!(ps.clients[&101].talking, "stale snapshot must not reset live talking");
+    }
+
+    #[test]
+    fn snapshot_talk_flag_marks_new_users_talking() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        let raw = format!(
+            "{{\"e\":\"snapshot\",\"server\":\"S\",\"own\":100,\"owncid\":7,\"owncname\":\"Home\",\"clients\":[{{\"id\":100,\"name\":\"Me\",\"cid\":7,\"groups\":\"\",\"cname\":\"Home\"}},{{\"id\":101,\"name\":\"A\",\"cid\":7,\"groups\":\"\",\"cname\":\"Home\",\"t\":1}}]}}"
+        );
+        ps.ingest(&Json::parse(&raw).unwrap());
+        assert!(ps.clients[&101].talking, "snapshot t-flag must light up users already talking at connect");
+        assert!(!ps.clients[&100].talking);
+    }
+
+    #[test]
+    fn talk_for_unknown_client_creates_placeholder() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        ps.ingest(&snapshot_line());
+        let talk = format!("{{\"e\":\"talk\",\"clid\":777,\"s\":1,\"w\":0}}");
+        ps.ingest(&Json::parse(&talk).unwrap());
+        let u = ps.clients.get(&777).expect("placeholder user created");
+        assert!(u.talking);
+        assert!(ps.take_roster_refresh(), "lost join must request a snapshot repair");
+        assert!(!ps.take_roster_refresh(), "flag resets on take");
     }
 
     #[test]
@@ -872,5 +1030,55 @@ mod tests {
         let st = ps.build_state();
         assert_eq!(st.chat.len(), 0, "mass snapshot must not announce joins: {:?}", st.chat);
         let _ = (before, after);
+    }
+
+    #[test]
+    fn long_multibyte_line_does_not_kill_the_bridge() {
+        // Regression: the diag log sliced `&trimmed[..240]` BY BYTES — a
+        // snapshot line with кириллица/греческим ником, пересекающим байт 240,
+        // паниковал поток соединения, и ростер канала оставался пустым навсегда.
+        let (bridge, line_rx, _active_rx, _idle_rx) = PluginBridge::start(0, 45_000).unwrap();
+        let mut s = String::from(
+            r#"{"e":"snapshot","server":"S","own":1,"owncid":7,"owncname":"Home","clients":[{"id":1,"name":""#,
+        );
+        let head = s.len();
+        s.push_str(&"Ы".repeat(200));
+        s.push_str(r#"","cid":7,"groups":"","cname":"Home"}]}"#);
+        if s.is_char_boundary(240) {
+            s.insert(head, 'x'); // сместить границу в середину 2-байтового символа
+        }
+        assert!(!s.is_char_boundary(240), "fixture must cross the byte-240 boundary");
+        assert!(s.len() > 240);
+        let mut sock = TcpStream::connect(("127.0.0.1", bridge.port())).unwrap();
+        sock.write_all(s.as_bytes()).unwrap();
+        sock.write_all(b"\n").unwrap();
+        let msg = line_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("snapshot must reach the app despite multi-byte chars");
+        assert_eq!(msg.get("e").map(|v| v.loose_str()).as_deref(), Some("snapshot"));
+        bridge.stop();
+    }
+
+    #[test]
+    fn new_connection_is_asked_for_a_snapshot() {
+        // каждое новое соединение плагина должно получать {"cmd":"snapshot"} —
+        // иначе после тихого переподключения ростер оставался пустым
+        let (bridge, _line_rx, _active_rx, _idle_rx) = PluginBridge::start(0, 45_000).unwrap();
+        let mut sock = TcpStream::connect(("127.0.0.1", bridge.port())).unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut buf = [0u8; 128];
+        let n = sock.read(&mut buf).expect("app must request a snapshot on connect");
+        let got = String::from_utf8_lossy(&buf[..n]).into_owned();
+        assert!(got.contains("\"cmd\"") && got.contains("snapshot"), "expected snapshot request, got {got:?}");
+        bridge.stop();
+    }
+
+    #[test]
+    fn needs_snapshot_until_one_arrives() {
+        let (emit, _out) = capture();
+        let mut ps = PluginState::new(emit);
+        assert!(ps.needs_snapshot());
+        ps.ingest(&snapshot_line());
+        assert!(!ps.needs_snapshot());
     }
 }

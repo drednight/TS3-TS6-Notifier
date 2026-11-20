@@ -1,6 +1,6 @@
 [package]
 name = "tsn-native"
-version = "2.0.17"
+version = "2.1.2"
 edition = "2021"
 description = "TS3-TS6 Notifier — native core (Rust): TeamSpeak connectors, state, HTTP/WS server"
 

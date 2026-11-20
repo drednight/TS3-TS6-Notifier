@@ -37,8 +37,20 @@ pub struct App {
     pub version: String,
     pub public_dir: PathBuf,
     pub restart_connector: RestartFn,
-    pub plugin_active: Arc<AtomicBool>,
-    pub plugin_dll: String,
+}
+
+/// v2.0.34 bug fixed in 2.1.0: with `source: "auto"` the gate used to map the
+/// setting to "mock" and dropped EVERY real ts3/ts6 state (the overlay stuck
+/// on «connecting» forever). In «auto» the supervisor owns the choice, so any
+/// factual ts3/ts6 state passes; demo stragglers are still dropped. For a
+/// pinned source only its own states pass.
+fn source_gate_pass(configured: &str, state_source: &str) -> bool {
+    match configured {
+        "auto" => state_source == "ts3" || state_source == "ts6",
+        "ts3" => state_source == "ts3",
+        "ts6" => state_source == "ts6",
+        _ => state_source == "mock",
+    }
 }
 
 impl App {
@@ -51,15 +63,8 @@ impl App {
     pub fn push_state(&self, state: &OverlayState) {
         // after a data-source switch stragglers from the previous connector
         // (e.g. a queued mock frame) must not overwrite the new source's state
-        let want = {
-            let src = self.store.lock().unwrap().get().source.clone();
-            match src.as_str() {
-                "ts3" => "ts3",
-                "ts6" => "ts6",
-                _ => "mock",
-            }
-        };
-        if state.source != want {
+        let want = self.store.lock().unwrap().get().source.clone();
+        if !source_gate_pass(&want, state.source) {
             return;
         }
         *self.latest.write().unwrap() = state.clone();
@@ -189,6 +194,51 @@ fn memory_rows() -> Vec<String> {
             }
         }
     }
+    #[cfg(any(windows, tsn_win32))]
+    {
+        // WorkingSetSize через psapi — как в диспетчере задач Windows
+        #[repr(C)]
+        struct Pmc {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set: usize,
+            working_set: usize,
+            quota_peak_paged: usize,
+            quota_paged: usize,
+            quota_peak_non_paged: usize,
+            quota_non_paged: usize,
+            pagefile: usize,
+            peak_pagefile: usize,
+        }
+        #[cfg_attr(windows, link(name = "psapi"))]
+        extern "system" {
+            fn GetProcessMemoryInfo(h: *mut std::ffi::c_void, c: *mut Pmc, cb: u32) -> i32;
+        }
+        #[cfg_attr(windows, link(name = "kernel32"))]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        }
+        unsafe {
+            let mut c = Pmc {
+                cb: std::mem::size_of::<Pmc>() as u32,
+                page_fault_count: 0,
+                peak_working_set: 0,
+                working_set: 0,
+                quota_peak_paged: 0,
+                quota_paged: 0,
+                quota_peak_non_paged: 0,
+                quota_non_paged: 0,
+                pagefile: 0,
+                peak_pagefile: 0,
+            };
+            if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 && c.working_set > 0 {
+                return vec![format!(
+                    "главный процесс (Rust/сервер): rss={:.1}MB",
+                    c.working_set as f64 / 1048576.0
+                )];
+            }
+        }
+    }
     vec!["главный процесс (Rust/сервер): rss=n/a".into()]
 }
 
@@ -215,9 +265,14 @@ pub(crate) fn diagnostics(app: &App) -> String {
     let mut report: Vec<String> = Vec::new();
     report.push(format!("TS3-TS6 Notifier diagnostics — {}", crate::diag::local_stamp()));
     report.push(format!("version: {}", app.version));
+    let active = if latest.source != cfg.source {
+        format!(", active: {}", latest.source)
+    } else {
+        String::new()
+    };
     report.push(format!(
-        "source: {} (ts3 {}:{}, ts6 {}:{})",
-        cfg.source, cfg.ts3.host, cfg.ts3.port, cfg.ts6.host, cfg.ts6.port
+        "source: {}{} (ts3 {}:{}, ts6 {}:{})",
+        cfg.source, active, cfg.ts3.host, cfg.ts3.port, cfg.ts6.host, cfg.ts6.port
     ));
     report.push(format!("last status: {} — {}", latest.status, latest.detail));
     report.push(format!(
@@ -376,18 +431,6 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             }
             true
         }
-        ("/api/plugin/install", "POST") => {
-            let result = plugin_install(&app.plugin_dll);
-            json_response(stream, 200, &result);
-            true
-        }
-        ("/api/plugin/status", "GET") => {
-            json_response(stream, 200, &obj(vec![
-                ("active", Json::b(app.plugin_active.load(Ordering::SeqCst))),
-                ("dll", Json::b(!app.plugin_dll.is_empty() && Path::new(&app.plugin_dll).exists())),
-            ]));
-            true
-        }
         ("/api/diagnostics", "GET") => {
             let report = diagnostics(app);
             http_response(stream, 200, "text/plain; charset=utf-8", report.as_bytes(), "Cache-Control: no-store\r\n");
@@ -422,44 +465,6 @@ fn handle_api(app: &Arc<App>, req: &Request, stream: &mut TcpStream) -> bool {
             true
         }
         _ => false,
-    }
-}
-
-pub(crate) fn plugin_install(dll: &str) -> Json {
-    if !cfg!(windows) {
-        return obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))]);
-    }
-    if dll.is_empty() || !Path::new(dll).exists() {
-        return obj(vec![("ok", Json::b(false)), ("error", Json::s("dll-missing"))]);
-    }
-    #[cfg(any(windows, tsn_win32))]
-    {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        let dst_dir = format!("{appdata}\\TS3Client\\plugins");
-        let dst = format!("{dst_dir}\\ts3plugin_tsn_win64.dll");
-        let _ = std::fs::create_dir_all(&dst_dir);
-        // identical → nothing to do
-        if let (Ok(a), Ok(b)) = (std::fs::read(dll), std::fs::read(&dst)) {
-            if a == b {
-                return obj(vec![("ok", Json::b(true)), ("same", Json::b(true)), ("path", Json::s(dst))]);
-            }
-        }
-        // copy; on lock errors rename aside first (Windows maps the DLL)
-        if std::fs::copy(dll, &dst).is_err() {
-            let old = format!("{dst}.old-{}", crate::model::now_ms());
-            if std::fs::rename(&dst, &old).is_err() {
-                return obj(vec![("ok", Json::b(false)), ("error", Json::s("locked"))]);
-            }
-            if std::fs::copy(dll, &dst).is_err() {
-                return obj(vec![("ok", Json::b(false)), ("error", Json::s("copy-failed"))]);
-            }
-        }
-        crate::diag::diag("plugin", &format!("installed to {dst}"));
-        obj(vec![("ok", Json::b(true)), ("path", Json::s(dst))])
-    }
-    #[cfg(not(any(windows, tsn_win32)))]
-    {
-        obj(vec![("ok", Json::b(false)), ("error", Json::s("windows-only"))])
     }
 }
 
@@ -573,4 +578,27 @@ fn handle_conn(app: Arc<App>, stream: TcpStream) {
         return;
     }
     serve_static(&mut stream, &path, &app.public_dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_gate_pass;
+
+    #[test]
+    fn auto_source_gate_passes_real_connectors_only() {
+        // v2.1.0 regression: «auto» не должен отбрасывать статы ts3/ts6
+        assert!(source_gate_pass("auto", "ts3"));
+        assert!(source_gate_pass("auto", "ts6"));
+        assert!(!source_gate_pass("auto", "mock"), "demo stragglers stay dropped");
+    }
+
+    #[test]
+    fn pinned_source_gate_is_strict() {
+        assert!(source_gate_pass("ts3", "ts3"));
+        assert!(!source_gate_pass("ts3", "ts6"));
+        assert!(!source_gate_pass("ts3", "mock"));
+        assert!(source_gate_pass("ts6", "ts6"));
+        assert!(source_gate_pass("mock", "mock"));
+        assert!(!source_gate_pass("mock", "ts3"));
+    }
 }

@@ -63,13 +63,13 @@
   }
 
   function sourceKey(source) {
-    return { mock: 'sourceMock', ts3: 'sourceTs3', ts6: 'sourceTs6' }[source] || 'sourceMock';
+    return { auto: 'sourceAuto', mock: 'sourceMock', ts3: 'sourceTs3', ts6: 'sourceTs6' }[source] || 'sourceMock';
   }
 
   function statusHint() {
     if (state?.detail) return state.detail;
     if (!state) return '';
-    return { mock: 'hintMock', ts3: 'hintTs3', ts6: 'hintTs6' }[state.source] || '';
+    return { auto: 'hintAuto', mock: 'hintMock', ts3: 'hintTs3', ts6: 'hintTs6' }[state.source] || '';
   }
 
   /* ---------------- row rendering ---------------- */
@@ -773,42 +773,6 @@
       fetch('/api/update/restart', { method: 'POST' }).catch(() => {});
     });
 
-    // «Плагин TS3»: install the bridge DLL into the client's plugin folder.
-    const refreshPluginStatus = async () => {
-      const el = $('pluginStatus');
-      if (!el) return;
-      try {
-        const st = await (await fetch('/api/plugin/status')).json();
-        el.textContent = st.active ? t('pluginActive') : t('pluginOff');
-      } catch {
-        el.textContent = '';
-      }
-    };
-    $('pluginInstallBtn').addEventListener('click', async () => {
-      const el = $('pluginStatus');
-      el.textContent = '…';
-      try {
-        const res = await fetch('/api/plugin/install', { method: 'POST' });
-        const body = await res.json();
-        if (body.ok && body.same) {
-          el.textContent = t('pluginSame');
-        } else if (body.ok) {
-          el.textContent = t('pluginInstalled');
-          setTimeout(refreshPluginStatus, 1500);
-        } else if (body.error === 'locked') {
-          el.textContent = t('pluginLocked');
-        } else if (body.error === 'dll-missing') {
-          el.textContent = t('pluginNoDll');
-        } else if (body.error === 'windows-only') {
-          el.textContent = t('pluginFail') + ': ' + body.error;
-        } else {
-          el.textContent = t('pluginFail') + ': ' + (body.error || '');
-        }
-      } catch {
-        el.textContent = t('pluginFail');
-      }
-    });
-    refreshPluginStatus();
 
     // «Диагностика»: build the TS3/TS6 capture report and let the user copy it.
     $('diagBtn').addEventListener('click', async () => {
