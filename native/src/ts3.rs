@@ -89,6 +89,9 @@ struct Ts3Session {
     greeting_seen: bool,
     refresh_fails: i32,
     talk_diag_skipped: i32,
+    /// последнее talk-событие: (момент, talking, whispering) — свежее событие
+    /// главнее данных снимка (гонка в обе стороны), дальше решает флаг снимка
+    talk_event_at: HashMap<i64, (u64, bool, bool)>,
     refresh_pending_at: u64,
     refresh_heavy: bool,
     refresh_first_at: u64,
@@ -182,6 +185,7 @@ impl Ts3Session {
                     }
                     return;
                 }
+                self.talk_event_at.insert(clid, (now_ms(), talking, whisper));
                 if let Some(user) = self.clients.get_mut(&clid) {
                     if user.talking != talking || user.whispering != whisper {
                         user.talking = talking;
@@ -451,6 +455,20 @@ impl Ts3Session {
     }
 
     /// Замер длительности full_refresh'ей + строка в диагностику раз в минуту.
+    /// Итоговые флаги говорения для клиента: свежее событие (≤3 с) главнее
+    /// (гонка снимка и событий в обе стороны); иначе — флаг из clientlist,
+    /// который самовосстанавливает пропущенные события.
+    fn talk_flags(&self, id: i64, flag_talking: bool, prev: Option<&UserState>, now: u64) -> (bool, bool) {
+        if let Some((t, talking, whispering)) = self.talk_event_at.get(&id) {
+            if now.saturating_sub(*t) < 3000 {
+                return (*talking, *whispering);
+            }
+        }
+        // whisper из снимка не известен — гасим вместе с речью
+        let whispering = prev.map(|u| u.whispering).unwrap_or(false) && flag_talking;
+        (flag_talking, whispering)
+    }
+
     fn note_refresh_stats(&mut self, dt: u64, heavy: bool) {
         self.refresh_stat_calls += 1;
         self.refresh_stat_heavy += if heavy { 1 } else { 0 };
@@ -767,11 +785,13 @@ impl Ts3Session {
             u.is_query = f_int(item, "client_type") == 1;
             u.server_groups = f_str(item, "client_servergroups");
             if let Some(prev_u) = self.clients.get(&id) {
-                // Рецензия 2026-11: гонка «снимок затирает события» — пока
-                // шёл clientlist/аватары, talk/mute-события уже обновили
-                // клиентов; старый снимок не должен их откатывать.
-                u.talking = prev_u.talking;
-                u.whispering = prev_u.whispering;
+                // Рецензия 2026-11 (v2.0.28): гонка «снимок затирает события».
+                // v2.0.31: свежее talk-событие (≤3 с) главнее снимка; иначе
+                // говорение берётся из флага client_flag_talking — так
+                // пропущенные события долечиваются следующим refresh'ем.
+                let (talking, whispering) = self.talk_flags(id, u.talking, Some(prev_u), now_ms());
+                u.talking = talking;
+                u.whispering = whispering;
                 // light-запрос не тянет -groups/аватары — переносим из прежнего
                 // состояния, чтобы иконки не гасли между heavy-refresh'ами.
                 if !f_has(item, "client_servergroups") || u.server_groups.is_empty() {
@@ -988,6 +1008,7 @@ impl Ts3Connector {
             greeting_seen: false,
             refresh_fails: 0,
             talk_diag_skipped: 0,
+            talk_event_at: HashMap::new(),
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1065,6 +1086,7 @@ mod tests {
             greeting_seen: false,
             refresh_fails: 0,
             talk_diag_skipped: 0,
+            talk_event_at: HashMap::new(),
             refresh_pending_at: 0,
             refresh_heavy: false,
             refresh_first_at: 0,
@@ -1112,6 +1134,28 @@ mod tests {
         assert!(s.clients.is_empty());
         assert!(s.chat.rows().iter().any(|c| c.event == Some("leave")), "leave row expected");
         assert_eq!(s.refresh_pending_at, 0, "local leave must not queue a refresh");
+    }
+
+
+    /// v2.0.31: свежее talk-событие главнее снимка; иначе флаг снимка
+    /// самовосстанавливает пропущенные события (говорение не «залипает»).
+    #[test]
+    fn talk_flags_prefer_recent_event_then_snapshot_flag() {
+        let mut s = session_for_test();
+        let mut prev = UserState::new("5", "Alfa");
+        // свежее событие (0.5 с назад): говорение = значение события, не снимка
+        s.talk_event_at.insert(5, (10_000, true, true));
+        let (t, w) = s.talk_flags(5, false, Some(&prev), 10_500);
+        assert!(t && w, "recent talk event must beat a stale snapshot flag");
+        // старое событие (5 с назад): решает флаг снимка — и true, и false
+        s.talk_event_at.insert(5, (5_000, true, true));
+        let (t, _) = s.talk_flags(5, false, Some(&prev), 10_500);
+        assert!(!t, "stale event must not stick; snapshot flag self-heals");
+        let (t, _) = s.talk_flags(5, true, Some(&prev), 10_500);
+        assert!(t, "snapshot flag recovers talking when events were missed");
+        // без событий вообще — работает флаг
+        let (t, w) = s.talk_flags(9, true, Some(&prev), 10_500);
+        assert!(t && !w, "flag drives talking; whisper only lingers with prev && talking");
     }
 
     /// schedule_refresh: дебаунс без голодания + sticky-флаг heavy.

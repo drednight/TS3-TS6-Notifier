@@ -48,7 +48,7 @@
 #include "ts3_functions.h"
 
 #define TSN_PORT 48912
-#define TSN_VERSION "1.2.3"
+#define TSN_VERSION "1.2.4"
 #define TSN_SEND_BUF (256 * 1024)
 
 static struct TS3Functions ts3funcs;
@@ -160,6 +160,13 @@ static void tsn_send_raw(const char* line, int len) {
     if (len <= 0) return;
     if (!TryEnterCriticalSection(&tsn_send_lock)) return; /* идёт большая отправка — строка в никуда */
     int n = send(s, line, len, 0);
+    if (n == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) {
+        /* v1.2.4: буфер занят (например, прямо за большим снимком) — строка
+         * (talk/событие) роняется, но соединение цело. Раньше это рвало сокет,
+         * и плагин «умолкал» до переподключения. */
+        LeaveCriticalSection(&tsn_send_lock);
+        return;
+    }
     if (n != len) {
         sock_drop(s);
         InterlockedExchange(&tsn_resync, 1);
@@ -337,10 +344,12 @@ static DWORD WINAPI tsn_worker(LPVOID arg) {
                 ok = 0;
             }
         }
-        if (ok && was && (tick % 5) == 0) {
+        if (ok && (tick % 5) == 0) {
             /* Heartbeat: the app uses traffic recency to tell a live plugin
              * from a dead one — without it the overlay fell back to
-             * ClientQuery every quiet minute and flickered. */
+             * ClientQuery every quiet minute and flickered.
+             * v1.2.4: без флага `was` — раньше при качелях сокета heartbeat
+             * мог не отправляться никогда. */
             if (!tsn_send_safe(sock_get(), "{\"e\":\"ping\"}\n", 13)) {
                 sock_drop(sock_get());
                 ok = 0;

@@ -9,7 +9,7 @@ use crate::model::{now_ms, ChatKind, ChatMessage, OverlayState, ServerGroup, Use
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,6 +26,8 @@ struct BridgeShared {
     sockets: Mutex<Vec<Arc<Mutex<TcpStream>>>>,
     last_seen: Mutex<u64>,
     was_active: AtomicBool,
+    /// сколько heartbeat-пингов видел мост (диагностика: жив ли канал)
+    hb: AtomicU64,
 }
 
 pub struct PluginBridge {
@@ -50,6 +52,7 @@ impl PluginBridge {
             sockets: Mutex::new(Vec::new()),
             last_seen: Mutex::new(0),
             was_active: AtomicBool::new(false),
+            hb: AtomicU64::new(0),
         });
         // «Переподключить»/source switch stops the old bridge just before the
         // new one starts — retry briefly while the old socket is released.
@@ -172,6 +175,10 @@ impl PluginBridge {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    pub fn hb_count(&self) -> u64 {
+        self.shared.hb.load(Ordering::SeqCst)
+    }
 }
 
 fn handle_plugin_conn(
@@ -215,6 +222,7 @@ fn handle_plugin_conn(
             continue;
         };
         if msg.get("e").map(|v| v.loose_str()).as_deref() == Some("ping") {
+            shared.hb.fetch_add(1, Ordering::SeqCst);
             continue;
         }
         diag("plugin", crate::diag::snip(trimmed, 240));
@@ -737,6 +745,10 @@ fn machine_loop(
     let mut query_stop: Option<Arc<AtomicBool>> = None;
     let mut plugin_state: Option<PluginState> = None;
     let mut last_snapshot_req: u64 = 0;
+    // v2.0.31: keepalive app→plugin: пинг каждые 10 с; pong плагина держит
+    // связь «живой» даже в полной тишине (один на канале и не говоришь).
+    let mut last_ping_sent: u64 = 0;
+    let mut last_hb_seen: u64 = 0;
     // Диагностика потока: события/мин и длительность разбора снимков.
     let mut flow_events: u64 = 0;
     let mut flow_snapshots: u64 = 0;
@@ -744,7 +756,15 @@ fn machine_loop(
     let mut flow_diag_at = now_ms();
 
     while !stop.load(Ordering::SeqCst) {
-        let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else { continue };
+        let Ok(ev) = evt_rx.recv_timeout(Duration::from_millis(500)) else {
+            // тик для keepalive даже без событий
+            let now = now_ms();
+            if now.saturating_sub(last_ping_sent) > 10_000 {
+                last_ping_sent = now;
+                bridge.send(&obj(vec![("cmd", Json::s("ping"))]));
+            }
+            continue;
+        };
         match ev {
             ConnEvent::Active => {
                 if !using_plugin {
@@ -761,9 +781,27 @@ fn machine_loop(
                 }
             }
             ConnEvent::Line(msg) => {
-                if using_plugin {
+                if !using_plugin {
+                    // v2.0.31: ЛЮБОЙ трафик плагина (hello/событие/pong на наш
+                    // keepalive) возвращает его в строй — плагин всегда первый,
+                    // ClientQuery работает только пока плагин молчит.
+                    using_plugin = true;
+                    plugin_active.store(true, Ordering::SeqCst);
+                    if let Some(q) = query_stop.take() {
+                        q.store(true, Ordering::SeqCst);
+                    }
+                    plugin_state = Some(PluginState::new(emit.clone()));
+                    println!("[ts3] plugin link recovered — back to plugin");
+                    diag("plugin", "plugin traffic recovered — plugin back as primary source");
+                    bridge.send(&obj(vec![("cmd", Json::s("snapshot"))]));
+                    last_snapshot_req = now_ms();
+                }
+                {
                     if let Some(ps) = plugin_state.as_mut() {
-                        flow_events += 1;
+                        let ev_name = msg.get("e").map(|v| v.loose_str());
+                        if ev_name.as_deref() != Some("pong") && ev_name.as_deref() != Some("hello") {
+                            flow_events += 1;
+                        }
                         let is_snapshot = msg.get("e").map(|v| v.loose_str()).as_deref() == Some("snapshot");
                         let t0 = now_ms();
                         ps.ingest(&msg);
@@ -782,11 +820,14 @@ fn machine_loop(
                         // раз в минуту — строка потока в диагностике
                         let now = now_ms();
                         if now.saturating_sub(flow_diag_at) > 60_000 {
-                            if flow_events > 0 {
+                            let hb = bridge.hb_count();
+                            let hb_delta = hb.saturating_sub(last_hb_seen);
+                            last_hb_seen = hb;
+                            if flow_events > 0 || hb_delta > 0 {
                                 diag(
                                     "plugin",
                                     &format!(
-                                        "flow: {flow_events} events/min, snapshots {flow_snapshots} ({} ms avg)",
+                                        "flow: {flow_events} events/min, snapshots {flow_snapshots} ({} ms avg), hb {hb_delta}/min",
                                         if flow_snapshots > 0 { flow_snap_ms / flow_snapshots } else { 0 }
                                     ),
                                 );
