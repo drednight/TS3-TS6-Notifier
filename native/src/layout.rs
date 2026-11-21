@@ -6,6 +6,7 @@ use crate::config::Appearance;
 use crate::font::Fonts;
 use crate::model::UserState;
 use crate::render::Buf;
+use crate::sonar::{talk_pulse, Blip as SonarBlip, Sonar, SonarParams};
 use crate::theme::{hash_hue, hsl, mix, Palette, Rgba, StyleKind};
 
 pub const PANEL_W: f32 = 292.0; // css px (#panel width)
@@ -577,7 +578,7 @@ fn draw_frame_chrome(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: 
                 buf.fill_rect(cx0 - c.s(4.5), cy0 - t * 0.5, c.s(9.0), t, a);
                 buf.fill_rect(cx0 - t * 0.5, cy0 - c.s(4.5), t, c.s(9.0), a);
             }
-            // развёртка — в фоне (draw_scope); рамка только с делениями
+            // фон — «Сонар» (sonar.rs): развёртка, кольца, пинги, блипы
         }
         StyleKind::Radiance => {
             // сияющий контур + волна света обходит контур рамки
@@ -883,60 +884,6 @@ fn in_round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, px: f32, py: f32) -> bo
 
 /// Radar scope: range rings, crosshair, a rotating sweep with a fading trail
 /// and a few blips.
-fn draw_scope(c: &Ctx, buf: &mut Buf, cx: f32, cy: f32, r: f32, strength: f64) {
-    let acc = c.pal.accent;
-    for i in 1..=3 {
-        buf.stroke_circle(cx, cy, r * i as f32 / 3.0, acc.scale_a(20.0 * strength), 1.0);
-    }
-    buf.fill_rect(cx - r, cy - 0.5, r * 2.0, 1.0, acc.scale_a(12.0 * strength));
-    buf.fill_rect(cx - 0.5, cy - r, 1.0, r * 2.0, acc.scale_a(12.0 * strength));
-    // луч развёртки как на классическом радаре: светящийся сектор
-    // с плавно затухающим шлейфом позади головки
-    let ang = if c.anim {
-        (c.now / 4200.0 * std::f64::consts::TAU) as f32
-    } else {
-        -0.9
-    };
-    let trail = 1.25f32;
-    let steps = 44i32;
-    for i in 0..steps {
-        let f = (i as f32 + 0.5) / steps as f32;
-        let a2 = ang - trail * f;
-        let fade = (1.0 - f).powf(1.8);
-        let aa = (42.0 * fade) as f64 * strength;
-        if aa < 1.0 {
-            continue;
-        }
-        let mut rr = c.s(4.0);
-        while rr < r {
-            buf.fill_rect(
-                cx + a2.cos() * rr - 1.0,
-                cy + a2.sin() * rr - 1.0,
-                2.0,
-                2.0,
-                acc.scale_a(aa.min(205.0)),
-            );
-            rr += c.s(2.2);
-        }
-    }
-    // яркая кромка луча
-    for step in 0..=20 {
-        let rr = r * step as f32 / 20.0;
-        buf.fill_rect(
-            cx + ang.cos() * rr - 1.0,
-            cy + ang.sin() * rr - 1.0,
-            2.0,
-            2.0,
-            acc.scale_a((135.0 * strength).min(235.0)),
-        );
-    }
-    for i in 0..3u64 {
-        let hsh = hash_u64(i + 17);
-        let a = (hsh % 360) as f32 * std::f32::consts::PI / 180.0;
-        let rr = r * (0.25 + ((hsh >> 9) % 60) as f32 / 100.0);
-        buf.circle(cx + a.cos() * rr, cy + a.sin() * rr, c.s(1.7), acc.scale_a(95.0 * strength));
-    }
-}
 
 /// «Аврора»: пологие светящиеся ленты сияния плывут по фону панели.
 fn draw_aurora(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64) {
@@ -1002,16 +949,115 @@ fn draw_glass_sheen(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f
     }
 }
 
+// ---- «Сонар» (sonar.rs): фон Радара рисует самодостаточный модуль в
+// premultiplied ARGB; здесь — кэш состояния (prepare дорогой), перевод в наш
+// Buf и синхронизация «старт речи» для рябей блипа и talk_pulse. ----
+
+thread_local! {
+    /// Кэш по (ширина, высота): prepare считает per-pixel таблицы.
+    static SONAR_CACHE: std::cell::RefCell<Vec<(u64, Sonar, Vec<u32>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Старт речи (мс) по id участника — между кадрами.
+    static TALK_SINCE: std::cell::RefCell<std::collections::HashMap<u64, u64>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Стабильный u64 из строкового id участника (позиция блипа детерминирована).
+fn fold_id(s: &str) -> u64 {
+    s.bytes().fold(0x5151u64, |a, b| a.wrapping_mul(1099511628211).wrapping_add(b as u64))
+}
+
+/// Блипы участников для «Сонара»: отметки видны у всех, у говорящего — ряби;
+/// старт речи запоминается между кадрами (для синхронизации пульса).
+fn sonar_blips(users: &[UserState], now_ms: u64) -> Vec<SonarBlip> {
+    TALK_SINCE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let mut out = Vec::with_capacity(users.len());
+        let mut talking = Vec::new();
+        for u in users {
+            let id = fold_id(&u.id);
+            if u.talking {
+                let since = *map.entry(id).or_insert(now_ms);
+                talking.push(id);
+                out.push(SonarBlip { id, talking: true, talk_since_ms: since });
+            } else {
+                out.push(SonarBlip { id, talking: false, talk_since_ms: 0 });
+            }
+        }
+        map.retain(|k, _| talking.contains(k));
+        out
+    })
+}
+
+/// Старт речи (мс) говорящего — для sonar::talk_pulse в строке.
+fn talk_start_ms(u: &UserState, now_ms: u64) -> u64 {
+    TALK_SINCE.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if u.talking {
+            *map.entry(fold_id(&u.id)).or_insert(now_ms)
+        } else {
+            0
+        }
+    })
+}
+
+/// Фон «Сонара»: развёртка с шлейфом, кольца, пинги из центра, блипы
+/// участников. Модуль рисует premultiplied ARGB — переводим в наш Buf.
+fn draw_sonar(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, blips: &[SonarBlip]) {
+    let (w, h) = (w as usize, h as usize);
+    if w < 16 || h < 16 {
+        return;
+    }
+    let p = SonarParams {
+        accent: [c.pal.accent.0[0], c.pal.accent.0[1], c.pal.accent.0[2]],
+        corner: r,
+        ..SonarParams::default()
+    };
+    let t_ms = if c.anim { c.now.max(0.0) as u64 } else { 1000 };
+    SONAR_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let key = ((w as u64) << 32) | h as u64;
+        let idx = match cache.iter().position(|(k, _, _)| *k == key) {
+            Some(i) => i,
+            None => {
+                if cache.len() >= 8 {
+                    cache.remove(0);
+                }
+                cache.push((key, Sonar::new(), Vec::new()));
+                cache.len() - 1
+            }
+        };
+        let (_, sonar, scratch) = &mut cache[idx];
+        scratch.clear();
+        scratch.resize(w * h, 0);
+        sonar.render(scratch, w, h, t_ms, &p, blips);
+        // premultiplied ARGB → наш straight-alpha Buf (source-over)
+        for yi in 0..h {
+            for xi in 0..w {
+                let px = scratch[yi * w + xi];
+                let a = px >> 24;
+                if a == 0 {
+                    continue;
+                }
+                let col = Rgba([
+                    (((px >> 16) & 0xFF) * 255 / a) as u8,
+                    (((px >> 8) & 0xFF) * 255 / a) as u8,
+                    ((px & 0xFF) * 255 / a) as u8,
+                    a as u8,
+                ]);
+                buf.blend_px(x as i32 + xi as i32, y as i32 + yi as i32, col);
+            }
+        }
+    })
+}
+
 /// Panel-wide paint for styles with a background texture. Drawn right after
 /// the panel body, so rows/feed stay readable on top.
-fn draw_panel_tex(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64) {
+fn draw_panel_tex(c: &Ctx, buf: &mut Buf, x: f32, y: f32, w: f32, h: f32, r: f32, strength: f64, blips: &[SonarBlip]) {
     match c.sk {
         StyleKind::Matrix => draw_rain(c, buf, x, y, w, h, r, strength),
         StyleKind::Aurora => draw_aurora(c, buf, x, y, w, h, r, strength),
-        StyleKind::Radar => {
-            let r = (w.min(h) * 0.46).max(c.s(18.0));
-            draw_scope(c, buf, x + w * 0.5, y + h * 0.40, r, strength)
-        }
+        StyleKind::Radar => draw_sonar(c, buf, x, y, w, h, r, blips),
         _ => {}
     }
 }
@@ -1047,7 +1093,12 @@ pub fn draw_style_preview(
     };
     let r = c.rad(c.s(7.0));
     buf.round_rect(x, y, w, h, r, c.bg(pal.panel_bg));
-    draw_panel_tex(&c, buf, x, y, w, h, r, 2.6);
+    let demo_blips = [
+        SonarBlip { id: 1, talking: true, talk_since_ms: 0 },
+        SonarBlip { id: 2, talking: false, talk_since_ms: 0 },
+        SonarBlip { id: 3, talking: false, talk_since_ms: 0 },
+    ];
+    draw_panel_tex(&c, buf, x, y, w, h, r, 2.6, &demo_blips);
     // «говорящая» мини-строка + две обычные
     let bar_h = c.s(7.0);
     let inset = c.s(5.0);
@@ -1466,10 +1517,17 @@ fn draw_user_row(
                 buf.stroke_round_rect(x, y, w, h, radius, a2, t);
             }
             StyleKind::Radar => {
-                // радарный «пинг» вокруг аватара + засечка слева
+                // радарный «пинг» вокруг аватара + засечка слева; пульс строки
+                // синхронизирован с рябью блипа (sonar::talk_pulse)
                 buf.round_rect(x, y, w, h, radius, bg);
-                buf.fill_rect(x, y + c.s(3.0), c.s(2.5), h - c.s(6.0), ac.scale_a(190.0 * talk_alpha as f64));
-                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(135.0 * talk_alpha as f64), 1.2);
+                let since = talk_start_ms(u, c.now.max(0.0) as u64);
+                let pulse = if c.anim {
+                    talk_pulse(c.now.max(0.0) as u64, since)
+                } else {
+                    1.0
+                };
+                buf.fill_rect(x, y + c.s(3.0), c.s(2.5), h - c.s(6.0), ac.scale_a(190.0 * (pulse * talk_alpha) as f64));
+                buf.stroke_round_rect(x, y, w, h, radius, tpal.talk_outline.scale_a(135.0 * (pulse * talk_alpha) as f64), 1.2);
                 let (pcx, pcy) = (x + c.s(23.0), y + h * 0.5);
                 let phase = if c.anim { (c.now / 1400.0) % 1.0 } else { 0.35 };
                 for k2 in 0..2 {
@@ -1772,7 +1830,8 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
         } else {
             buf.round_rect(px, py, panel_w, panel_h, pr, c.bg(inp.pal.panel_bg));
         }
-        draw_panel_tex(&c, &mut buf, px, py, panel_w, panel_h, pr, 1.0);
+        let sonar_blips = sonar_blips(&inp.users, c.now.max(0.0) as u64);
+        draw_panel_tex(&c, &mut buf, px, py, panel_w, panel_h, pr, 1.0, &sonar_blips);
         draw_frame_chrome(&c, &mut buf, px, py, panel_w, panel_h, pr);
     }
 
@@ -2110,15 +2169,6 @@ pub fn render_frame(inp: &FrameInput) -> Frame {
             // v2.1.1: линия идёт по хорде внутренней формы — не вылезает из углов
             let (cx0, cx1) = rounded_chord_x(px, py, panel_w, panel_h, pr, y0);
             buf.fill_rect(cx0 + 2.0, y0, (cx1 - cx0) - 4.0, 1.0, inp.pal.accent.scale_a(26.0));
-        }
-        StyleKind::Radar => {
-            // развёртка уже в фоне; сверху только лёгкая «сетка дальности»
-            let step = c.s(26.0);
-            let mut gy = py + step;
-            while gy < py + panel_h - 2.0 {
-                buf.fill_rect(px + c.s(6.0), gy, panel_w - c.s(12.0), 1.0, inp.pal.accent.scale_a(7.0));
-                gy += step;
-            }
         }
         StyleKind::Hud => {
             // faint tactical grid + corner ticks
